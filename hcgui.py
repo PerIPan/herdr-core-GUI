@@ -13,7 +13,7 @@ The sidebar lists, top to bottom, "needs you" (agents blocked or in error, and a
 since; only while there is one), "spaces" (projects on the home machine), "servers" (every machine
 `hc machine ls` knows, the home machine included, plus "this Mac" while it runs terminals; each drawn as user@host of
 its ssh target), "dev servers" (node programs, or HCGUI_DEV_PROGRAM, of the home core's own account listening on
-the home machine, opened in this Mac's browser; only while there is one) and "agents" (by space and server: a
+the home machine, opened in this Mac's browser; only while there is one) and "agents" (by space and server, not those in "needs you": a
 heading over two or more, an agent alone in its group on its own row with the group's name dim after its own; Claude
 Code typed in a shell counts as Claude Code, with_foreground).
 The servers section is hidden until shown (v, or "Show servers" in any row menu;
@@ -65,7 +65,7 @@ Keys. Sidebar: up/down (j/k), enter, a the menu of the row (also a right click: 
 Move to space, Delete space / Forget server / End terminal, as the row allows, and Show / Hide servers, agents, dev
 servers; Show usage while the usage lines are hidden), n new shell, e rename, d delete, s new space, m move an agent,
 v show or hide the servers, g the agents, w the dev servers, u the usage lines (also a right click on one: its
-menu, Rename, Hide usage), c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open
+menu, Rename, Refresh, Hide usage), c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open
 the strip again (also a click on "›" on the line above), q hide (the same as hidden: the program ends), z zoom,
 [ ] (also - =) the separator up or down, r refresh (also the keychain, the dev servers and the usage), ? the list
 of keys, then the account marks and what the status dots' colours mean (also a click on the "?" at the end of the
@@ -640,6 +640,13 @@ def agent_groups(spaces: Sequence[Group], rigs: Sequence[Group]) -> List[Group]:
     return [g for g in list(spaces) + list(rigs) if not g.home]
 
 
+def listed_agents(group: Group, needs: Sequence[Term] = ()) -> List[Term]:
+    """The agents of `group` the agents section lists: not one that is in "needs you" now (owner, 24 Nov: "we need
+    it only top"); it comes back there once it no longer needs you."""
+    waiting = {t.address for t in needs}
+    return [t for t in group.terms if t.is_agent and t.address not in waiting]
+
+
 def lone_place(group: Group, term: Term) -> str:
     """The name drawn dim after an agent that is alone in its space, in place of the space's heading ("notes¹ ·
     docs"): the space's shown name, or "" when that is the agent's own shown name, upper and lower case aside (no
@@ -652,16 +659,16 @@ def lone_place(group: Group, term: Term) -> str:
 def selectable_items(spaces: Sequence[Group], rigs: Sequence[Group], servers: bool = True,
                      needs: Sequence[Term] = (), devs: Sequence[DevServer] = (), agents: bool = True) -> List[Item]:
     """Cursor order, as drawn: "needs you", the spaces, "+ new space", the servers, "+ add server", the dev servers,
-    then the agents of each group. `servers` False: the servers section is hidden (no server rows, no "+ add
-    server", no agents of servers). `needs`, `devs`: those sections' rows (empty: not drawn). `agents` False: the
-    agents section is hidden."""
+    then the agents of each group (not those in "needs you": listed_agents). `servers` False: the servers section is
+    hidden (no server rows, no "+ add server", no agents of servers). `needs`, `devs`: those sections' rows (empty:
+    not drawn). `agents` False: the agents section is hidden."""
     rigs = rigs if servers else []
     items = [Item("needs", "", t.address) for t in needs]
     items += [Item("group", g.key, "") for g in spaces] + [NEW_SPACE]
     items += [Item("group", g.key, "") for g in rigs] + [ADD_RIG] if servers else []
     items += [Item("dev", "", str(d.port)) for d in devs]
     if agents:
-        items += [Item("agent", g.key, t.address) for g in agent_groups(spaces, rigs) for t in g.terms if t.is_agent]
+        items += [Item("agent", g.key, t.address) for g in agent_groups(spaces, rigs) for t in listed_agents(g, needs)]
     return items
 
 
@@ -1041,9 +1048,9 @@ def usage_texts(entries: Sequence[Usage], now: float, room: int, marks: Optional
                 names: Optional[Mapping[str, str]] = None) -> List[str]:
     """One line per subscription in `room` columns, every line in the same form: the widest that fits them all.
 
-        " claude ¹  42%"    the name, its account mark (HCGUI_MARKS; none: the name alone), the share used
-        " claude ¹ 42%"
-        " Personal… ¹  42%" the names cut to fit, the mark kept (as a row's name: with_mark); only while every
+        " claude¹  42%"     the name, its account mark (HCGUI_MARKS; none: the name alone), the share used
+        " claude¹ 42%"
+        " Personal…¹  42%"  the names cut to fit, the mark kept (as a row's name: with_mark); only while every
                             name keeps at least USAGE_CLIP_MIN columns before its "…"
         " ¹ 42%"            the mark alone (no mark: the name, cut to fit)
 
@@ -1059,7 +1066,7 @@ def usage_texts(entries: Sequence[Usage], now: float, room: int, marks: Optional
     if not entries:
         return []
     shown = [usage_shown(u.name, names) for u in entries]
-    tags = [" " + marks[u.name] if marks.get(u.name) else "" for u in entries]
+    tags = [marks.get(u.name, "") for u in entries]  # right after the name (owner, 24 Nov: no space before it)
     shares = [u.percent(now) for u in entries]
 
     def lined_up(labels: Sequence[str]) -> List[str]:
@@ -1388,6 +1395,8 @@ USAGE_KEY = "u"  # shows or hides the 5-hour usage lines (free in the sidebar an
 USAGE_KIND = "usage"
 # No direct key: the cursor never sits on a usage line, so `e` cannot name one (and a right-click menu shows none).
 USAGE_RENAME = Entry("rename", "Rename", "")
+# a usage line's "Refresh": the same as r (all checks now, the usage too; owner, 24 Nov: "I just needed it")
+USAGE_REFRESH = Entry("refresh", "Refresh", "r")
 
 
 def usage_item(name: str) -> Item:
@@ -1423,12 +1432,12 @@ def menu_entries(item: Item, group: Optional[Group], first: str = FIRST, servers
     row) never. An agent can be moved only when it is in a space. A "+" row has only its own action.
 
     The usage lines: a line's own menu (usage_item, a right click on one) has "Rename" (that subscription's display
-    name) and "Hide usage" first. Once hidden (`usage` False) there is no line left to right-click, so every row
+    name), "Refresh" (the same as r) and "Hide usage" first. Once hidden (`usage` False) there is no line left to right-click, so every row
     menu ends with "Show usage" instead; while they are shown (or off: HCGUI_USAGE=0, the caller passes True) a
     row's menu has no usage entry, so the menus are the same as before the switch existed."""
     switches = [servers_entry(servers), agents_entry(agents), devs_entry(devs)]
     if item.kind == USAGE_KIND:
-        return [USAGE_RENAME, usage_switch(True)] + switches
+        return [USAGE_RENAME, USAGE_REFRESH, usage_switch(True)] + switches
     return menu_actions(item, group, first) + switches + ([] if usage else [usage_switch(False)])
 
 
@@ -1756,7 +1765,8 @@ def sidebar_frame(height: int, message: bool, prompt: bool, strip: bool = False,
     (up to `title_lines` lines) when there is room; the list keeps at least two lines then, one for the cursor.
     Last, the `usage` lines (one per subscription; the caller passes 0 for the strip) sit between the prompt or
     message and the keychain warning (usage_rows), all of them or none: only while the list keeps USAGE_LIST_MIN
-    lines."""
+    lines; a blank line above them and one below them too while the list still keeps that many (the one above
+    first)."""
     height = max(0, height)
     arrow = 1 if height >= 2 else 0
     opener = 1 if strip and height >= 3 else 0
@@ -1769,18 +1779,30 @@ def sidebar_frame(height: int, message: bool, prompt: bool, strip: bool = False,
     else:
         extra = 0
     shown = usage if usage > 0 and left - extra - usage >= USAGE_LIST_MIN else 0
-    return left - extra - shown, height - 1 if arrow else -1, height - 2 if opener else -1, extra
+    # a blank line between the list and the usage lines when there is room (owner, 24 Nov: the agents sat right on
+    # the subscriptions); the usage lines take the last of the lines usage_rows gives
+    # and one below them, off "‹ fold" (owner, 24 Nov), when there is still room: the one above comes first
+    gaps = min(2, max(0, left - extra - shown - USAGE_LIST_MIN)) if shown else 0
+    return left - extra - shown - gaps, height - 1 if arrow else -1, height - 2 if opener else -1, extra
 
 
-def usage_rows(height: int, strip: bool, keychain: bool, body: int, extra: int) -> List[int]:
+def usage_rows(height: int, strip: bool, keychain: bool, body: int, extra: int,
+               count: Optional[int] = None) -> List[int]:
     """The lines of the usage lines in sidebar_frame's layout (`body` and `extra` as it gave them): from below the
-    list and the prompt or message down to just above the keychain warning (or "›", or "‹"). Empty when it gave
-    them none."""
+    list and the prompt or message down to just above the keychain warning (or "›", or "‹"); with `count` (the
+    subscriptions) only `count` of them: after the blank line sidebar_frame left above them, before the one it left
+    below. Empty when it gave them none."""
     end = keychain_line(height, strip, keychain)
     if end < 0:
         height = max(0, height)
         end = height - (1 if height >= 2 else 0) - (1 if strip and height >= 3 else 0)
-    return list(range(body + extra, end))
+    rows = list(range(body + extra, end))
+    if count is None:
+        return rows
+    if count <= 0:
+        return []
+    above = 1 if len(rows) > count else 0
+    return rows[above:above + count]
 
 
 def keychain_line(height: int, strip: bool, keychain: bool) -> int:
@@ -2041,7 +2063,7 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
 
     entries: List[Row] = []
     for g in agent_groups(spaces, rigs):
-        listed = [t for t in g.terms if t.is_agent]
+        listed = listed_agents(g, needs)
         if len(listed) > 1:  # one agent alone: its row only, the group's name on it (owner, 24 Nov)
             entries.append(Row("agent_group", group=g, count=len(listed)))
         for t in listed:
@@ -4610,8 +4632,17 @@ class Sidebar(Engine):
             self.toggle_devs()
         elif entry.action == "usage":
             self.toggle_usage()
+        elif entry.action == "refresh":
+            self.refresh_now()
         elif entry.action == "browse":
             self.activate(item)
+
+    def refresh_now(self) -> None:
+        """r, or "Refresh" in a usage line's menu: every label, the keychain, the dev servers and the usage now."""
+        with self.lock:
+            self.full_due = self.keychain_asked = self.devs_asked = self.usage_asked = True
+        self.wake.set()
+        self.extras_wake.set()
 
     def toggle_servers(self) -> None:
         """v, or "Show servers" / "Hide servers" in a menu: the servers section comes or goes, for every window (the
@@ -4817,7 +4848,7 @@ class Sidebar(Engine):
         self.body_height, self.arrow_y, self.open_y, reserved = sidebar_frame(
             height, message, self.prompt is not None, compact, title_lines, locked, max(1, len(said)), len(usage))
         self.keychain_y = keychain_line(height, compact, locked)
-        self.usage_ys = usage_rows(height, compact, locked, self.body_height, reserved)
+        self.usage_ys = usage_rows(height, compact, locked, self.body_height, reserved, len(usage))
         items = sections.items()
         cursor = self.cursor_index(items)
         # held but not moved yet: drawn where it was (an automatic line below the limit would jump up a row)
@@ -4890,12 +4921,12 @@ class Sidebar(Engine):
                 mark = t.address == shown
                 s.put(y, 0, "›" if mark else " ", attr | curses.A_BOLD)
                 s.put(y, 2, "●" if t.status else "○", attr | dot_attr(t.status))
-                # alone in its group: the group's name dim after its own, cut first (the status column stays)
-                name, place = name_parts(t.shown, t.mark, row.place, max(1, width - 6 - len(t.status)))
+                # alone in its group: the group's name dim after its own, cut first. No status word: the dot's colour
+                # says it (owner, 24 Nov: "we have the colors"); the name gets the room
+                name, place = name_parts(t.shown, t.mark, row.place, max(1, width - 5))
                 s.put(y, 4, name, attr | (curses.A_BOLD if mark else 0))
                 if place:
                     s.put(y, 4 + text_width(glyph(name)), place, attr | curses.A_DIM)  # as put draws the name
-                s.put(y, max(5, width - 1 - len(t.status)), t.status, attr | curses.A_DIM)
                 self.rows[y] = items[row.item]
         # the keychain warning just above the arrow lines, the usage lines just above it, the prompt or message just
         # above those
@@ -5244,10 +5275,7 @@ class Sidebar(Engine):
         elif key in (ord("z"), ord("Z")):
             self.zoom()
         elif key in (ord("r"), ord("R")):
-            with self.lock:
-                self.full_due = self.keychain_asked = self.devs_asked = self.usage_asked = True
-            self.wake.set()
-            self.extras_wake.set()
+            self.refresh_now()
         elif key in (ord(SERVERS_KEY), ord(SERVERS_KEY.upper())):
             self.toggle_servers()
         elif key in (ord(AGENTS_KEY), ord(AGENTS_KEY.upper())):

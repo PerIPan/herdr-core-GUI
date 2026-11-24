@@ -1770,9 +1770,11 @@ class SidebarLogicTests(unittest.TestCase):
         self.assertEqual(self.scr.reversed_rows(), [1])
         self.assertEqual(lines[-6], " agents")  # the heading alone: no "grouped" after it (owner, 24 Nov)
         self.assertEqual(lines[-5], hcgui.glyph(" dev"))
-        self.assertTrue(lines[-4].startswith(hcgui.glyph("  ● atlas")) and lines[-4].endswith("idle"))
+        # no status word on agent rows: the dot's colour says it (owner, 24 Nov)
+        self.assertEqual(lines[-4], hcgui.glyph("  ● atlas"))
         # o1 is the only agent of "other": no "other · 1" heading, the space's name after its own (owner, 24 Nov)
-        self.assertEqual(lines[-2], hcgui.glyph("  ● o1 · other           done"))
+        self.assertEqual(lines[-2], hcgui.glyph("  ● o1 · other"))
+        self.assertFalse(any(line.endswith(("idle", "working", "done", "blocked")) for line in lines))
         self.assertNotIn(hcgui.glyph(" other · 1"), lines)
         self.assertEqual(lines[-1], fold_line("open"))  # the arrow on the last line, a dim "?" at its end
         self.assertEqual(lines[-8:-6], ["", "─" * 29])  # no key hints above the rule
@@ -1783,20 +1785,22 @@ class SidebarLogicTests(unittest.TestCase):
         self.side.draw()
         self.assertNotIn("grouped", " ".join(self.scr.lines()))
 
-    def test_a_lone_agent_names_its_group_dim_and_cut_before_its_status(self):
+    def test_a_lone_agent_names_its_group_dim_and_cut_to_fit_the_row(self):
         row = lambda: next(y for y, item in self.side.rows.items() if item.address == "t3")  # noqa: E731
         y = row()
-        self.assertEqual(self.scr.line(y), hcgui.glyph("  ● o1 · other           done"))
+        self.assertEqual(self.scr.line(y), hcgui.glyph("  ● o1 · other"))  # no status word: the dot says it
         self.assertEqual(self.scr.cells[(y, 4)][1] & hcgui.curses.A_DIM, 0)  # the name as any agent's
         self.assertTrue(self.scr.cells[(y, 7)][1] & hcgui.curses.A_DIM)  # "other" dim
         hcgui.change_names({"space:other": "a-very-long-space-name"}, self.state)
         self.side.draw()
         y = row()  # the renamed space sorts first
-        self.assertEqual(self.scr.line(y), hcgui.glyph("  ● o1 · a-very-long-sp… done"))  # the status stays
+        # no status column: the place is cut to the row's own room (width - 5), short of the last column
+        self.assertEqual(self.scr.line(y), hcgui.glyph("  ● o1 · a-very-long-space-n…"))
+        self.assertEqual(columns(self.scr.line(y)), self.scr.width - 1)
         hcgui.change_names({"space:other": "", "term:t3": "Other"}, self.state)  # the space's own name, any case
         self.side.draw()
         y = row()
-        self.assertEqual(self.scr.line(y), hcgui.glyph("  ● Other                done"))
+        self.assertEqual(self.scr.line(y), hcgui.glyph("  ● Other"))
         self.key("j", "j", "j", "j", "j")  # the cursor reaches it and a click shows it, as any agent's row
         self.assertEqual(self.side.cursor_item(), hcgui.Item("agent", "space:other", "t3"))
         with pressed(5, y):
@@ -2116,9 +2120,10 @@ class SidebarLogicTests(unittest.TestCase):
         scr = WideScr(24, 30)
         self.side.s = hcgui.Screen(scr)
         self.side.draw()
-        agent = next(line for line in scr.lines() if "working" in line)
-        self.assertIn("…", agent)  # cut by columns, before the status word, with the mark of the cut
-        self.assertTrue(agent.endswith(" working"), agent)
+        agent = scr.lines()[next(y for y, item in self.side.rows.items() if item.address == "t2")]
+        self.assertIn("…", agent)  # cut by columns, with the mark of the cut
+        self.assertNotIn("working", agent)  # no status word: the dot says it
+        self.assertEqual(columns(agent), 30 - 1, agent)  # the name gets the row up to the last column
 
     def test_compact_strip_keeps_the_cursor_enter_and_clicks(self):
         self.key("c")
@@ -4100,7 +4105,7 @@ class MenuTests(unittest.TestCase):
         # Rename has no direct key (the cursor never sits on a usage line)
         for name, usage in itertools.product(("work", "solo"), (True, False)):
             entries = hcgui.menu_entries(hcgui.usage_item(name), None, "mini", True, False, True, usage)
-            self.assertEqual(entries, [hcgui.Entry("rename", "Rename", ""),
+            self.assertEqual(entries, [hcgui.Entry("rename", "Rename", ""), hcgui.Entry("refresh", "Refresh", "r"),
                                        hcgui.Entry("usage", "Hide usage", "u"),
                                        hcgui.Entry("servers", "Hide servers", "v"),
                                        hcgui.Entry("agents", "Show agents", "g"),
@@ -4718,7 +4723,7 @@ class ActionTests(unittest.TestCase):
         self.assertTrue(any(line.startswith(hcgui.glyph(" ● Harry")) for line in lines), lines)
         self.assertTrue(any(line.startswith(hcgui.glyph("  ● web")) for line in lines), lines)
         # the server's only agent: no "Harry · 1" heading, and no server name on its row (owner, 24 Nov)
-        self.assertIn(hcgui.glyph("  ● v1                   idle"), lines)
+        self.assertIn(hcgui.glyph("  ● v1"), lines)  # no status word: the dot says it
         self.assertNotIn(hcgui.glyph(" Harry · 1"), lines)
         self.go(hcgui.Item("agent", "space:dev", "t1"))
         self.key("e", 21)
@@ -5552,7 +5557,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(lines[4:10], ["", " servers", hcgui.glyph(" ● me@mini"),
                                        hcgui.glyph(" ● guest@mini"), " + add server", ""])
         # the server's agents come back: its only one on its row alone (no "guest@mini · 1", no server name)
-        self.assertIn(hcgui.glyph("  ● harry³               idle"), lines)
+        self.assertIn(hcgui.glyph("  ● harry³"), lines)  # no status word: the dot says it
         self.assertEqual(self.side.cursor, hcgui.Item("group", "rig:mini", ""))
         self.assertEqual(self.side.notice.current(), "servers shown (v hides them)")
         self.key("V")
@@ -5636,7 +5641,7 @@ class ServerTests(unittest.TestCase):
         self.key("e", 21)
         self.type("me@mini")  # its own user@host removes the rename
         self.assertEqual(hcgui.read_names(self.state), {})
-        agents = [line for line in self.scr.lines() if "atlas" in line and "idle" in line]
+        agents = [line for line in self.scr.lines() if line[1:].startswith(hcgui.glyph(" ● atlas"))]  # agent rows
         self.assertEqual(len(agents), 1)  # listed once, under its space
         self.go(home)
         self.key("n")
@@ -6953,7 +6958,7 @@ class ShellClaudeTests(unittest.TestCase):
         self.front("t4", "-zsh")
         self.assertNotIn(hcgui.Item("agent", "space:other", "t4"), self.side.sections().items())
         self.assertEqual(self.side.term_of("t4").agent, "zsh")
-        self.assertIn(hcgui.glyph("  ● o1 · other           done"), self.scr.lines())  # o1 alone again
+        self.assertIn(hcgui.glyph("  ● o1 · other"), self.scr.lines())  # o1 alone again
         self.front("t4", "/Users/x/.local/bin/claude-foo")  # another program of a like name: still a shell
         self.assertEqual(self.side.term_of("t4").agent, "zsh")
 
@@ -7933,9 +7938,12 @@ class ExtrasSidebarTests(unittest.TestCase):
         agents = lines[next(i for i, line in enumerate(lines) if line.startswith(" agents")):]
         text = "\n".join(agents)
         self.assertIn(hcgui.glyph("atlas¹"), text)
-        self.assertIn(hcgui.glyph("tracker²"), text)
-        self.assertIn(hcgui.glyph("o1³"), text)
-        self.assertIn(hcgui.glyph(" gecko "), text)  # no label: no mark
+        self.assertIn(hcgui.glyph("  ● gecko"), agents)  # no label: no mark (and no status word after it)
+        # tracker and o1 need you: listed only there, at the top, with their marks (owner, 24 Nov: "only top")
+        top = "\n".join(lines[:lines.index(agents[0])])
+        for name in ("tracker²", "o1³"):
+            self.assertIn(hcgui.glyph(name), top)
+            self.assertNotIn(hcgui.glyph(name), text)
         snap = hcgui.read_snapshot(self.win)
         self.assertEqual({t["label"]: t["mark"] for t in snap["tabs"]},
                          {"atlas": "¹", "tracker": "²", "gecko": ""})
@@ -8683,10 +8691,11 @@ class UsageTextTests(unittest.TestCase):
 
     def test_the_widest_form_that_fits(self):
         one = [hcgui.Usage("claude", 42.2, self.NOW + 6 * 60 + 3600)]
-        self.assertEqual(self.texts(one, 40), [" claude ¹  42%"])
-        self.assertEqual(self.texts(one, 14), [" claude ¹  42%"])
-        self.assertEqual(self.texts(one, 13), [" claude ¹ 42%"])
-        self.assertEqual(self.texts(one, 12), [" ¹ 42%"])
+        # the mark right after the name, no space before it (owner, 24 Nov)
+        self.assertEqual(self.texts(one, 40), [" claude¹  42%"])
+        self.assertEqual(self.texts(one, 13), [" claude¹  42%"])
+        self.assertEqual(self.texts(one, 12), [" claude¹ 42%"])
+        self.assertEqual(self.texts(one, 11), [" ¹ 42%"])
         self.assertEqual(self.texts(one, 6), [" ¹ 42%"])
         self.assertEqual(self.texts(one, 5), [" 42%"])
         self.assertEqual(self.texts(one, 4), [" 42%"])
@@ -8726,22 +8735,22 @@ class UsageTextTests(unittest.TestCase):
 
     def test_every_line_in_one_form_the_shares_lined_up(self):
         two = [hcgui.Usage("claude", 5, self.NOW + 3600), hcgui.Usage("claude-2", 100, self.NOW + 2 * 3600)]
-        self.assertEqual(self.texts(two, 40), [" claude ¹     5%", " claude-2 ² 100%"])
-        self.assertEqual(self.texts(two, 16), [" claude ¹     5%", " claude-2 ² 100%"])
-        # " claude-2 ² 100%" needs 16 in both forms: below that the names are cut (the marks stay, the shares lined
+        self.assertEqual(self.texts(two, 40), [" claude¹     5%", " claude-2² 100%"])
+        self.assertEqual(self.texts(two, 15), [" claude¹     5%", " claude-2² 100%"])
+        # " claude-2² 100%" needs 15 in both forms: below that the names are cut (the marks stay, the shares lined
         # up) while each keeps USAGE_CLIP_MIN columns before its "…", then the marks alone
-        self.assertEqual(self.texts(two, 15), [" claude ¹    5%", " claude… ² 100%"])
-        self.assertEqual(self.texts(two, 14), [" claude ¹   5%", " claud… ² 100%"])
-        self.assertEqual(self.texts(two, 13), [" clau… ¹   5%", " clau… ² 100%"])
-        self.assertEqual(self.texts(two, 12), [" ¹ 5%", " ² 100%"])
+        self.assertEqual(self.texts(two, 14), [" claude¹    5%", " claude…² 100%"])
+        self.assertEqual(self.texts(two, 13), [" claude¹   5%", " claud…² 100%"])
+        self.assertEqual(self.texts(two, 12), [" clau…¹   5%", " clau…² 100%"])
+        self.assertEqual(self.texts(two, 11), [" ¹ 5%", " ² 100%"])
         self.assertEqual(self.texts(two, 8), [" ¹ 5%", " ² 100%"])
 
     def test_a_window_that_has_passed_shows_0(self):
         # its resets_at is still read: a window that has reset was not used yet (the next message starts it)
         entries = [hcgui.Usage("claude", 97, self.NOW), hcgui.Usage("claude-2", 50, self.NOW + 60)]
-        self.assertEqual(self.texts(entries, 40), [" claude ¹     0%", " claude-2 ²  50%"])
-        self.assertEqual(self.texts(entries[:1], 40), [" claude ¹   0%"])
-        self.assertEqual(self.texts([hcgui.Usage("claude", 97, self.NOW + 1)], 40), [" claude ¹  97%"])
+        self.assertEqual(self.texts(entries, 40), [" claude¹     0%", " claude-2²  50%"])
+        self.assertEqual(self.texts(entries[:1], 40), [" claude¹   0%"])
+        self.assertEqual(self.texts([hcgui.Usage("claude", 97, self.NOW + 1)], 40), [" claude¹  97%"])
 
     def test_every_width_fits(self):
         entries = [hcgui.Usage("claude", 42, self.NOW + 3600), hcgui.Usage("claude-2", 87, self.NOW + 60),
@@ -8760,13 +8769,13 @@ class UsageTextTests(unittest.TestCase):
         two = [hcgui.Usage("claude", 42, self.NOW + 3600), hcgui.Usage("work", 87, self.NOW + 7200)]
         marks = {"claude": "¹", "work": "²"}
         names = {"account:work": "Team plan", "account:Team plan": "x", "space:claude": "x"}
-        self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, marks, names), [" claude ¹     42%", " Team plan ²  87%"])
-        self.assertEqual(hcgui.usage_texts(two, self.NOW, 15, marks, names), [" claude ¹   42%", " Team p… ²  87%"])
-        self.assertEqual(hcgui.usage_texts(two, self.NOW, 13, marks, names), [" clau… ¹  42%", " Team… ²  87%"])
-        self.assertEqual(hcgui.usage_texts(two, self.NOW, 12, marks, names), [" ¹ 42%", " ² 87%"])
+        self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, marks, names), [" claude¹     42%", " Team plan²  87%"])
+        self.assertEqual(hcgui.usage_texts(two, self.NOW, 14, marks, names), [" claude¹   42%", " Team p…²  87%"])
+        self.assertEqual(hcgui.usage_texts(two, self.NOW, 12, marks, names), [" clau…¹  42%", " Team…²  87%"])
+        self.assertEqual(hcgui.usage_texts(two, self.NOW, 11, marks, names), [" ¹ 42%", " ² 87%"])
         self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, {}, names), [" claude     42%", " Team plan  87%"])
         self.assertEqual(hcgui.usage_texts(two[1:], self.NOW, 9, {}, names), [" Tea… 87%"])  # no mark: cut
-        self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, marks), [" claude ¹  42%", " work ²    87%"])
+        self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, marks), [" claude¹  42%", " work²    87%"])
 
     def test_long_display_names_are_cut_not_dropped(self):
         # one long display name must not leave every line with its mark alone at the default width: the names are
@@ -8775,7 +8784,7 @@ class UsageTextTests(unittest.TestCase):
         marks = {"claude": "¹", "work": "²"}
         names = {"account:work": "Team subscription paid by Studio"}  # 32: the longest allowed
         self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, marks, names),
-                         [" claude ¹                 42%", " Team subscription pa… ²  87%"])
+                         [" claude¹                  42%", " Team subscription pai…²  87%"])
         self.assertEqual(hcgui.usage_texts(two, self.NOW, 29, {}, names),
                          [" claude                   42%", " Team subscription paid…  87%"])
 
@@ -8803,10 +8812,11 @@ class UsageTextTests(unittest.TestCase):
         one = [hcgui.Usage("work", 87, self.NOW + 60)]
         names = {"account:work": "Alpha Beta"}
         texts = [hcgui.usage_texts(one, self.NOW, room, {"work": "²"}, names) for room in range(10, 20)]
-        self.assertEqual(texts, [[" ² 87%"]] * 3 + [[" Alph… ²  87%"], [" Alpha… ²  87%"],
-                                                    [" Alpha … ²  87%"],  # cut as clip() cuts any name
-                                                    [" Alpha B… ²  87%"], [" Alpha Beta ² 87%"],
-                                                    [" Alpha Beta ²  87%"], [" Alpha Beta ²  87%"]])
+        self.assertEqual(texts, [[" ² 87%"]] * 2 + [[" Alph…²  87%"], [" Alpha…²  87%"],
+                                                    [" Alpha …²  87%"],  # cut as clip() cuts any name
+                                                    [" Alpha B…²  87%"], [" Alpha Beta² 87%"],
+                                                    [" Alpha Beta²  87%"], [" Alpha Beta²  87%"],
+                                                    [" Alpha Beta²  87%"]])
         self.assertEqual(hcgui.USAGE_CLIP_MIN, 4)
 
     def test_tone(self):
@@ -8823,12 +8833,24 @@ class UsageFrameTests(unittest.TestCase):
 
     def test_open_sidebar(self):
         f, rows = hcgui.sidebar_frame, hcgui.usage_rows
-        self.assertEqual(f(40, False, False, usage=2), (37, 39, -1, 0))
-        self.assertEqual(rows(40, False, False, 37, 0), [37, 38])
-        self.assertEqual(f(40, False, False, keychain=True, usage=2), (36, 39, -1, 0))
-        self.assertEqual(rows(40, False, True, 36, 0), [36, 37])  # the keychain warning on 38
-        self.assertEqual(f(40, True, False, keychain=True, usage=2), (35, 39, -1, 1))
-        self.assertEqual(rows(40, False, True, 35, 1), [36, 37])  # the message on 35, above them
+        # a blank line between the list and them (owner, 24 Nov: the agents sat right on the subscriptions) and one
+        # between them and "‹ fold" (owner, 24 Nov)
+        self.assertEqual(f(40, False, False, usage=2), (35, 39, -1, 0))
+        self.assertEqual(rows(40, False, False, 35, 0, 2), [36, 37])  # 35 and 38 stay blank
+        self.assertEqual(rows(40, False, False, 35, 0), [35, 36, 37, 38])  # no count: every line between
+        self.assertEqual(f(40, False, False, keychain=True, usage=2), (34, 39, -1, 0))
+        self.assertEqual(rows(40, False, True, 34, 0, 2), [35, 36])  # 34 and 37 blank, the keychain warning on 38
+        self.assertEqual(f(40, True, False, keychain=True, usage=2), (33, 39, -1, 1))
+        # 33 and 34: the message and the blank line above them (the Sidebar draws the message right above them, on
+        # 34); 37 blank, the keychain warning on 38
+        self.assertEqual(rows(40, False, True, 33, 1, 2), [35, 36])
+        # room for one blank line only: the one above them; none: the list keeps its USAGE_LIST_MIN lines, the
+        # usage lines right below it and right above "‹ fold"
+        least = hcgui.USAGE_LIST_MIN
+        for tight, below in ((least + 2 + 1, least), (least + 2 + 2, least + 1), (least + 2 + 3, least + 1)):
+            self.assertEqual(f(tight, False, False, usage=2), (least, tight - 1, -1, 0), tight)
+            self.assertEqual(rows(tight, False, False, least, 0, 2), [below, below + 1], tight)
+        self.assertEqual(rows(40, False, False, 35, 0, 0), [])
         self.assertEqual(f(40, False, False), f(40, False, False, usage=0))  # none: as before
         self.assertEqual(rows(40, False, False, *[f(40, False, False)[i] for i in (0, 3)]), [])
 
@@ -8841,17 +8863,25 @@ class UsageFrameTests(unittest.TestCase):
                             case = (height, keychain, message, prompt, strip, usage)
                             body, arrow, opener, extra = hcgui.sidebar_frame(height, message, prompt, strip, 8,
                                                                              keychain, 3, usage)
-                            ys = hcgui.usage_rows(height, strip, keychain, body, extra)
+                            ys = hcgui.usage_rows(height, strip, keychain, body, extra, usage)
                             kc = hcgui.keychain_line(height, strip, keychain)
                             self.assertIn(len(ys), (0, usage), case)  # all of them or none
-                            self.assertEqual(body + extra + len(ys) + (kc >= 0) + (arrow >= 0) + (opener >= 0),
-                                             height, case)
+                            # the blank lines above them and below them, when room: the one above first
+                            end = next((y for y in (kc, opener, arrow) if y >= 0), height)
+                            above = ys[0] - (body + extra) if ys else 0
+                            below = end - (ys[-1] + 1) if ys else 0
+                            self.assertIn(above, (0, 1), case)
+                            self.assertIn(below, (0, 1), case)
+                            self.assertLessEqual(below, above, case)
+                            self.assertEqual(body + extra + above + below + len(ys) + (kc >= 0) + (arrow >= 0)
+                                             + (opener >= 0), height, case)
                             if ys:
                                 self.assertGreaterEqual(body, hcgui.USAGE_LIST_MIN, case)
                                 self.assertEqual(ys, list(range(ys[0], ys[0] + usage)), case)
-                                self.assertEqual(ys[-1] + 1, next(y for y in (kc, opener, arrow) if y >= 0), case)
+                                if above + below < 2:  # a blank line is left out only for the list's lines
+                                    self.assertEqual(body, hcgui.USAGE_LIST_MIN, case)
                             without = hcgui.sidebar_frame(height, message, prompt, strip, 8, keychain, 3)
-                            self.assertEqual((body + len(ys), arrow, opener, extra), without, case)
+                            self.assertEqual((body + above + below + len(ys), arrow, opener, extra), without, case)
                             if height >= 1:
                                 self.assertGreaterEqual(body, 1, case)
                             if usage and height >= 2 + keychain + hcgui.USAGE_LIST_MIN + usage + 9 + strip:
@@ -8904,12 +8934,13 @@ class UsageSidebarTests(unittest.TestCase):
 
     def test_lines_at_the_bottom_above_fold(self):
         lines = self.lines()
-        want = [" claude ¹  42%", " solo      55%", " work ²    87%"]  # no reset time
-        self.assertEqual(lines[36:39], [hcgui.glyph(w) for w in want])
+        want = [" claude¹  42%", " solo     55%", " work²    87%"]  # no reset time
+        self.assertEqual(lines[35:38], [hcgui.glyph(w) for w in want])
         self.assertEqual(lines[39], hcgui.glyph(fold_line("open")))
-        self.assertEqual(self.side.usage_ys, [36, 37, 38])
-        self.assertEqual(self.side.body_height, 36)
-        for y in (36, 37, 38):  # 42, 55, 87: dim, never bold (owner, 24 Nov: red only from 95 %, dim too)
+        self.assertEqual(self.side.usage_ys, [35, 36, 37])
+        self.assertEqual(self.side.body_height, 34)  # line 34: the blank line above them
+        self.assertEqual((lines[34], lines[38]), ("", ""))  # and line 38: the one below them, off "‹ fold"
+        for y in (35, 36, 37):  # 42, 55, 87: dim, never bold (owner, 24 Nov: red only from 95 %, dim too)
             self.assertEqual(self.scr.cells[(y, 1)][1], hcgui.curses.A_DIM)
         self.assertTrue(all(hcgui.text_width(line) <= 29 for line in self.scr.lines()))
 
@@ -8919,8 +8950,9 @@ class UsageSidebarTests(unittest.TestCase):
         self.side.refresh_extras(self.now + 1)
         self.side.draw()
         lines = self.lines()
-        self.assertEqual(self.side.usage_ys, [35, 36, 37])
-        self.assertTrue(lines[35].startswith(" claude"))
+        self.assertEqual(self.side.usage_ys, [34, 35, 36])
+        self.assertTrue(lines[34].startswith(" claude"))
+        self.assertEqual((lines[33], lines[37]), ("", ""))  # a blank line above them and one below them
         self.assertEqual(lines[38], " keychain locked: API billing")
         self.assertEqual(lines[39], hcgui.glyph(fold_line("open")))
 
@@ -8930,9 +8962,11 @@ class UsageSidebarTests(unittest.TestCase):
             self.side.draw()
         without = self.lines()
         self.assertNotIn("%", "".join(without))
-        # the same rows in the same order, the agents (anchored to the list's last line) 3 lines higher
-        self.assertEqual([line for line in with_usage[:36] if line], [line for line in without[:39] if line])
-        self.assertEqual(with_usage[31:36], without[34:39])
+        # the same rows in the same order, the agents (anchored to the list's last line) 5 lines higher: 3 usage
+        # lines and the blank lines above and below them
+        self.assertEqual([line for line in with_usage[:34] if line], [line for line in without[:39] if line])
+        self.assertEqual(with_usage[29:34], without[34:39])
+        self.assertEqual((with_usage[34], with_usage[38]), ("", ""))
         self.assertEqual(with_usage[39], without[39])
 
     def test_none_in_the_strip(self):
@@ -9044,20 +9078,21 @@ class UsageSidebarTests(unittest.TestCase):
 
     def test_a_right_click_opens_that_lines_menu_above_them(self):
         cursor = self.side.cursor
-        before = self.lines()[36:39]
+        before = self.lines()[35:38]
         self.assertEqual(self.side.usage_names, ["claude", "solo", "work"])  # as drawn, by name
         for y, name in zip(self.side.usage_ys, ("claude", "solo", "work")):
             self.right_click(y)
             menu = self.side.menu
             self.assertEqual((menu.item, menu.title, menu.by_mouse), (hcgui.usage_item(name), name, True))
             self.assertEqual([e.label for e in menu.entries],
-                             ["Rename", "Hide usage", "Show servers", "Hide agents", "Hide dev servers"])
+                             ["Rename", "Refresh", "Hide usage", "Show servers", "Hide agents", "Hide dev servers"])
             self.assertEqual(self.side.cursor, cursor)  # a usage line is no row: the cursor stays
             box = self.side.menu_at
-            self.assertEqual(box.top + box.height, 36, y)  # just above the first of them, whichever was clicked
-            self.assertEqual(self.lines()[36:39], before)  # none of them covered
+            self.assertEqual(box.top + box.height, 35, y)  # just above the first of them, whichever was clicked
+            self.assertEqual(self.lines()[35:38], before)  # none of them covered
             self.assertIn("Rename", self.lines()[box.entry_y(0)])
-            self.assertIn("Hide usage", self.lines()[box.entry_y(1)])
+            self.assertIn("Refresh", self.lines()[box.entry_y(1)])
+            self.assertIn("Hide usage", self.lines()[box.entry_y(2)])
             self.assertIn(name, self.lines()[box.top])  # titled with the subscription's name
             self.side.mouse_quiet = 0.0
             with pressed(20, 2):  # a click outside closes it, and does nothing else
@@ -9065,11 +9100,23 @@ class UsageSidebarTests(unittest.TestCase):
             self.assertIsNone(self.side.menu)
         self.assertFalse((self.state / "usagelines").exists())  # nothing written yet
 
-    def test_hide_usage_in_their_menu_hides_them_and_stops_the_check(self):
-        self.right_click(37)
+    def test_refresh_in_their_menu_checks_now(self):
+        """Owner, 24 Nov: "Refresh" in a usage line's menu, the same as r."""
+        self.right_click(36)
         box = self.side.menu_at
         self.side.mouse_quiet = 0.0
-        with mock.patch.object(hcgui, "focus_view") as focus, pressed(box.left + 2, box.entry_y(1)):
+        self.side.usage_asked = self.side.keychain_asked = False
+        with mock.patch.object(hcgui, "focus_view"), pressed(box.left + 2, box.entry_y(1)):
+            self.key(hcgui.curses.KEY_MOUSE)
+        self.assertIsNone(self.side.menu)
+        self.assertTrue(self.side.usage_asked and self.side.keychain_asked and self.side.full_due)
+        self.assertFalse((self.state / "usagelines").exists())  # still shown
+
+    def test_hide_usage_in_their_menu_hides_them_and_stops_the_check(self):
+        self.right_click(36)
+        box = self.side.menu_at
+        self.side.mouse_quiet = 0.0
+        with mock.patch.object(hcgui, "focus_view") as focus, pressed(box.left + 2, box.entry_y(2)):
             self.key(hcgui.curses.KEY_MOUSE)
         focus.assert_called_once_with(self.win)  # a right-click menu: the keyboard back to the view
         self.assertIsNone(self.side.menu)
@@ -9168,7 +9215,7 @@ class UsageSidebarTests(unittest.TestCase):
         self.assertTrue(hcgui.read_usage_shown(self.state))
 
     def test_their_menu_closes_when_they_go(self):
-        self.right_click(36)
+        self.right_click(35)
         self.assertIsNotNone(self.side.menu)
         hcgui.write_usage_shown(False, self.state)  # another window hides them
         self.side.draw()
@@ -9176,7 +9223,7 @@ class UsageSidebarTests(unittest.TestCase):
         self.assertIsNone(self.side.menu_at)
         hcgui.write_usage_shown(True, self.state)
         self.side.draw()  # back at the next draw
-        self.right_click(36)
+        self.right_click(35)
         self.assertEqual(self.side.menu.item, hcgui.usage_item("claude"))
         self.hc.usage = None  # a failed check: the lines go, and their menu with them
         self.side.refresh_extras(self.now + hcgui.USAGE_SECONDS)
@@ -9198,7 +9245,7 @@ class UsageSidebarTests(unittest.TestCase):
 
     def test_rename_a_subscription_from_its_lines_menu(self):
         with mock.patch.object(hcgui, "focus_view") as focus:
-            self.pick(38, "Rename")
+            self.pick(37, "Rename")
         focus.assert_not_called()  # a question: the sidebar keeps the keyboard until it is answered
         prompt = self.side.prompt
         self.assertEqual((prompt.kind, prompt.title, prompt.text), ("rename", "rename work to:", "work"))
@@ -9210,14 +9257,14 @@ class UsageSidebarTests(unittest.TestCase):
         focus.assert_called_once_with(self.win)  # answered: the keyboard back to the view
         self.assertEqual(hcgui.read_names(self.state), {"account:work": "Team plan"})
         self.assertIsNone(self.side.prompt)
-        self.assertEqual(self.lines()[36:39], [hcgui.glyph(w) for w in
-                                               (" claude ¹     42%", " solo         55%", " Team plan ²  87%")])
+        self.assertEqual(self.lines()[35:38], [hcgui.glyph(w) for w in
+                                               (" claude¹     42%", " solo        55%", " Team plan²  87%")])
         self.assertEqual(self.side.usage_names, ["claude", "solo", "work"])  # still by the file's name
-        self.assertEqual(self.scr.cells[(38, 1)][1], hcgui.curses.A_DIM)  # its look as before: dim (87 % is under 95)
-        self.pick(38, "Rename")  # again: the display name filled in, and in the menu's title
+        self.assertEqual(self.scr.cells[(37, 1)][1], hcgui.curses.A_DIM)  # its look as before: dim (87 % is under 95)
+        self.pick(37, "Rename")  # again: the display name filled in, and in the menu's title
         self.assertEqual((self.side.prompt.title, self.side.prompt.text), ("rename Team plan to:", "Team plan"))
         self.key(27)
-        self.right_click(38)
+        self.right_click(37)
         self.assertEqual(self.side.menu.title, "Team plan")
         self.assertEqual(self.side.menu.item, hcgui.usage_item("work"))
         self.assertIn("Team plan", self.lines()[self.side.menu_at.top])
@@ -9228,32 +9275,32 @@ class UsageSidebarTests(unittest.TestCase):
 
     def test_an_empty_name_or_the_plain_name_removes_it(self):
         for answer in ("", "work", "  "):
-            self.rename(38, "Team")
+            self.rename(37, "Team")
             self.assertEqual(hcgui.read_names(self.state), {"account:work": "Team"})
-            self.rename(38, answer)
+            self.rename(37, answer)
             self.assertEqual(hcgui.read_names(self.state), {}, repr(answer))
-            self.assertTrue(self.lines()[38].startswith(hcgui.glyph(" work ²")), answer)
+            self.assertTrue(self.lines()[37].startswith(hcgui.glyph(" work²")), answer)
         hcgui.change_names({"space:dev": "Main", "account:solo": "Side"}, self.state)
-        self.rename(38, "Team")
-        self.rename(38, "")  # the other display names stay
+        self.rename(37, "Team")
+        self.rename(37, "")  # the other display names stay
         self.assertEqual(hcgui.read_names(self.state), {"space:dev": "Main", "account:solo": "Side"})
 
     def test_a_name_another_subscription_shows_is_refused(self):
-        self.rename(37, "Side")
+        self.rename(36, "Side")
         for answer, why in (("SIDE", "SIDE is taken"), ("claude", "claude is taken"), ("Claude", "Claude is taken"),
                             ("x" * 33, "a name is 1-32 printable characters")):
-            self.rename(38, answer)
+            self.rename(37, answer)
             self.assertEqual(self.side.notice.current(), "rename: " + why, answer)
             self.assertEqual(hcgui.read_names(self.state), {"account:solo": "Side"}, answer)
-        self.rename(38, "solo")  # solo shows Side, but its own name comes back once that goes
+        self.rename(37, "solo")  # solo shows Side, but its own name comes back once that goes
         self.assertEqual(self.side.notice.current(), "rename: solo is taken")
         self.assertEqual(hcgui.read_names(self.state), {"account:solo": "Side"})
-        self.rename(37, "")
+        self.rename(36, "")
         self.assertEqual(hcgui.read_names(self.state), {})
-        self.assertEqual(self.lines()[36:39], [hcgui.glyph(w) for w in (" claude ¹  42%", " solo      55%",
-                                                                        " work ²    87%")])
+        self.assertEqual(self.lines()[35:38], [hcgui.glyph(w) for w in (" claude¹  42%", " solo     55%",
+                                                                        " work²    87%")])
         hcgui.change_names({"space:dev": "Desk"}, self.state)
-        self.rename(37, "Desk")  # a space's or a terminal's name is no subscription's: allowed
+        self.rename(36, "Desk")  # a space's or a terminal's name is no subscription's: allowed
         self.assertEqual(hcgui.read_names(self.state)["account:solo"], "Desk")
 
     def test_a_name_the_marks_stand_for_is_refused_with_or_without_a_line(self):
@@ -9261,7 +9308,7 @@ class UsageSidebarTests(unittest.TestCase):
         HCGUI_SHARED_USER: none may come twice there, or on two lines once a label's line shows (review finding).
         The tests' HCGUI_MARKS: claude and main ¹, work ²; HCGUI_SHARED_USER guest. "main" has no usage file."""
         for answer in ("main", "Main", "other", "Guest"):
-            self.rename(38, answer)
+            self.rename(37, answer)
             self.assertEqual(self.side.notice.current(), f"rename: {answer} is taken", answer)
             self.assertEqual(hcgui.read_names(self.state), {}, answer)
         self.hc.usage = "\n".join([usage_line("work", 87.4, self.reset + 600),
@@ -9290,7 +9337,7 @@ class UsageSidebarTests(unittest.TestCase):
             self.now += hcgui.USAGE_SECONDS
             self.side.refresh_extras(self.now)
             self.side.draw()
-            self.pick(38, "Rename")
+            self.pick(37, "Rename")
             self.assertEqual(self.side.prompt.title, "rename work to:", drop)
             if drop == "failed":
                 self.hc.usage = None
@@ -9310,12 +9357,12 @@ class UsageSidebarTests(unittest.TestCase):
         other.refresh_extras(self.now)
         other.sync()
         other.draw()
-        self.rename(38, "Team")
+        self.rename(37, "Team")
         other.draw()  # names.json is read again at its next draw
-        self.assertEqual(other.s.scr.line(38), hcgui.glyph(" Team ²    87%"))
+        self.assertEqual(other.s.scr.line(37), hcgui.glyph(" Team²    87%"))
         hcgui.change_names({"account:claude": "Max"}, self.state)  # renamed in the other window: seen here
         self.side.draw()
-        self.assertEqual(self.lines()[36], hcgui.glyph(" Max ¹   42%"))
+        self.assertEqual(self.lines()[35], hcgui.glyph(" Max¹   42%"))
         other.on_key(ord("?"))
         other.draw()
         self.assertIn(hcgui.glyph(" ¹       Max, main"), other.s.scr.lines())  # the "?" list's marks too
@@ -9339,22 +9386,22 @@ class UsageSidebarTests(unittest.TestCase):
             "account:work": "a\nb", "account:solo": 7, "account:claude": " pad", "account:": "x",
             "account:two words": "x"}))
         self.side.draw()
-        self.assertEqual(self.lines()[36:39], [hcgui.glyph(w) for w in (" claude ¹  42%", " solo      55%",
-                                                                        " work ²    87%")])
-        self.right_click(38)
+        self.assertEqual(self.lines()[35:38], [hcgui.glyph(w) for w in (" claude¹  42%", " solo     55%",
+                                                                        " work²    87%")])
+        self.right_click(37)
         self.assertEqual(self.side.menu.title, "work")
         self.side.mouse_quiet = 0.0
         with pressed(20, 2):  # a press outside closes it
             self.key(hcgui.curses.KEY_MOUSE)
         (self.state / "names.json").write_text("{not json")
         self.side.draw()
-        self.assertEqual(self.lines()[38], hcgui.glyph(" work ²    87%"))
-        self.pick(38, "Rename")
+        self.assertEqual(self.lines()[37], hcgui.glyph(" work²    87%"))
+        self.pick(37, "Rename")
         self.key(21, *"Team", 10)  # a broken file is replaced by a good one
         self.assertEqual(hcgui.read_names(self.state), {"account:work": "Team"})
 
     def test_a_lines_menu_closes_when_its_subscription_goes(self):
-        self.right_click(38)
+        self.right_click(37)
         self.assertEqual(self.side.menu.item, hcgui.usage_item("work"))
         self.hc.usage = "\n".join([usage_line("claude", 42, self.reset), usage_line("solo", 55, self.reset)]) + "\n"
         self.side.usage_asked = True
@@ -9368,7 +9415,7 @@ class UsageSidebarTests(unittest.TestCase):
         self.assertIsNotNone(self.side.menu)
 
     def test_keys_typed_after_the_right_click_go_to_the_view(self):
-        self.right_click(36)
+        self.right_click(35)
         with mock.patch.object(hcgui, "send_keys_to_view") as send:
             self.key("u")  # meant for the terminal, as after any right click: nothing hidden
         send.assert_called_once()
@@ -9389,13 +9436,14 @@ class UsageSidebarTests(unittest.TestCase):
         self.side.notice.say("hello there", bad=False)
         self.side.draw()
         lines = self.lines()
-        self.assertEqual(lines[35], "hello there")
-        self.assertTrue(lines[36].startswith(" claude"))
+        self.assertEqual(lines[34], "hello there")  # right above them; the blank line above it
+        self.assertEqual(lines[33], "")
+        self.assertTrue(lines[35].startswith(" claude"))
         self.key("s")  # the new-space prompt
         lines = self.lines()
         typed = next(i for i, line in enumerate(lines) if line.startswith("> "))
-        self.assertEqual(typed, 35)
-        self.assertTrue(lines[36].startswith(" claude"))
+        self.assertEqual(typed, 34)
+        self.assertTrue(lines[35].startswith(" claude"))
 
     def test_short_sidebars_drop_them_before_the_list(self):
         for height in range(3, 16):
@@ -9417,11 +9465,11 @@ class UsageSidebarTests(unittest.TestCase):
             items = self.side.items()
             self.side.cursor, self.side.cursor_pos = item, items.index(item)
             self.side.draw()
-            before = self.lines()[36:39]
+            before = self.lines()[35:38]
             self.key("a")
             if self.side.menu is None:
                 continue
-            self.assertEqual(self.lines()[36:39], before, (y, item))
+            self.assertEqual(self.lines()[35:38], before, (y, item))
             self.side.menu = None
             self.side.draw()
 

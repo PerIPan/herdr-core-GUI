@@ -24,17 +24,17 @@ rights asked. Machines and agents in the images are made up.
 
 - **Spaces.** The home machine's terminals, grouped by project.
 - **Servers.** Every machine `hc machine ls` knows, as `user@host`. Hidden until shown (`v`).
-- **Agents with live status.** `idle`, `working`, `done`, `blocked`, `error`, each with a coloured dot, read every
-  2 seconds. Listed by space and server: a heading only for two or more agents; a single agent on one row, with its
+- **Agents with live status.** `idle`, `working`, `done`, `blocked`, `error`, each a coloured dot (no word on the
+  row), read every 2 seconds. Listed by space and server: a heading only for two or more agents; a single agent on one row, with its
   space dim after its name (`notes² · docs`).
 - **Needs you.** A section at the top for agents `blocked`, in `error`, or `done` and not shown since. Present only
-  while it has a row.
+  while it has a row. Such an agent leaves the agents list until it no longer needs you.
 - **Claude Code started from a shell.** `claude` typed in a terminal's shell is listed as an agent too, named
   Claude Code in the tab bar (found as the terminal's foreground program, every 30 seconds).
 - **Account marks.** `¹ ² ³` after a Claude Code agent name the Claude login it bills, from the terminal's label
   `account` and `HCGUI_MARKS`.
 - **5-hour usage.** One dim line per Claude subscription at the bottom of the sidebar: name, mark, share of its
-  5-hour window used (`work ²  71%`). Red from 95%. Read every 10 minutes. Needs the
+  5-hour window used (`work²  71%`). Red from 95%. Read every 10 minutes. Needs the
   [setup below](#5-hour-usage).
 - **Keychain warning.** One red line while the home machine's login keychain is locked: Claude Code there cannot
   read its login and bills the API instead. Read-only: the keychain is never unlocked, no password is asked for.
@@ -169,7 +169,7 @@ On the home machine:
 
 3. Send a message in a session of each subscription. Its line shows within 10 minutes, or at once on `r`.
 
-A right click on a line opens its menu: Rename, Hide usage. A display name changes only what hcGUI draws.
+A right click on a line opens its menu: Rename, Refresh, Hide usage. A display name changes only what hcGUI draws.
 Hidden (`u`), the files are not read. Off for good with `HCGUI_USAGE=0`.
 
 ## Keys
