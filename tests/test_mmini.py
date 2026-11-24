@@ -856,13 +856,47 @@ class TabLayoutTests(unittest.TestCase):
 
     def test_tab_info(self):
         tab = {"address": "mmini/t5", "cwd": "/Users/r/dev/atlas", "agent": "claude-code", "status": "idle"}
-        self.assertEqual(mmini.tab_info(tab), "mmini/t5 · ~/dev/atlas · claude-code · idle")
-        self.assertEqual(mmini.tab_info({"address": "t1", "cwd": "/tmp", "agent": "zsh"}), "t1 · /tmp · zsh")
+        self.assertEqual(mmini.tab_info(tab), "Claude Code · ~/dev/atlas · idle")  # no hc id; the product's name
+        self.assertEqual(mmini.tab_info({"address": "t1", "cwd": "/Users/r", "agent": "zsh"}), "zsh · ~")
+        self.assertEqual(mmini.tab_info({"address": "t1", "cwd": "/tmp", "agent": "node"}), "node · /tmp")
         long = dict(tab, cwd="/private/tmp/some/very/long/folder/name/that/does/not/fit/work")
-        self.assertEqual(mmini.tab_info(long, 44), "mmini/t5 · …ot/fit/work · claude-code · idle")
-        self.assertLessEqual(len(mmini.tab_info(long, 44)), 44)
-        self.assertEqual(mmini.tab_info(long, 30), "mmini/t5 · claude-code · idle")  # no room for a folder
+        self.assertEqual(mmini.tab_info(long, 40), "Claude Code · …/does/not/fit/work · idle")
+        self.assertLessEqual(len(mmini.tab_info(long, 40)), 40)
+        self.assertEqual(mmini.tab_info(long, 25), "Claude Code · idle")  # no room for a folder
+        self.assertEqual(mmini.tab_info(tab, with_id=True), "Claude Code · ~/dev/atlas · idle · mmini/t5")
+        self.assertEqual(mmini.tab_info(long, 36, True), "Claude Code · idle · mmini/t5")  # the folder goes first
+        # narrower still: the part before the id is cut, never the id (the one thing the click adds; review)
+        working = dict(tab, status="working")
+        self.assertEqual(mmini.tab_info(working, 33, True), "Claude Code · working · mmini/t5")
+        self.assertEqual(mmini.tab_info(working, 30, True), "Claude Code · work… · mmini/t5")
+        self.assertEqual(mmini.tab_info(working, 20, True), "Claude C… · mmini/t5")
+        self.assertEqual(mmini.tab_info(working, 12, True), "mmini/t5")
+        self.assertEqual(mmini.tab_info(working, 5, True), "mmin…")
+        for room in range(1, 60):
+            line = mmini.tab_info(working, room, True)
+            self.assertLessEqual(mmini.text_width(line), room, room)
+            if room >= 8:
+                self.assertTrue(line.endswith("mmini/t5"), (room, line))
+        self.assertEqual(mmini.tab_info(working, 20), "Claude Code · working")  # no id: the caller cuts the end
         self.assertEqual(mmini.short_folder("/home/u"), "~")
+
+    def test_info_row(self):
+        tab = {"address": "mmini/t5", "cwd": "/Users/r/dev/atlas", "agent": "claude-code", "status": "idle"}
+        row = mmini.info_row
+        self.assertEqual(row("atlas", tab, 60, False), ("Claude Code · ~/dev/atlas · idle", ""))  # no name, no id
+        self.assertEqual(row("atlas", None, 60, False), ("", ""))  # nothing shown: an empty row
+        left, hint = row("atlas", tab, 120, True)  # after a click: the name first, the id, and the widest hint
+        self.assertEqual((left, hint), ("atlas · Claude Code · ~/dev/atlas · idle · mmini/t5", mmini.TAB_HINTS[0]))
+        left, hint = row("atlas", tab, 70, True)  # the whole line kept, a shorter hint beside it
+        self.assertEqual((left, hint), ("atlas · Claude Code · ~/dev/atlas · idle · mmini/t5", "←→ switch  z zoom"))
+        left, hint = row("atlas", tab, 45, True)  # no hint beside the whole line: the folder gives way for one
+        self.assertEqual((left, hint), ("atlas · Claude Code · idle · mmini/t5", "z zoom"))
+        self.assertLessEqual(len(left) + 2 + len(hint), 45)
+        self.assertEqual(row("atlas", None, 40, True), ("atlas", mmini.TAB_HINTS[2]))  # nothing shown: name, hint
+        left, hint = row("atlas", tab, 20, True)  # too narrow for anything else: cut, no hint
+        self.assertEqual(hint, "")
+        self.assertLessEqual(mmini.text_width(left), 20)
+        self.assertEqual(row("", tab, 120, True)[0], "Claude Code · ~/dev/atlas · idle · mmini/t5")  # no name
 
 
 class StateTests(unittest.TestCase):
@@ -2127,7 +2161,7 @@ class TabBarLogicTests(unittest.TestCase):
         self.bar.draw(self.snap, "t1")
         self.assertEqual(self.scr.line(0), mmini.glyph(" ● alpha │ ○ beta │ ○ delta │ ○ gamma"))
         self.assertEqual(mmini.hit_test(self.bar.layout, 0, 0), ("tab", 0))
-        self.assertTrue(self.scr.line(4).endswith(mmini.glyph("←→ switch  z zoom")))
+        self.assertNotIn("switch", self.scr.line(4))  # no hints until a click on the bar
         with mock.patch.object(mmini, "tmux") as run:
             for key in (ord("c"), ord("o")):
                 self.bar.on_key(key, self.snap, "t1")  # the sidebar's keys: nothing here
@@ -2141,9 +2175,8 @@ class TabBarLogicTests(unittest.TestCase):
         lines = self.scr.lines()
         self.assertEqual(lines[0], mmini.glyph("› ● alpha │ ○ beta │ ○ delta │ ○ gamma"))
         self.assertEqual(lines[1], mmini.glyph("  ○ omega │ +"))
-        self.assertEqual(lines[2], mmini.glyph("  t1 · ~/dev/app · claude-code · idle"))  # the info line
-        self.assertTrue(lines[4].startswith("  app"))
-        self.assertTrue(lines[4].endswith(mmini.glyph("c sidebar  ←→ switch  z zoom")))
+        self.assertEqual(lines[2:4], ["", ""])
+        self.assertEqual(lines[4], mmini.glyph("  Claude Code · ~/dev/app · idle"))  # the last row: the info row
         self.assertEqual(self.scr.cells[(0, 0)], ("›", mmini.curses.A_BOLD))
         hit = mmini.hit_test
         self.assertEqual(hit(self.bar.layout, 0, 0), ("open", -1))
@@ -2234,14 +2267,42 @@ class TabBarLogicTests(unittest.TestCase):
         lines = self.scr.lines()
         self.assertEqual(lines[0], mmini.glyph(" ● alpha │ ○ beta │ ○ delta │ ○ gamma"))
         self.assertEqual(lines[1], mmini.glyph(" ○ omega │ +"))
-        self.assertEqual(lines[2], mmini.glyph(" t1 · ~/dev/app · claude-code · idle"))
-        self.assertTrue(lines[4].startswith(" app"))
-        self.assertTrue(lines[4].endswith(mmini.glyph("←→ switch  z zoom")))  # the longest that fits
-        self.scr.width = 80
+        self.assertEqual(lines[2:4], ["", ""])
+        self.assertEqual(lines[4], mmini.glyph(" Claude Code · ~/dev/app · idle"))  # the last row: no space name
+        self.bar.handle_key(mmini.curses.KEY_MOUSE, self.snap, "t1", click=(20, 4, 1))  # a click on the bar
         self.bar.draw(self.snap, "t1")
-        self.assertTrue(self.scr.line(4).endswith(mmini.glyph(mmini.TAB_HINTS[0])))
+        # the space's name first, the line with the hc id, and the longest hint that fits (the folder gave way for it)
+        self.assertEqual(self.scr.line(4), mmini.glyph(" app · Claude Code · idle · t1") + "  " + "z zoom")
+        self.scr.width = 80
+        self.bar.handle_key(mmini.curses.KEY_MOUSE, self.snap, "t1", click=(20, 2, 1))  # any row of the bar
+        self.bar.draw(self.snap, "t1")
+        line = self.scr.line(4)
+        self.assertTrue(line.startswith(mmini.glyph(" app · Claude Code · ~/dev/app · idle · t1")), line)  # whole
+        self.assertTrue(line.endswith(mmini.glyph("←→ switch  z zoom")), line)  # the longest beside the whole line
+        self.bar.hints_until = time.monotonic() - 0.1  # NOTICE_SECONDS later: the name, the id and the hints go
+        self.bar.draw(self.snap, "t1")
+        self.assertEqual(self.scr.line(4), mmini.glyph(" Claude Code · ~/dev/app · idle"))
         reversed_cells = [x for (y, x), (_, attr) in self.scr.cells.items() if attr & mmini.curses.A_REVERSE]
         self.assertEqual((min(reversed_cells), max(reversed_cells)), (0, 8))  # the shown tab only
+
+    def test_the_row_below_the_tabs_carries_the_id_in_any_pane(self):
+        """TAB_ROWS (two) rows: one row of tabs (scrolled when they do not fit), then the info row; a click shows the
+        space's name, the line with its id and a hint there (review finding of the three-row bar: the id never
+        showed when the tabs wrapped)."""
+        self.scr.height = mmini.TAB_ROWS
+        self.bar.draw(self.snap, "t1")
+        self.assertIn("alpha", self.scr.line(0))
+        self.assertEqual(self.scr.line(1), mmini.glyph(" Claude Code · ~/dev/app · idle"))
+        self.bar.handle_key(mmini.curses.KEY_MOUSE, self.snap, "t1", click=(30, 1, 1))  # a click on the bar
+        self.bar.draw(self.snap, "t1")
+        line = self.scr.line(1)
+        self.assertTrue(line.startswith(" app · ") and "· t1" in line, line)
+        self.scr.height = 3  # a taller pane: the tabs wrap, the info row is still the last one
+        self.bar.draw(self.snap, "t1")
+        self.assertTrue(self.scr.line(2).startswith(" app · ") and "· t1" in self.scr.line(2), self.scr.line(2))
+        self.bar.hints_until = time.monotonic() - 0.1
+        self.bar.draw(self.snap, "t1")
+        self.assertEqual(self.scr.line(2), mmini.glyph(" Claude Code · ~/dev/app · idle"))
 
     def test_one_and_two_row_panes(self):
         self.scr.height = 1
@@ -2250,7 +2311,7 @@ class TabBarLogicTests(unittest.TestCase):
         self.scr.height = 2
         self.bar.draw(self.snap, "t1")
         self.assertIn("alpha", self.scr.line(0))
-        self.assertTrue(self.scr.line(1).startswith(" app"))
+        self.assertEqual(self.scr.line(1), mmini.glyph(" Claude Code · ~/dev/app · idle"))  # TAB_ROWS: the tab bar
         self.scr.height = 0
         self.bar.draw(self.snap, "t1")
 
@@ -2296,7 +2357,7 @@ class TabBarLogicTests(unittest.TestCase):
         self.assertEqual(self.scr.line(4), " new: no such machine")
         self.bar.notice.until = 0
         self.bar.draw(self.snap, "t1")
-        self.assertTrue(self.scr.line(4).startswith(" app"))
+        self.assertTrue(self.scr.line(4).startswith(" Claude Code"))  # the row below the tabs again
 
     def test_z_zooms_the_shown_terminal_or_says_nothing_is_shown(self):
         mmini.write_atomic(self.win / "panes", PANES)
@@ -2399,7 +2460,7 @@ class TabEngineTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: (self.snap() or {}).get("name") == "dev"))
         self.bar.draw(self.snap(), "t1")
         self.assertEqual(self.scr.line(0), mmini.glyph("› ● alpha │ ○ beta │ +"))
-        self.assertEqual(self.scr.line(1), mmini.glyph("  t1 · ~/dev · claude-code · idle"))
+        self.assertEqual(self.scr.line(self.scr.height - 1), mmini.glyph("  Claude Code · ~/dev · idle"))
         self.bar.on_key(ord("l"), self.snap(), "t1")  # switch
         self.assertEqual(mmini.current_target(self.win), "t2")
         self.assertTrue(wait_for(lambda: mmini.read_last(self.state).get("space:dev") == "t2"))  # remembered
@@ -3026,7 +3087,7 @@ class ProgramTests(unittest.TestCase):
 
     def test_both_panes_set_their_title_and_clear_their_folder_first(self):
         mmini.write_sidebar_state("open", self.state)
-        for mode, drawn in (("sidebar", b"fold"), ("tabs", b"switch")):
+        for mode, drawn in (("sidebar", b"fold"), ("tabs", b" + ")):  # the tab bar: its "+" (no hints until a click)
             proc, _, output = self.start(mode)
             self.assertTrue(wait_for(lambda: drawn in output, 10), (mode, bytes(output)))  # noqa: B023
             self.assertTrue(bytes(output).startswith(b"\x1b]2;mmini\x07\x1b]7;\x07"), (mode, bytes(output[:40])))
@@ -3195,7 +3256,7 @@ class TabMenuTests(unittest.TestCase):
         self.assertEqual(self.bar.menu.address, "mmini/t3")
         self.key(27)
         self.assertIsNone(self.bar.menu)
-        self.assertTrue(self.scr.line(1).startswith(" mmini/t1"))  # the info line again
+        self.assertTrue(self.scr.line(4).startswith(" Claude Code"))  # the info row again, on the last row
 
     def test_a_left_click_outside_only_closes(self):
         self.bar.draw(self.snap, "mmini/t1")
@@ -3279,6 +3340,38 @@ class TabMenuTests(unittest.TestCase):
         self.press(x, 1)
         self.press(x, 1)  # the double click's second press
         self.assertEqual(self.bar.prompt.kind, "rename")
+
+    def test_a_double_clicks_second_press_after_the_menu_went_shows_no_hints(self):
+        """tmux sends a double click's second press to the tab bar without taking the keyboard back: once the
+        first press ran an entry, closed the menu or cancelled a question, that press must not show the key hints
+        and the id (review finding). A later click does."""
+        self.bar.draw(self.snap, "mmini/t1")
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.press(self.tab_x("beta"), 0, button=3)
+            x = self.entry_x("new")
+            self.press(x, 1)  # New terminal: the menu goes, the keyboard to the view
+            self.press(x, 1)  # the second press: no menu, nothing hit on that row
+        self.assertIsNone(self.bar.menu)
+        self.assertEqual(self.bar.hints_until, 0.0)
+        self.bar.mouse_quiet = 0.0
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(1, 1)  # on the menu's "beta:", off its entries: closes it
+        self.press(1, 1)
+        self.assertIsNone(self.bar.menu)
+        self.assertEqual(self.bar.hints_until, 0.0)
+        for cancel in ("rename", "close"):
+            self.bar.mouse_quiet = 0.0
+            self.press(self.tab_x("beta"), 0, button=3)
+            self.press(self.entry_x(cancel), 1)
+            self.bar.mouse_quiet = 0.0  # past the double click that opened the question
+            self.press(60, 1)  # cancels it
+            self.press(60, 1)
+            self.assertIsNone(self.bar.prompt, cancel)
+            self.assertEqual(self.bar.hints_until, 0.0, cancel)
+        self.bar.mouse_quiet = 0.0  # later: a click shows them
+        self.press(60, 1)
+        self.assertGreater(self.bar.hints_until, time.monotonic())
+        self.assertIn("· mmini/t1", self.scr.line(self.scr.height - 1))  # the info row: the id after the line
 
     def test_the_tabs_keep_their_rows_while_close_asks(self):
         """Wrapped tabs must not take the rows the bar grew by for the question (review finding)."""
@@ -3571,6 +3664,73 @@ class NamesTests(unittest.TestCase):
         (self.state / "names.json").write_text("not json")
         self.assertEqual(mmini.read_names(self.state), {})
 
+    def test_a_change_keeps_the_keys_of_kinds_it_does_not_know(self):
+        """A window of an older version must not drop a later version's names when it saves one (review finding:
+        the subscriptions' "account:" names went with a rename in a window started before the update). Junk of the
+        kinds it knows still goes."""
+        (self.state / "names.json").write_text(json.dumps({
+            "space:dev": "Main", "rig:x": "a\nb", "later:thing": "Kept", "later:list": [1, 2]}))
+        self.assertEqual(mmini.change_names({"term:mini/t5": "web"}, self.state),
+                         {"space:dev": "Main", "term:mini/t5": "web"})
+        self.assertEqual(json.loads((self.state / "names.json").read_text()),
+                         {"space:dev": "Main", "term:mini/t5": "web", "later:thing": "Kept", "later:list": [1, 2]})
+        mmini.change_names({mmini.usage_key("work"): "Team"}, self.state)
+        with mock.patch.object(mmini, "NAME_KEY", re.compile(r"(?:space|rig|term):.+")):  # the kinds before 24 Nov
+            mmini.change_names({"term:mini/t5": ""}, self.state)  # so a later version's window keeps "account:work"
+        self.assertEqual(mmini.read_names(self.state), {"space:dev": "Main", "account:work": "Team"})
+        (self.state / "names.json").write_text("[1, 2]")  # not an object: nothing to keep
+        self.assertEqual(mmini.change_names({"space:dev": "Main"}, self.state), {"space:dev": "Main"})
+        self.assertEqual(json.loads((self.state / "names.json").read_text()), {"space:dev": "Main"})
+
+    def test_a_subscriptions_name_is_kept_by_its_usage_files_name(self):
+        # "account:<name>", <name> a usage file's name (USAGE_NAME), next to the other display names
+        mmini.change_names({"space:dev": "Main"}, self.state)
+        mmini.change_names({mmini.usage_key("work"): "Team plan"}, self.state)
+        self.assertEqual(mmini.read_names(self.state), {"space:dev": "Main", "account:work": "Team plan"})
+        mmini.change_names({"account:work": ""}, self.state)  # "" removes it, the others stay
+        self.assertEqual(mmini.read_names(self.state), {"space:dev": "Main"})
+        names = {"account:work": "Team plan"}
+        self.assertEqual(mmini.usage_shown("work", names), "Team plan")
+        self.assertEqual(mmini.usage_shown("solo", names), "solo")  # no display name: the file's name
+        self.assertEqual(mmini.usage_shown("work", {}), "work")
+
+    def test_junk_subscription_names_are_left_out(self):
+        (self.state / "names.json").write_text(json.dumps({
+            "account:work": "Team", "account:": "x", "account:two words": "x", "account:caf\u00e9": "x",
+            "account:" + "a" * 33: "x", "account:solo": 7, "account:spare": " pad", "account:side": "a\nb",
+            "accounts:work": "x", "Account:work": "x"}))
+        self.assertEqual(mmini.read_names(self.state), {"account:work": "Team"})
+        (self.state / "names.json").write_text(json.dumps(["account:work", "Team"]))
+        self.assertEqual(mmini.read_names(self.state), {})
+
+    def test_a_name_another_subscription_shows_is_taken(self):
+        drawn = ["work", "solo", "spare", "solo"]  # the usage files' names; a repeat counts once
+        names = {"account:solo": "Side", "account:gone": "Old"}  # "gone": no line drawn now
+        # what the others show, then their own names behind a display name (removing it brings them back)
+        self.assertEqual(mmini.usage_taken("work", drawn, names), ["Side", "spare", "solo"])
+        self.assertEqual(mmini.usage_taken("solo", drawn, names), ["work", "spare"])
+        self.assertEqual(mmini.usage_taken("work", [], names), [])
+        p = mmini.plan_rename
+        self.assertEqual(p("SIDE", "work", mmini.usage_taken("work", drawn, names)), ("bad", "SIDE is taken"))
+        self.assertEqual(p("Spare", "work", mmini.usage_taken("work", drawn, names)), ("bad", "Spare is taken"))
+        self.assertEqual(p("solo", "work", mmini.usage_taken("work", drawn, names)), ("bad", "solo is taken"))
+        self.assertEqual(p("SOLO", "work", mmini.usage_taken("work", drawn, names)), ("bad", "SOLO is taken"))
+        self.assertEqual(p("Old", "work", mmini.usage_taken("work", drawn, names)), ("set", "Old"))
+        self.assertEqual(p("work", "work", mmini.usage_taken("work", drawn, names)), ("remove", ""))  # its own
+        self.assertEqual(p("Side", "solo", mmini.usage_taken("solo", drawn, names)), ("set", "Side"))  # its own
+
+    def test_removing_a_display_name_never_leaves_two_lines_one_name(self):
+        # solo is renamed Side; work may not take "solo" meanwhile, or solo's own name, back once its display name
+        # goes, would be drawn on two lines
+        drawn, names = ["claude", "solo", "work"], {}
+        for own, text in (("solo", "Side"), ("work", "solo"), ("solo", "")):
+            what, value = mmini.plan_rename(text, own, mmini.usage_taken(own, drawn, names))
+            if what != "bad":
+                names = mmini.renamed(names, mmini.usage_key(own), value)
+        self.assertEqual(names, {})
+        shown = [mmini.usage_shown(n, names) for n in drawn]
+        self.assertEqual(len({s.casefold() for s in shown}), len(shown), shown)
+
     def test_plan_rename(self):
         p = mmini.plan_rename
         self.assertEqual(p("Main", "dev", ["other", "rig"]), ("set", "Main"))
@@ -3665,14 +3825,17 @@ class MenuTests(unittest.TestCase):
             self.assertNotIn("usage", [e.action for e in shown])  # no usage entry while they are shown
             hidden = mmini.menu_entries(item, group, "mmini", usage=False)
             self.assertEqual(hidden, shown + [mmini.Entry("usage", "Show usage", "u")])  # last, like a switch
-        # their own menu (a right click on a usage line): Hide usage first, then the three switches
-        for usage in (True, False):
-            entries = mmini.menu_entries(mmini.USAGE_ITEM, None, "mmini", True, False, True, usage)
-            self.assertEqual(entries, [mmini.Entry("usage", "Hide usage", "u"),
+        # a line's own menu (a right click on a usage line): Rename and Hide usage first, then the three switches;
+        # Rename has no direct key (the cursor never sits on a usage line)
+        for name, usage in itertools.product(("work", "solo"), (True, False)):
+            entries = mmini.menu_entries(mmini.usage_item(name), None, "mmini", True, False, True, usage)
+            self.assertEqual(entries, [mmini.Entry("rename", "Rename", ""),
+                                       mmini.Entry("usage", "Hide usage", "u"),
                                        mmini.Entry("servers", "Hide servers", "v"),
                                        mmini.Entry("agents", "Show agents", "g"),
                                        mmini.Entry("devs", "Hide dev servers", "w")])
-        self.assertLessEqual(mmini.menu_width(mmini.menu_entries(mmini.USAGE_ITEM, None)), 29)
+        self.assertEqual(mmini.usage_item("work"), mmini.Item("usage", "", "work"))
+        self.assertLessEqual(mmini.menu_width(mmini.menu_entries(mmini.usage_item("work"), None)), 29)
 
     def test_every_entry_names_its_direct_key(self):
         keys = {}
@@ -4250,8 +4413,9 @@ class ActionTests(unittest.TestCase):
         snap = mmini.read_snapshot(self.win)
         self.assertEqual((snap["name"], snap["title"]), ("dev", "Main"))
         bar = mmini.TabBar(FakeScr(3, 60), self.win, self.state)
+        bar.show_hints()  # the space's name shows after a click on the bar, at the start of the row below the tabs
         bar.draw(snap, mmini.current_target(self.win))
-        self.assertTrue(bar.s.scr.line(2).startswith(" Main"))
+        self.assertTrue(bar.s.scr.line(2).startswith(" Main · "))
         self.key("n")  # a new shell still gets the space's own label
         self.assertEqual([c for c in self.hc.calls if c[0] == "run"][-1][-2:], ("--label", "space=dev"))
         self.key("c")  # the strip
@@ -7712,6 +7876,18 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(mmini.mark_legend({}, "guest", "⁴"), [("⁴", "guest")])
         self.assertEqual(mmini.mark_legend({"a": "¹", "b": "³"}, "guest", "³"), [("¹", "a"), ("³", "b, other, guest")])
 
+    def test_the_legend_names_a_subscription_by_its_display_name(self):
+        # an MMINI_MARKS label is a subscription's name (its usage file's name): its display name is drawn, as on
+        # its usage line; "other" and the shared ssh user are no subscriptions and stay as they are
+        names = {"account:a": "Alpha", "account:guest": "G", "account:other": "O", "space:b": "B"}
+        self.assertEqual(mmini.mark_legend({"a": "¹", "b": "³", "c": "¹"}, "guest", "³", names),
+                         [("¹", "Alpha, c"), ("³", "b, other, guest")])
+        self.assertEqual(mmini.mark_legend({"a": "¹"}, "", "³", {}), [("¹", "a"), ("³", "other")])
+        with mock.patch.multiple(mmini, ACCOUNT_MARKS={"work": "²"}, SHARED_USER=""):
+            self.assertEqual(mmini.help_entries({"account:work": "Team"})[-2:], [("²", "Team"), ("³", "other")])
+            self.assertEqual(mmini.help_entries()[-2:], [("²", "work"), ("³", "other")])
+            self.assertIn(" ²       Team", mmini.help_lines(29, 60, {"account:work": "Team"}))
+
     def test_settings_read_at_start(self):
         code = ("import json, mmini; print(json.dumps([mmini.FIRST, mmini.ACCOUNT_MARKS, mmini.SHARED_USER, "
                 "mmini.SHARED_MARK, mmini.DEV_PROGRAM, mmini.mark_legend()]))")
@@ -8105,7 +8281,12 @@ class UsageTextTests(unittest.TestCase):
         two = [mmini.Usage("claude", 5, self.NOW + 3600), mmini.Usage("claude-2", 100, self.NOW + 2 * 3600)]
         self.assertEqual(self.texts(two, 40), [" claude ¹     5%", " claude-2 ² 100%"])
         self.assertEqual(self.texts(two, 16), [" claude ¹     5%", " claude-2 ² 100%"])
-        self.assertEqual(self.texts(two, 15), [" ¹ 5%", " ² 100%"])  # " claude-2 ² 100%" needs 16 in both forms
+        # " claude-2 ² 100%" needs 16 in both forms: below that the names are cut (the marks stay, the shares lined
+        # up) while each keeps USAGE_CLIP_MIN columns before its "…", then the marks alone
+        self.assertEqual(self.texts(two, 15), [" claude ¹    5%", " claude… ² 100%"])
+        self.assertEqual(self.texts(two, 14), [" claude ¹   5%", " claud… ² 100%"])
+        self.assertEqual(self.texts(two, 13), [" clau… ¹   5%", " clau… ² 100%"])
+        self.assertEqual(self.texts(two, 12), [" ¹ 5%", " ² 100%"])
         self.assertEqual(self.texts(two, 8), [" ¹ 5%", " ² 100%"])
 
     def test_a_window_that_has_passed_shows_0(self):
@@ -8128,13 +8309,66 @@ class UsageTextTests(unittest.TestCase):
                     self.assertTrue(all(line.endswith("%") for line in lines), (room, lines))
         self.assertEqual(self.texts([], 29), [])
 
+    def test_display_names_drawn_the_mark_by_the_files_name(self):
+        two = [mmini.Usage("claude", 42, self.NOW + 3600), mmini.Usage("work", 87, self.NOW + 7200)]
+        marks = {"claude": "¹", "work": "²"}
+        names = {"account:work": "Team plan", "account:Team plan": "x", "space:claude": "x"}
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 29, marks, names), [" claude ¹     42%", " Team plan ²  87%"])
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 15, marks, names), [" claude ¹   42%", " Team p… ²  87%"])
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 13, marks, names), [" clau… ¹  42%", " Team… ²  87%"])
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 12, marks, names), [" ¹ 42%", " ² 87%"])
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 29, {}, names), [" claude     42%", " Team plan  87%"])
+        self.assertEqual(mmini.usage_texts(two[1:], self.NOW, 9, {}, names), [" Tea… 87%"])  # no mark: cut
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 29, marks), [" claude ¹  42%", " work ²    87%"])
+
+    def test_long_display_names_are_cut_not_dropped(self):
+        # one long display name must not leave every line with its mark alone at the default width: the names are
+        # cut as a row's name is (the mark stays), the shares lined up
+        two = [mmini.Usage("claude", 42, self.NOW + 3600), mmini.Usage("work", 87, self.NOW + 7200)]
+        marks = {"claude": "¹", "work": "²"}
+        names = {"account:work": "Team subscription paid by Studio"}  # 32: the longest allowed
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 29, marks, names),
+                         [" claude ¹                 42%", " Team subscription pa… ²  87%"])
+        self.assertEqual(mmini.usage_texts(two, self.NOW, 29, {}, names),
+                         [" claude                   42%", " Team subscription paid…  87%"])
+
+    def test_every_allowed_display_name_fits_every_width(self):
+        entries = [mmini.Usage("claude", 42, self.NOW + 3600), mmini.Usage("work", 7, self.NOW + 60),
+                   mmini.Usage("solo", 100, self.NOW + 99)]
+        for long in ("x" * 32, "漢" * 32, "a" * 31 + "漢", "Team", "T", "é" * 32):
+            self.assertTrue(mmini.valid_display_name(long), long)
+            names = {"account:work": long, "account:solo": long[:1] + "!"}
+            for marks in ({"claude": "¹", "work": "²"}, {}):
+                for room in range(0, 70):
+                    lines = mmini.usage_texts(entries, self.NOW, room, marks, names)
+                    self.assertEqual(len(lines), 3)
+                    for line in lines:
+                        self.assertLessEqual(mmini.text_width(line), room, (long, room, line))
+                    if room >= 6:
+                        self.assertTrue(all(line.endswith("%") for line in lines), (long, room, lines))
+                    if room >= 13 and any("…" in line for line in lines):  # the cut form (no mark alone yet)
+                        widths = {mmini.text_width(line) for line in lines}
+                        self.assertEqual(len(widths), 1, (long, room, lines))  # the shares lined up
+                    if room >= 29:  # the default width and wider: the name is never dropped
+                        self.assertTrue(lines[1].startswith(" " + long[:4]), (long, room, lines))
+
+    def test_the_cut_form_keeps_at_least_four_columns_of_each_name(self):
+        one = [mmini.Usage("work", 87, self.NOW + 60)]
+        names = {"account:work": "Alpha Beta"}
+        texts = [mmini.usage_texts(one, self.NOW, room, {"work": "²"}, names) for room in range(10, 20)]
+        self.assertEqual(texts, [[" ² 87%"]] * 3 + [[" Alph… ²  87%"], [" Alpha… ²  87%"],
+                                                    [" Alpha … ²  87%"],  # cut as clip() cuts any name
+                                                    [" Alpha B… ²  87%"], [" Alpha Beta ² 87%"],
+                                                    [" Alpha Beta ²  87%"], [" Alpha Beta ²  87%"]])
+        self.assertEqual(mmini.USAGE_CLIP_MIN, 4)
+
     def test_tone(self):
         tone = mmini.usage_tone
-        self.assertEqual([tone(p) for p in (0, 49, 50, 79, 80, 100)], ["low", "low", "", "", "high", "high"])
+        self.assertEqual([tone(p) for p in (0, 49, 50, 80, 94, 95, 100)], ["", "", "", "", "", "high", "high"])
         with mock.patch.object(mmini.curses, "color_pair", lambda n: n << 8):
-            self.assertEqual(mmini.usage_attr(49), mmini.curses.A_DIM)
-            self.assertEqual(mmini.usage_attr(50), 0)
-            self.assertEqual(mmini.usage_attr(80), (1 << 8) | mmini.curses.A_BOLD)  # as the keychain warning
+            for share in (0, 49, 50, 80, 94):  # always dim (owner, 24 Nov), never bold
+                self.assertEqual(mmini.usage_attr(share), mmini.curses.A_DIM)
+            self.assertEqual(mmini.usage_attr(95), (1 << 8) | mmini.curses.A_DIM)  # the keychain warning's red, dim
 
 
 class UsageFrameTests(unittest.TestCase):
@@ -8228,9 +8462,8 @@ class UsageSidebarTests(unittest.TestCase):
         self.assertEqual(lines[39], mmini.glyph(fold_line("open")))
         self.assertEqual(self.side.usage_ys, [36, 37, 38])
         self.assertEqual(self.side.body_height, 36)
-        self.assertEqual(self.scr.cells[(36, 1)][1], mmini.curses.A_DIM)  # under 50 %: dim
-        self.assertEqual(self.scr.cells[(37, 1)][1], 0)  # 50-79: as any text
-        self.assertEqual(self.scr.cells[(38, 1)][1], (1 << 8) | mmini.curses.A_BOLD)  # 80 and more: the warning's
+        for y in (36, 37, 38):  # 42, 55, 87: dim, never bold (owner, 24 Nov: red only from 95 %, dim too)
+            self.assertEqual(self.scr.cells[(y, 1)][1], mmini.curses.A_DIM)
         self.assertTrue(all(mmini.text_width(line) <= 29 for line in self.scr.lines()))
 
     def test_above_the_keychain_warning(self):
@@ -8362,21 +8595,23 @@ class UsageSidebarTests(unittest.TestCase):
         self.assertFalse([c for c in self.hc.calls if c[0] == "run"])
         self.assertEqual(len(self.side.usage_ys), 3)
 
-    def test_a_right_click_opens_their_menu_above_them(self):
+    def test_a_right_click_opens_that_lines_menu_above_them(self):
         cursor = self.side.cursor
         before = self.lines()[36:39]
-        for y in self.side.usage_ys:
+        self.assertEqual(self.side.usage_names, ["claude", "solo", "work"])  # as drawn, by name
+        for y, name in zip(self.side.usage_ys, ("claude", "solo", "work")):
             self.right_click(y)
             menu = self.side.menu
-            self.assertEqual((menu.item, menu.title, menu.by_mouse), (mmini.USAGE_ITEM, "5-hour usage", True))
+            self.assertEqual((menu.item, menu.title, menu.by_mouse), (mmini.usage_item(name), name, True))
             self.assertEqual([e.label for e in menu.entries],
-                             ["Hide usage", "Show servers", "Hide agents", "Hide dev servers"])
+                             ["Rename", "Hide usage", "Show servers", "Hide agents", "Hide dev servers"])
             self.assertEqual(self.side.cursor, cursor)  # a usage line is no row: the cursor stays
             box = self.side.menu_at
             self.assertEqual(box.top + box.height, 36, y)  # just above the first of them, whichever was clicked
             self.assertEqual(self.lines()[36:39], before)  # none of them covered
-            self.assertIn("Hide usage", self.lines()[box.entry_y(0)])
-            self.assertIn("5-hour usage", self.lines()[box.top])
+            self.assertIn("Rename", self.lines()[box.entry_y(0)])
+            self.assertIn("Hide usage", self.lines()[box.entry_y(1)])
+            self.assertIn(name, self.lines()[box.top])  # titled with the subscription's name
             self.side.mouse_quiet = 0.0
             with pressed(20, 2):  # a click outside closes it, and does nothing else
                 self.key(mmini.curses.KEY_MOUSE)
@@ -8387,7 +8622,7 @@ class UsageSidebarTests(unittest.TestCase):
         self.right_click(37)
         box = self.side.menu_at
         self.side.mouse_quiet = 0.0
-        with mock.patch.object(mmini, "focus_view") as focus, pressed(box.left + 2, box.entry_y(0)):
+        with mock.patch.object(mmini, "focus_view") as focus, pressed(box.left + 2, box.entry_y(1)):
             self.key(mmini.curses.KEY_MOUSE)
         focus.assert_called_once_with(self.win)  # a right-click menu: the keyboard back to the view
         self.assertIsNone(self.side.menu)
@@ -8495,11 +8730,195 @@ class UsageSidebarTests(unittest.TestCase):
         mmini.write_usage_shown(True, self.state)
         self.side.draw()  # back at the next draw
         self.right_click(36)
-        self.assertEqual(self.side.menu.item, mmini.USAGE_ITEM)
+        self.assertEqual(self.side.menu.item, mmini.usage_item("claude"))
         self.hc.usage = None  # a failed check: the lines go, and their menu with them
         self.side.refresh_extras(self.now + mmini.USAGE_SECONDS)
         self.side.draw()
         self.assertIsNone(self.side.menu)
+
+    def pick(self, y, entry):
+        """A right click on the usage line at `y`, then a click on its menu's entry `entry` (its label)."""
+        self.right_click(y)
+        box, menu = self.side.menu_at, self.side.menu
+        self.side.mouse_quiet = 0.0
+        with pressed(box.left + 2, box.entry_y([e.label for e in menu.entries].index(entry))):
+            self.key(mmini.curses.KEY_MOUSE)
+
+    def rename(self, y, text):
+        """Rename in the menu of the usage line at `y`, the name filled in cleared (ctrl+U), `text` typed, enter."""
+        self.pick(y, "Rename")
+        self.key(21, *text, 10)
+
+    def test_rename_a_subscription_from_its_lines_menu(self):
+        with mock.patch.object(mmini, "focus_view") as focus:
+            self.pick(38, "Rename")
+        focus.assert_not_called()  # a question: the sidebar keeps the keyboard until it is answered
+        prompt = self.side.prompt
+        self.assertEqual((prompt.kind, prompt.title, prompt.text), ("rename", "rename work to:", "work"))
+        self.assertEqual((prompt.key, prompt.own, prompt.by_mouse), ("account:work", "work", True))
+        self.assertIsNone(self.side.menu)
+        self.assertIn("> work_", self.lines())  # the usual rename prompt, the shown name filled in
+        with mock.patch.object(mmini, "focus_view") as focus:
+            self.key(21, *"Team plan", 10)
+        focus.assert_called_once_with(self.win)  # answered: the keyboard back to the view
+        self.assertEqual(mmini.read_names(self.state), {"account:work": "Team plan"})
+        self.assertIsNone(self.side.prompt)
+        self.assertEqual(self.lines()[36:39], [mmini.glyph(w) for w in
+                                               (" claude ¹     42%", " solo         55%", " Team plan ²  87%")])
+        self.assertEqual(self.side.usage_names, ["claude", "solo", "work"])  # still by the file's name
+        self.assertEqual(self.scr.cells[(38, 1)][1], mmini.curses.A_DIM)  # its look as before: dim (87 % is under 95)
+        self.pick(38, "Rename")  # again: the display name filled in, and in the menu's title
+        self.assertEqual((self.side.prompt.title, self.side.prompt.text), ("rename Team plan to:", "Team plan"))
+        self.key(27)
+        self.right_click(38)
+        self.assertEqual(self.side.menu.title, "Team plan")
+        self.assertEqual(self.side.menu.item, mmini.usage_item("work"))
+        self.assertIn("Team plan", self.lines()[self.side.menu_at.top])
+        self.side.mouse_quiet = 0.0
+        with pressed(20, 2):
+            self.key(mmini.curses.KEY_MOUSE)
+        self.assertFalse([c for c in self.hc.calls if c[0] == "label"])  # nothing of hc changes
+
+    def test_an_empty_name_or_the_plain_name_removes_it(self):
+        for answer in ("", "work", "  "):
+            self.rename(38, "Team")
+            self.assertEqual(mmini.read_names(self.state), {"account:work": "Team"})
+            self.rename(38, answer)
+            self.assertEqual(mmini.read_names(self.state), {}, repr(answer))
+            self.assertTrue(self.lines()[38].startswith(mmini.glyph(" work ²")), answer)
+        mmini.change_names({"space:dev": "Main", "account:solo": "Side"}, self.state)
+        self.rename(38, "Team")
+        self.rename(38, "")  # the other display names stay
+        self.assertEqual(mmini.read_names(self.state), {"space:dev": "Main", "account:solo": "Side"})
+
+    def test_a_name_another_subscription_shows_is_refused(self):
+        self.rename(37, "Side")
+        for answer, why in (("SIDE", "SIDE is taken"), ("claude", "claude is taken"), ("Claude", "Claude is taken"),
+                            ("x" * 33, "a name is 1-32 printable characters")):
+            self.rename(38, answer)
+            self.assertEqual(self.side.notice.current(), "rename: " + why, answer)
+            self.assertEqual(mmini.read_names(self.state), {"account:solo": "Side"}, answer)
+        self.rename(38, "solo")  # solo shows Side, but its own name comes back once that goes
+        self.assertEqual(self.side.notice.current(), "rename: solo is taken")
+        self.assertEqual(mmini.read_names(self.state), {"account:solo": "Side"})
+        self.rename(37, "")
+        self.assertEqual(mmini.read_names(self.state), {})
+        self.assertEqual(self.lines()[36:39], [mmini.glyph(w) for w in (" claude ¹  42%", " solo      55%",
+                                                                        " work ²    87%")])
+        mmini.change_names({"space:dev": "Desk"}, self.state)
+        self.rename(37, "Desk")  # a space's or a terminal's name is no subscription's: allowed
+        self.assertEqual(mmini.read_names(self.state)["account:solo"], "Desk")
+
+    def test_a_name_the_marks_stand_for_is_refused_with_or_without_a_line(self):
+        """The "?" list names every MMINI_MARKS label (a subscription, with a line or not yet), "other" and
+        MMINI_SHARED_USER: none may come twice there, or on two lines once a label's line shows (review finding).
+        The tests' MMINI_MARKS: claude and main ¹, work ²; MMINI_SHARED_USER guest. "main" has no usage file."""
+        for answer in ("main", "Main", "other", "Guest"):
+            self.rename(38, answer)
+            self.assertEqual(self.side.notice.current(), f"rename: {answer} is taken", answer)
+            self.assertEqual(mmini.read_names(self.state), {}, answer)
+        self.hc.usage = "\n".join([usage_line("work", 87.4, self.reset + 600),
+                                   usage_line("solo", 55, self.reset)]) + "\n"  # claude's line not there yet
+        self.now += mmini.USAGE_SECONDS
+        self.side.refresh_extras(self.now)
+        self.side.draw()
+        self.assertEqual(self.side.usage_names, ["solo", "work"])
+        self.rename(self.side.usage_ys[0], "claude")
+        self.assertEqual(self.side.notice.current(), "rename: claude is taken")
+        self.assertEqual(mmini.read_names(self.state), {})
+        mmini.change_names({"account:main": "Home"}, self.state)  # a label's display name is taken too
+        self.rename(self.side.usage_ys[0], "home")
+        self.assertEqual(self.side.notice.current(), "rename: home is taken")
+        self.rename(self.side.usage_ys[0], "Team")
+        self.assertEqual(mmini.read_names(self.state), {"account:main": "Home", "account:solo": "Team"})
+
+    def test_lines_gone_while_asked_still_refuse_their_names(self):
+        # the lines drop while the question is open (a failed check, or hidden in another window: refresh_extras
+        # empties them): the names they showed when it was asked are still taken
+        for drop in ("failed", "hidden"):
+            mmini.change_names({"account:solo": "Side", "account:work": ""}, self.state)
+            mmini.write_usage_shown(True, self.state)
+            self.hc.usage = "\n".join([usage_line("work", 87.4, self.reset + 600),
+                                       usage_line("claude", 42, self.reset), usage_line("solo", 55, self.reset)]) + "\n"
+            self.now += mmini.USAGE_SECONDS
+            self.side.refresh_extras(self.now)
+            self.side.draw()
+            self.pick(38, "Rename")
+            self.assertEqual(self.side.prompt.title, "rename work to:", drop)
+            if drop == "failed":
+                self.hc.usage = None
+            else:
+                mmini.write_usage_shown(False, self.state)
+            self.now += mmini.USAGE_SECONDS
+            self.side.refresh_extras(self.now)
+            self.assertEqual(self.side.usage, [], drop)
+            self.assertIsNotNone(self.side.prompt, drop)  # the question stays
+            self.key(21, *"side", 10)
+            self.assertEqual(self.side.notice.current(), "rename: side is taken", drop)
+            self.assertEqual(mmini.read_names(self.state), {"account:solo": "Side"}, drop)
+
+    def test_a_rename_is_seen_in_every_window(self):
+        other = mmini.Sidebar(FakeScr(40, 30), self.state, self.state / "w-2")  # another window
+        other.refresh_once()
+        other.refresh_extras(self.now)
+        other.sync()
+        other.draw()
+        self.rename(38, "Team")
+        other.draw()  # names.json is read again at its next draw
+        self.assertEqual(other.s.scr.line(38), mmini.glyph(" Team ²    87%"))
+        mmini.change_names({"account:claude": "Max"}, self.state)  # renamed in the other window: seen here
+        self.side.draw()
+        self.assertEqual(self.lines()[36], mmini.glyph(" Max ¹   42%"))
+        other.on_key(ord("?"))
+        other.draw()
+        self.assertIn(mmini.glyph(" ¹       Max, main"), other.s.scr.lines())  # the "?" list's marks too
+        self.assertIn(mmini.glyph(" ²       Team"), other.s.scr.lines())
+        self.assertIn(mmini.glyph(" ³       other, guest"), other.s.scr.lines())  # not subscriptions: as they are
+
+    def test_the_marks_in_the_question_mark_list_name_the_display_names(self):
+        self.scr.height = 60
+        self.key("?")
+        self.assertIn(mmini.glyph(" ²       work"), self.lines())
+        self.key("?")  # closes it
+        self.rename(self.side.usage_ys[2], "Team plan")
+        self.key("?")
+        lines = self.lines()
+        self.assertIn(mmini.glyph(" ²       Team plan"), lines)
+        self.assertNotIn(mmini.glyph(" ²       work"), lines)
+        self.assertEqual(mmini.help_lines(29, 60, mmini.read_names(self.state)), lines[:len(mmini.help_lines(29, 60))])
+
+    def test_junk_in_names_json_draws_the_files_names(self):
+        (self.state / "names.json").write_text(json.dumps({
+            "account:work": "a\nb", "account:solo": 7, "account:claude": " pad", "account:": "x",
+            "account:two words": "x"}))
+        self.side.draw()
+        self.assertEqual(self.lines()[36:39], [mmini.glyph(w) for w in (" claude ¹  42%", " solo      55%",
+                                                                        " work ²    87%")])
+        self.right_click(38)
+        self.assertEqual(self.side.menu.title, "work")
+        self.side.mouse_quiet = 0.0
+        with pressed(20, 2):  # a press outside closes it
+            self.key(mmini.curses.KEY_MOUSE)
+        (self.state / "names.json").write_text("{not json")
+        self.side.draw()
+        self.assertEqual(self.lines()[38], mmini.glyph(" work ²    87%"))
+        self.pick(38, "Rename")
+        self.key(21, *"Team", 10)  # a broken file is replaced by a good one
+        self.assertEqual(mmini.read_names(self.state), {"account:work": "Team"})
+
+    def test_a_lines_menu_closes_when_its_subscription_goes(self):
+        self.right_click(38)
+        self.assertEqual(self.side.menu.item, mmini.usage_item("work"))
+        self.hc.usage = "\n".join([usage_line("claude", 42, self.reset), usage_line("solo", 55, self.reset)]) + "\n"
+        self.side.usage_asked = True
+        self.side.refresh_extras(self.now + 1)
+        self.side.draw()
+        self.assertEqual(self.side.usage_names, ["claude", "solo"])
+        self.assertIsNone(self.side.menu)  # its file has gone: the menu goes, though the other lines stay
+        self.right_click(self.side.usage_ys[1])
+        self.assertEqual(self.side.menu.item, mmini.usage_item("solo"))
+        self.side.draw()
+        self.assertIsNotNone(self.side.menu)
 
     def test_keys_typed_after_the_right_click_go_to_the_view(self):
         self.right_click(36)

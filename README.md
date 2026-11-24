@@ -36,8 +36,10 @@ login keychain is locked.
   <img src="docs/tabbar-light.png" width="714" alt="The tab bar with three tabs and the line about the shown terminal">
 </picture>
 
-Tab bar: one tab per terminal of the space, the mark on the agent's tab, then the shown terminal's address, folder,
-program and status.
+Tab bar: one tab per terminal of the space, the mark on the agent's tab, then a line about the shown terminal: what
+runs there, its folder and its status (`Claude Code · ~/dev/api · working`). Two rows in all. A click on the bar
+anywhere but a tab or `+` adds, for a few seconds, the space's name at the start of that line, the terminal's
+herdr-core id (`mini/t1`) at its end and the key hints at the right.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/menu-dark.png">
@@ -83,19 +85,20 @@ space, Close.
   while locked. Read-only: the keychain is never unlocked and no password is ever asked for. Off with
   `MMINI_KEYCHAIN=0`.
 - **5-hour usage.** At the bottom of the open sidebar, one line per Claude subscription: its name, its mark and the
-  share of its 5-hour window used (`claude ¹  42%`). Dim under 50%, bold red from 80%. The numbers are Claude
-  Code's own, saved on the home machine by `usage.sh`; read every 10 minutes. Hidden with `u`, or with Hide usage
-  in the menu of a right click on a line; hidden, nothing is read. Needs the setup in
-  [5-hour usage](#5-hour-usage); without it nothing is drawn. Off with `MMINI_USAGE=0`.
+  share of its 5-hour window used (`claude ¹  42%`). Always dim; red from 95%. The numbers are Claude
+  Code's own, saved on the home machine by `usage.sh`; read every 10 minutes. A right click on a line opens its
+  menu: Rename, Hide usage. A renamed subscription shows its new name on its line in every window, and in the `?`
+  list when its name has a mark in `MMINI_MARKS`. Hidden with `u` or Hide usage; hidden, nothing is read. Needs the
+  setup in [5-hour usage](#5-hour-usage); without it nothing is drawn. Off with `MMINI_USAGE=0`.
 - **Dev servers.** Web pages served by `node` (or `MMINI_DEV_PROGRAM`) on the home machine, one row per port, asked
   every 60 seconds. A click opens `http://<host>:<port>/` in the default browser.
 - **One click.** A click acts in any pane at once: tmux passes it to the pane under the pointer. After a pick the
   keyboard goes to the shown terminal.
-- **Rename, create, delete.** Display names for spaces, servers and terminals; new spaces and shells; servers
-  added with `hc machine add`. Delete space and End terminal list everything that ends and end it on `y`, taken only
-  while the whole list shows and only half a second after it appears: a word typed into the sidebar by mistake
-  ("tidy") ends nothing. Any other key cancels. When the list changed meanwhile, it is shown again and `y` is asked
-  again. Forget server asks for the server's name to be typed first.
+- **Rename, create, delete.** Display names for spaces, servers, terminals and subscriptions (the usage lines); new
+  spaces and shells; servers added with `hc machine add`. Delete space and End terminal list everything that ends
+  and end it on `y`, taken only while the whole list shows and only half a second after it appears: a word typed
+  into the sidebar by mistake ("tidy") ends nothing. Any other key cancels. When the list changed meanwhile, it is
+  shown again and `y` is asked again. Forget server asks for the server's name to be typed first.
 - **Tab menu.** A right click on a tab, or in the shown terminal, opens its menu: New terminal, Rename, Move to
   space, Close. Close lists everything that ends with the tab (the tab bar grows until the whole list shows) and
   closes on `y`; any other key cancels. When the list changed meanwhile, it is shown again and `y` is asked again.
@@ -145,6 +148,10 @@ Update:
 ```sh
 git -C ~/.local/share/mmini pull && sh ~/.local/share/mmini/build.sh
 ```
+
+Then close every mmini window that was open and start `mmini.app` again: an open window keeps running the version
+it started with. A window from a version without the subscriptions' display names drops them at its next rename,
+close or delete.
 
 Remove:
 
@@ -203,6 +210,17 @@ The lines show the share used only. The reset time is read to tell a window that
 `u`, or Hide usage in the menu of a right click on a line, hides them in every window; hidden, the files are not
 read. `u` again, or Show usage in any row's menu, brings them back, read at once.
 
+Rename, in the same menu, gives a subscription a display name. It asks `rename claude to:`, the shown name typed
+in. The display name replaces the name given to `usage.sh` on that line and, when that name has a mark in
+`MMINI_MARKS`, in the `?` list's marks, in every window; the mark stays. An empty name, or the name given to
+`usage.sh`, brings that name back. A name another line already shows, the name given to `usage.sh` for another
+line, or a name the `?` list's marks stand for (every name in `MMINI_MARKS`, with a line or not, `other` and the
+`MMINI_SHARED_USER` name) is refused, whatever its upper and lower case. A display name is 1 to 32 characters; one
+too long for the sidebar is cut, marked `…`, and the mark and the share stay; in a sidebar too narrow to keep 4
+characters of each cut name (under 14 columns for names of 5 characters or more), the lines with a mark then show
+only the mark and the share. Kept in `~/.local/state/mmini/names.json` with the other display names. Only what
+mmini draws changes: Claude Code, `usage.sh` and its files stay as they are.
+
 Update it there with `git -C ~/.local/share/mmini pull`.
 
 ## Keys
@@ -219,14 +237,15 @@ Sidebar (`?` shows the full list, then what the status dots mean):
 | e / d | Rename / delete, end or forget |
 | m | Move an agent to another space |
 | v / g / w | Show or hide servers / agents / dev servers |
-| u, right click on a usage line | Show or hide the 5-hour usage lines (the right click opens their menu: Hide usage) |
+| u, right click on a usage line | Show or hide the 5-hour usage lines (the right click opens that line's menu: Rename, Hide usage) |
 | c / o / q | Fold to a strip, then hide / open again / hide |
 | [ ] (also - =) | Line above the agents one row up or down |
 | z | The shown terminal gets the whole window; a click on the line on top (`‹ back`) brings the panes back |
 | r | Refresh now |
 
 Tab bar: left/right or h/l between tabs, enter or down to the terminal, a right click on a tab for its menu, `z` as
-above, `c` or `o` brings a hidden sidebar back, `?` shows its keys.
+above, `c` or `o` brings a hidden sidebar back, `?` shows its keys. A click on the bar anywhere but a tab or `+`
+shows the key hints and the terminal's herdr-core id for a few seconds.
 
 In the shown terminal: a right click opens the tab menu of that terminal (not while zoomed: then the program gets
 it); option+right click reaches a program that uses the mouse as option+right click. Keys typed after a right click
@@ -298,7 +317,7 @@ One Ghostty window runs `start.sh`: a tmux server of the window's own, with `mmi
 
 tmux passes each click to the pane under the pointer, with no click spent on moving the keyboard first. Its own
 keys, menus and status line are switched off; a line on top shows only while the view is zoomed. The sidebar and
-the tab bar set their sizes exactly (30 columns, 3 rows) and again after the window changes size. Closing the
+the tab bar set their sizes exactly (30 columns, 2 rows) and again after the window changes size. Closing the
 window ends its tmux and the three panes; the terminals in herdr-core keep running (only the view's `hc attach`
 ends).
 

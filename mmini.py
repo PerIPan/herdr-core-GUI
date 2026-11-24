@@ -19,8 +19,9 @@ the file "servers"); the agents (g) and the dev servers (w) are shown until hidd
 4 hours; MMINI_KEYCHAIN=0 turns the check off), a red line at the bottom says so; a click on it shows the terminal
 "unlock" there (or opens one). Above it, in the open sidebar, one line per Claude subscription: how much of its
 5-hour window is used (no reset time), from the files usage.sh (Claude Code's status line command there) saves
-on the home machine, read through its core every 10 minutes (MMINI_USAGE=0 turns it off). They are shown until
-hidden (u, or "Hide usage" in their menu, a right click on one; "Show usage" in any row menu then; the file
+on the home machine, read through its core every 10 minutes (MMINI_USAGE=0 turns it off). A right click on a line
+opens that subscription's menu: Rename (a display name, names.json "account:<name>", also drawn in the "?" list's
+marks) and Hide usage. They are shown until hidden (u, or "Hide usage"; "Show usage" in any row menu then; the file
 "usagelines", as "usage" is usage.sh's folder): hidden, they are not drawn and not checked. A Claude Code agent's
 name can carry a mark for the login it bills: its label "account" looked up in MMINI_MARKS ("personal=¹,work=²"; a
 value not in it gets ³; no setting, no marks), and with no label MMINI_SHARED_MARK (³) on a server whose ssh user
@@ -41,12 +42,12 @@ the tab bar, one per line: "menu", a right click in the view, opens the shown te
 the view relay, a drop it could not send), panes (tmux pane ids: side=, tabs=, view=), sidebar.pid,
 title (the window title of the shown terminal, for view.sh), terminfo (xterm-mmini, compiled by start.sh).
 Shared by all windows ($MMINI_STATE): group, last.json, names.json (display names: {"space:dev": "Main",
-"rig:guest": "Guest", "term:mini/t5": "web"}), sidebar ("open", "strip" or "hidden": how the next sidebar
-starts; while it does not exist, the old file "collapsed" is read instead, 1 = strip), servers ("shown" or
-"hidden", default hidden), agents, devservers and usage (the same words, default shown), width (the open sidebar's
-width once its divider was dragged), split (where the separator above the agents was moved to; no file: the automatic
-layout), seen.json (address -> hc's turn at which that terminal was last shown while done: "needs you" drops it). So
-a second mmini window never switches or signals the first one's view.
+"rig:guest": "Guest", "term:mini/t5": "web", "account:work": "Team"}), sidebar ("open", "strip" or "hidden": how
+the next sidebar starts; while it does not exist, the old file "collapsed" is read instead, 1 = strip), servers
+("shown" or "hidden", default hidden), agents, devservers and usagelines (the same words, default shown), width (the
+open sidebar's width once its divider was dragged), split (where the separator above the agents was moved to; no
+file: the automatic layout), seen.json (address -> hc's turn at which that terminal was last shown while done:
+"needs you" drops it). So a second mmini window never switches or signals the first one's view.
 
 Rename, create, delete. A rename is a display name kept in names.json: the space's label and folder, the machine's
 hc name and every address stay as they are (herdr-core 0.1.21 has no way to rename a terminal, so terminals get a
@@ -60,13 +61,14 @@ menu gives the keyboard back to the view once a key answered or cancelled it.
 Keys. Sidebar: up/down (j/k), enter, a the menu of the row (also a right click: Open, New terminal here, Rename,
 Move to space, Delete space / Forget server / End terminal, as the row allows, and Show / Hide servers, agents, dev
 servers; Show usage while the usage lines are hidden), n new shell, e rename, d delete, s new space, m move an agent,
-v show or hide the servers, g the agents, w the dev servers, u the usage lines (also a right click on one: their
-menu, Hide usage), c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open the strip
-again (also a click on "›" on the line above), q hide (the same as hidden: the program ends), z zoom, [ ] (also
-- =) the separator up or down, r refresh (also the keychain, the dev servers and the usage), ? the list of keys,
-then the account marks and what the status dots' colours mean (also a click on the "?" at the end of the last
-line; any key or click closes it). Tab bar:
-left/right (h/l), enter, z zoom, ? its keys, a right click on a tab (or in the view: the shown terminal) its menu
+v show or hide the servers, g the agents, w the dev servers, u the usage lines (also a right click on one: its
+menu, Rename, Hide usage), c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open
+the strip again (also a click on "›" on the line above), q hide (the same as hidden: the program ends), z zoom,
+[ ] (also - =) the separator up or down, r refresh (also the keychain, the dev servers and the usage), ? the list
+of keys, then the account marks and what the status dots' colours mean (also a click on the "?" at the end of the
+last line; any key or click closes it). Tab bar:
+left/right (h/l), enter, z zoom, ? its keys, a left click on the bar off the tabs the key hints and the shown
+terminal's hc id for NOTICE_SECONDS (show_hints), a right click on a tab (or in the view: the shown terminal) its menu
 (New terminal, Rename, Move to space, Close; Close asks for "y"), clicks only: keys typed then go on to the view;
 a paste (a dropped file) in the sidebar or the tab bar goes on to the view too; without a sidebar, c or o (also a click on "›" at its left edge) brings the sidebar
 back, open. z gives the whole window to the shown terminal (tmux's zoom); a click on the line it shows on top
@@ -645,15 +647,17 @@ def account_mark(agent: str, account: str, user: str = "", marks: Optional[Mappi
 
 
 def mark_legend(marks: Optional[Mapping[str, str]] = None, shared_user: Optional[str] = None,
-                shared_mark: Optional[str] = None) -> List[Tuple[str, str]]:
+                shared_mark: Optional[str] = None, names: Optional[Mapping[str, str]] = None) -> List[Tuple[str, str]]:
     """The marks for the "?" list: (mark, what it stands for), one line per mark, in the order of MMINI_MARKS:
-    its labels, then "other" (OTHER_MARK, only when there are marks), then the shared ssh user. Nothing set: []."""
+    its labels, then "other" (OTHER_MARK, only when there are marks), then the shared ssh user. Nothing set: [].
+    A label is a subscription's name (its usage file's name is the same label), so it is drawn as the usage lines
+    draw it: its display name from `names` (names.json, usage_shown), else the label itself."""
     marks = ACCOUNT_MARKS if marks is None else marks
     shared_user = SHARED_USER if shared_user is None else shared_user
     shared_mark = SHARED_MARK if shared_mark is None else shared_mark
     legend: Dict[str, List[str]] = {}
     for label, mark in marks.items():
-        legend.setdefault(mark, []).append(label)
+        legend.setdefault(mark, []).append(usage_shown(label, names or {}))
     if marks:
         legend.setdefault(OTHER_MARK, []).append("other")
     if shared_user:
@@ -855,8 +859,7 @@ USAGE_FAILED_MAX = 3600.0
 USAGE_NAME = re.compile(r"[A-Za-z0-9._-]{1,32}")  # as usage.sh: it is the file's name too
 USAGE_MAX = 6  # subscriptions drawn at most
 USAGE_RESETS_MAX = 10 ** 10  # a resets_at after the year 2286 is junk (no reset time is drawn; it says only "passed")
-USAGE_LOW = 50  # under it the line is dim
-USAGE_HIGH = 80  # from it bold, in the keychain warning's colour
+USAGE_HIGH = 95  # from it the line is red (the keychain warning's colour); dim always, as the owner asked (24 Nov)
 # Lines the list keeps before usage lines are drawn: both parts of the separator (rule_limits: "spaces" and a row,
 # the line, "agents" and a row). Below that the usage lines go, all of them: never half the subscriptions.
 USAGE_LIST_MIN = 5
@@ -933,42 +936,61 @@ def usage_due(last: Optional[float], now: float, fails: int = 0) -> bool:
     return now - last >= wait
 
 
-def usage_texts(entries: Sequence[Usage], now: float, room: int,
-                marks: Optional[Mapping[str, str]] = None) -> List[str]:
+USAGE_CLIP_MIN = 4  # columns of a name kept before its "…" in the cut form; fewer: the mark alone (a name of 4
+# columns or less is never cut there)
+USAGE_SHARE = 4  # columns of the share in the lined-up forms: "100%"
+
+
+def usage_texts(entries: Sequence[Usage], now: float, room: int, marks: Optional[Mapping[str, str]] = None,
+                names: Optional[Mapping[str, str]] = None) -> List[str]:
     """One line per subscription in `room` columns, every line in the same form: the widest that fits them all.
 
         " claude ¹  42%"    the name, its account mark (MMINI_MARKS; none: the name alone), the share used
         " claude ¹ 42%"
+        " Personal… ¹  42%" the names cut to fit, the mark kept (as a row's name: with_mark); only while every
+                            name keeps at least USAGE_CLIP_MIN columns before its "…"
         " ¹ 42%"            the mark alone (no mark: the name, cut to fit)
 
-    In the first form the names are padded to the longest one and the share takes 3 columns, so the shares line
-    up. No reset time (owner, 24 Nov: "no need for the 'resets xx:xx'"): the line is the name and the share only.
-    A window that has passed shows 0% (Usage.percent). A line nothing fits in is ""."""
+    The name is the subscription's display name (`names`: names.json, usage_shown), else its usage file's name; a
+    display name may be 32 columns or more (wide characters), so a single long one would otherwise leave every line
+    with its mark alone at the default width. The mark is looked up by the file's name (the account label), never
+    by the display name. In the first and the third form the names are padded to the longest one and the share
+    takes USAGE_SHARE columns, so the shares line up. No reset time (owner, 24 Nov: "no need for the 'resets
+    xx:xx'"): the line is the name and the share only. A window that has passed shows 0% (Usage.percent). A line
+    nothing fits in is ""."""
     marks = ACCOUNT_MARKS if marks is None else marks
+    names = {} if names is None else names
     if not entries:
         return []
-    labels = [u.name + (" " + marks[u.name] if marks.get(u.name) else "") for u in entries]
-    pad = max(text_width(label) for label in labels)
+    shown = [usage_shown(u.name, names) for u in entries]
+    tags = [" " + marks[u.name] if marks.get(u.name) else "" for u in entries]
     shares = [u.percent(now) for u in entries]
-    forms = [[f" {lb}{' ' * (pad - text_width(lb))} {sh:>3}%" for lb, sh in zip(labels, shares)],
-             [f" {lb} {sh}%" for lb, sh in zip(labels, shares)]]
+
+    def lined_up(labels: Sequence[str]) -> List[str]:
+        pad = max(text_width(label) for label in labels)
+        return [f" {lb}{' ' * (pad - text_width(lb))} {sh:>{USAGE_SHARE - 1}}%" for lb, sh in zip(labels, shares)]
+
+    labels = [name + tag for name, tag in zip(shown, tags)]
+    forms = [lined_up(labels), [f" {lb} {sh}%" for lb, sh in zip(labels, shares)]]
+    label_room = room - 2 - USAGE_SHARE  # the space before the name and the one before the share
+    if all(label_room - text_width(tag) >= min(text_width(name), USAGE_CLIP_MIN + 1) for name, tag in zip(shown, tags)):
+        forms.append(lined_up([with_mark(name, tag, label_room) for name, tag in zip(shown, tags)]))
     for lines in forms:
         if all(text_width(line) <= room for line in lines):
             return lines
     out = []
-    for u, share in zip(entries, shares):
+    for u, name, share in zip(entries, shown, shares):
         tail = f" {share}%"
-        mark = marks.get(u.name, "")
-        name = mark or clip(u.name, room - 1 - len(tail))
+        name = marks.get(u.name, "") or clip(name, room - 1 - len(tail))
         line = f" {name}{tail}"
         out.append(line if name and text_width(line) <= room else (tail if len(tail) <= room else ""))
     return out
 
 
 def usage_tone(percent: int) -> str:
-    """How a line with this share is drawn: "low" (under USAGE_LOW: dim), "" (normal) or "high" (USAGE_HIGH and
-    more: bold, in the keychain warning's colour)."""
-    return "low" if percent < USAGE_LOW else "high" if percent >= USAGE_HIGH else ""
+    """How a line with this share is drawn: "" (dim) or "high" (USAGE_HIGH and more: dim too, in the keychain
+    warning's colour). The lines stay quiet beside the list: never bold, never normal."""
+    return "high" if percent >= USAGE_HIGH else ""
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -1181,7 +1203,10 @@ def home_dir_from_cwds(cwds: Iterable[str]) -> str:
 # Display names: names.json (pure, apart from the file helpers further down)
 # ---------------------------------------------------------------------------------------------------------------
 NAME_MAX = 32
-NAME_KEY = re.compile(r"(?:space|rig|term):.+")
+# A subscription's display name (a usage line, the "?" list's marks) is keyed by its usage file's name, which is its
+# hc label "account" too: "account:<name>", only for a name usage.sh can save (USAGE_NAME).
+ACCOUNT_KEY = "account:"
+NAME_KEY = re.compile(r"(?:space|rig|term):.+|" + re.escape(ACCOUNT_KEY) + USAGE_NAME.pattern)
 
 
 def valid_display_name(text: str) -> bool:
@@ -1190,9 +1215,30 @@ def valid_display_name(text: str) -> bool:
 
 
 def clean_names(data: Mapping[object, object]) -> Dict[str, str]:
-    """The usable entries of names.json: keys "space:…", "rig:…" or "term:…", values valid display names."""
+    """The usable entries of names.json: keys "space:…", "rig:…", "term:…" or "account:<a usage file's name>",
+    values valid display names."""
     return {k: v for k, v in data.items()
             if isinstance(k, str) and NAME_KEY.fullmatch(k) and isinstance(v, str) and valid_display_name(v)}
+
+
+def usage_key(name: str) -> str:
+    """The names.json key of the display name of the subscription whose usage file is `name`."""
+    return ACCOUNT_KEY + name
+
+
+def usage_shown(name: str, names: Mapping[str, str]) -> str:
+    """The name a subscription is drawn with (its usage line, its marks in the "?" list, its menu's title): its
+    display name in `names` (names.json), else `name`, its usage file's name."""
+    return names.get(usage_key(name)) or name
+
+
+def usage_taken(name: str, others: Iterable[str], names: Mapping[str, str]) -> List[str]:
+    """The names a rename of the subscription `name` is refused (plan_rename), for every other subscription of
+    `others` (usage files' names; `name` itself and repeats are skipped): what it shows (its display name or its own
+    name), and its own name also behind a display name: removing that display name brings the own name back, which
+    would then be drawn on two lines (a removal is never refused: plan_rename's "remove" looks at nothing taken)."""
+    rest = [other for other in dict.fromkeys(others) if other != name]
+    return list(dict.fromkeys([usage_shown(other, names) for other in rest] + rest))
 
 
 def plan_rename(text: str, own: str, taken: Iterable[str]) -> Tuple[str, str]:
@@ -1240,10 +1286,17 @@ SERVERS_KEY = "v"  # shows or hides the servers section
 AGENTS_KEY = "g"  # shows or hides the agents section ("a" is the menu)
 DEVS_KEY = "w"  # shows or hides the dev servers (web pages)
 USAGE_KEY = "u"  # shows or hides the 5-hour usage lines (free in the sidebar and the tab bar)
-# The usage lines are no rows (no cursor, a left click does nothing), but a right click on one opens a menu of its
-# own with this item: "Hide usage" first, then the section switches every menu ends with.
-USAGE_ITEM = Item("usage", "", "")
-USAGE_TITLE = "5-hour usage"
+# The usage lines are no rows (no cursor, a left click does nothing), but a right click on one opens that
+# subscription's menu (usage_item: the item names it by its usage file's name), titled with its shown name:
+# "Rename" first, then "Hide usage", then the section switches every menu ends with.
+USAGE_KIND = "usage"
+# No direct key: the cursor never sits on a usage line, so `e` cannot name one (and a right-click menu shows none).
+USAGE_RENAME = Entry("rename", "Rename", "")
+
+
+def usage_item(name: str) -> Item:
+    """The menu item of the usage line of the subscription whose usage file is `name`."""
+    return Item(USAGE_KIND, "", name)
 
 
 def servers_entry(shown: bool) -> Entry:
@@ -1273,13 +1326,13 @@ def menu_entries(item: Item, group: Optional[Group], first: str = FIRST, servers
     space can be deleted; a server (another machine) forgotten; this Mac and the home machine (`first`, its server
     row) never. An agent can be moved only when it is in a space. A "+" row has only its own action.
 
-    The usage lines: their own menu (USAGE_ITEM, a right click on one) has "Hide usage" first. Once hidden
-    (`usage` False) there is no line left to right-click, so every row menu ends with "Show usage" instead; while
-    they are shown (or off: MMINI_USAGE=0, the caller passes True) a row's menu has no usage entry, so the menus
-    are the same as before the switch existed."""
+    The usage lines: a line's own menu (usage_item, a right click on one) has "Rename" (that subscription's display
+    name) and "Hide usage" first. Once hidden (`usage` False) there is no line left to right-click, so every row
+    menu ends with "Show usage" instead; while they are shown (or off: MMINI_USAGE=0, the caller passes True) a
+    row's menu has no usage entry, so the menus are the same as before the switch existed."""
     switches = [servers_entry(servers), agents_entry(agents), devs_entry(devs)]
-    if item.kind == USAGE_ITEM.kind:
-        return [usage_switch(True)] + switches
+    if item.kind == USAGE_KIND:
+        return [USAGE_RENAME, usage_switch(True)] + switches
     return menu_actions(item, group, first) + switches + ([] if usage else [usage_switch(False)])
 
 
@@ -1550,22 +1603,23 @@ class HelpLine:
     spans: Tuple[Tuple[int, int], ...] = ()
 
 
-def help_entries() -> List[Tuple[str, str]]:
-    """The "?" list's key lines: KEY_HELP, then the account marks (mark_legend; none while no mark is set)."""
-    return list(KEY_HELP) + mark_legend()
+def help_entries(names: Optional[Mapping[str, str]] = None) -> List[Tuple[str, str]]:
+    """The "?" list's key lines: KEY_HELP, then the account marks (mark_legend; none while no mark is set), each
+    subscription by its display name in `names` (names.json)."""
+    return list(KEY_HELP) + mark_legend(names=names)
 
 
-def help_rows(width: int, height: int) -> List[HelpLine]:
+def help_rows(width: int, height: int, names: Optional[Mapping[str, str]] = None) -> List[HelpLine]:
     """The "?" list in `width` columns and `height` lines: a title, then one key per line, the key in a column of
     its own, then the status dots (DOT_HELP under DOT_TITLE, then DOT_NOTE). When the lines do not all fit, the last
     one that does says "…" (any key closes the list, so it never scrolls; the sidebar is full height, so this only
-    happens on a short window, and the dots, last, go first)."""
+    happens on a short window, and the dots, last, go first). `names`: the display names (help_entries)."""
     if width <= 0 or height <= 0:
         return []
     # the key column is 7 wide; an ASCII stand-in that is longer ("cmd+shift+enter") pushes its text along
     # then the account marks after an agent's name (mark_legend): not keys, but this is where they are explained
     rows = [HelpLine(" " + glyph(HELP_TITLE), dim=True)]
-    rows += [HelpLine(f" {glyph(k).ljust(7)} {text}") for k, text in help_entries()]
+    rows += [HelpLine(f" {glyph(k).ljust(7)} {text}") for k, text in help_entries(names)]
     rows.append(HelpLine(" " + DOT_TITLE, dim=True))
     rows += [HelpLine(f" {glyph(dot).ljust(7)} {word}: {meaning}", status=status,
                       spans=((1, 1), (HELP_TEXT_X, len(word)))) for status, dot, word, meaning in DOT_HELP]
@@ -1580,9 +1634,9 @@ def help_rows(width: int, height: int) -> List[HelpLine]:
     return out
 
 
-def help_lines(width: int, height: int) -> List[str]:
+def help_lines(width: int, height: int, names: Optional[Mapping[str, str]] = None) -> List[str]:
     """The text of the "?" list's lines (help_rows)."""
-    return [row.text for row in help_rows(width, height)]
+    return [row.text for row in help_rows(width, height, names)]
 
 
 PROMPT_TITLE_MAX = 8  # lines a typed prompt's question may take; the list keeps the rest (a delete: yes_height)
@@ -1720,7 +1774,7 @@ def sidebar_hit(y: int, arrow_y: int, open_y: int, rows: Mapping[int, Item], x: 
     (help_x), ("step", None) anywhere else on the "‹" line (what c does), ("open", None) anywhere on the "›" line,
     ("rule", None) anywhere on the separator's line (rule_y: a drag starts there; never a row, never a menu),
     ("keychain", None) anywhere on the keychain warning (keychain_y), ("usage", None) anywhere on a usage line
-    (usage_ys: a right click opens their menu, a left click does nothing), ("item", the item drawn on that line) or
+    (usage_ys: a right click opens its menu, a left click does nothing), ("item", the item drawn on that line) or
     ("", None)."""
     if keychain_y >= 0 and y == keychain_y:
         return ("keychain", None)
@@ -2049,8 +2103,9 @@ def tab_keys(alone: bool = False) -> str:
 
 
 def tab_bar_rows(height: int) -> Tuple[int, int]:
-    """(rows the tabs may use, row of the hints or -1) for a pane of `height` rows (TAB_ROWS in an mmini window).
-    The hints take the last row when there are two."""
+    """(rows the tabs may use, row of the info row or -1) for a pane of `height` rows (TAB_ROWS in an mmini window).
+    The info row (info_row) takes the last row when there are two: the line about the shown terminal; after a click
+    on the bar also the space's name, hc's id and the key hints; a notice while one shows."""
     if height < 2:
         return (max(0, height), -1)
     return (height - 1, height - 1)
@@ -2064,15 +2119,54 @@ def short_folder(cwd: str) -> str:
     return cwd
 
 
-def tab_info(tab: Mapping[str, object], room: int = 200) -> str:
-    """One line about the shown terminal: address, folder, program, state. In a narrow pane the folder loses its
-    start, so the program and the state stay readable."""
-    address, folder = str(tab.get("address") or ""), short_folder(str(tab.get("cwd") or ""))
-    rest = [str(tab.get(k) or "") for k in ("agent", "status")]
-    left = room - len(" · ".join(p for p in [address] + rest if p)) - 3
+# hc's program words drawn as the product's own name in the line about the shown terminal (tab_info); others as hc
+# gives them ("zsh", "node")
+PROGRAM_NAMES = {CLAUDE_AGENT: "Claude Code"}
+
+
+def tab_info(tab: Mapping[str, object], room: int = 200, with_id: bool = False) -> str:
+    """One line about the shown terminal: what runs there, where, and what it does ("Claude Code · ~/dev/api ·
+    working", "zsh · ~"). hc's id ("mini/t1", the address `hc attach` takes) only `with_id`, at the end: shown with
+    the key hints after a click on the bar (owner, 24 Nov: the id all the time said nothing; on a click it is
+    useful). In a narrow pane the folder loses its start, so the program, the status and the id stay readable;
+    narrower still, what comes before the id is cut, never the id (the one thing the click adds), unless the id
+    alone is wider than `room`. Without the id the caller's clip() cuts the line's end."""
+    agent = str(tab.get("agent") or "")
+    program, status = PROGRAM_NAMES.get(agent, agent), str(tab.get("status") or "")
+    address = str(tab.get("address") or "") if with_id else ""
+    folder = short_folder(str(tab.get("cwd") or ""))
+    left = room - len(" · ".join(p for p in (program, status, address) if p)) - 3
     if len(folder) > left:
         folder = "…" + folder[len(folder) - left + 1:] if left >= 8 else ""
-    return " · ".join(p for p in [address, folder] + rest if p)
+    line = " · ".join(p for p in (program, folder, status, address) if p)
+    if address and text_width(line) > room:
+        head = " · ".join(p for p in (program, folder, status) if p)
+        head_room = room - text_width(address) - 3
+        return f"{clip(head, head_room)} · {address}" if head and head_room >= 2 else clip(address, room)
+    return line
+
+
+def info_row(space: str, tab: Optional[Mapping[str, object]], room: int, hints: bool,
+             alone: bool = False) -> Tuple[str, str]:
+    """The row below the tabs in `room` columns: (left text, key hint drawn at the right end or ""). Normally the line
+    about the shown terminal only (tab_info; nothing while none is shown). After a click on the bar (`hints`): the
+    space's name first, then that line with hc's id, and the longest key hint that fits two columns after it; when
+    none fits beside the whole line, the folder gives way for one (then the hint goes too). Owner, 24 Nov: the name
+    and the hints only on a click, one row below the tabs."""
+    if not hints:
+        return (clip(tab_info(tab, room), room) if tab is not None else "", "")
+    prefix = space + " · " if space and tab is not None else space
+    whole = len(prefix) + (len(tab_info(tab, room, True)) if tab is not None else 0)
+    if tab is not None:  # the line without its folder: program, status, id
+        agent = str(tab.get("agent") or "")
+        bare = (PROGRAM_NAMES.get(agent, agent), str(tab.get("status") or ""), str(tab.get("address") or ""))
+        least = len(prefix) + text_width(" · ".join(p for p in bare if p))
+    else:
+        least = len(prefix)
+    hint = tab_hint(room - whole - 2, alone) or tab_hint(room - least - 2, alone)
+    left_room = room - (len(glyph(hint)) + 2 if hint else 0)
+    left = prefix + (tab_info(tab, left_room - len(prefix), True) if tab is not None else "")
+    return (clip(left, max(1, left_room)), hint)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -2293,11 +2387,15 @@ def read_names(state: Path = STATE) -> Dict[str, str]:
 
 
 def change_names(changes: Mapping[str, str], state: Path = STATE) -> Dict[str, str]:
-    """Set (or, for "", remove) display names. Read, change, write: another window's renames stay."""
-    names = read_names(state)
+    """Set (or, for "", remove) display names. Read, change, write: another window's renames stay. Keys of a kind
+    this version does not know (NAME_KEY) are written back as they were, so a window still running an older
+    version keeps a later version's names (the "account:" names were lost that way); junk of a known kind goes."""
+    raw = read_json(state / "names.json")
+    names = clean_names(raw)
     for key, value in changes.items():
         names = renamed(names, key, value)
-    write_atomic(state / "names.json", json.dumps(names, sort_keys=True, ensure_ascii=False) + "\n")
+    kept = {k: v for k, v in raw.items() if not NAME_KEY.fullmatch(k)}
+    write_atomic(state / "names.json", json.dumps({**kept, **names}, sort_keys=True, ensure_ascii=False) + "\n")
     return names
 
 
@@ -2800,7 +2898,8 @@ def open_url(host: str, port: int) -> bool:
 # ---------------------------------------------------------------------------------------------------------------
 PANE_ID = re.compile(r"%[0-9]+")
 TERM_NAME = "xterm-mmini"  # the terminal type of mmini's own panes (mmini.terminfo)
-TAB_ROWS = 3  # the tab bar: the tabs, the line about the shown terminal (or a tab's menu), the hints
+TAB_ROWS = 2  # the tab bar: the tabs, then one row (the line about the shown terminal, a tab's menu, or after a
+# click the space's name, that line with hc's id, and the key hints); 3 until 24 Nov (owner: more room below)
 ZOOM_LOOK = 0.25  # seconds between two looks at a zoomed window by a pane that waits to size itself (a round)
 MIN_VIEW = 20  # columns the view keeps at least: a sidebar width dragged in a wide window is capped in a narrow one
 _TMUX: List[str] = []  # the tmux program, once found
@@ -3257,9 +3356,8 @@ def dot_attr(status: str) -> int:
 
 
 def usage_attr(percent: int) -> int:
-    """A usage line's look (usage_tone): dim, normal, or bold in the keychain warning's colour."""
-    tone = usage_tone(percent)
-    return curses.A_DIM if tone == "low" else curses.color_pair(1) | curses.A_BOLD if tone == "high" else 0
+    """A usage line's look (usage_tone): dim, and from USAGE_HIGH dim in the keychain warning's colour."""
+    return curses.A_DIM | (curses.color_pair(1) if usage_tone(percent) == "high" else 0)
 
 
 def read_click() -> Optional[Tuple[int, int]]:
@@ -3338,11 +3436,12 @@ class Notice:
 @dataclass
 class Prompt:
     """A question above the sidebar's last line. kind: "space" (new space), "move" (an agent to a space), "rename"
-    (`key` in names.json, `own` the name that removes the rename), "rig_target" and "rig_name" (add a server; `data`
-    holds the target), "delete" (a space, `key` its group key, or a terminal, `address`; `data`: that key or address,
-    then the addresses that end; answered with one key, CLOSE_YES), "forget" (`data`: the server's key and machine;
-    `accept`: what may be typed to confirm). `ask` is the question's last part (what to type, or the keys), which
-    stays on screen when the rest is cut."""
+    (`key` in names.json, `own` the name that removes the rename; a subscription's: `data`, the usage files' names
+    drawn when it was asked), "rig_target" and "rig_name" (add a server; `data` holds the target), "delete" (a
+    space, `key` its group key, or a terminal, `address`; `data`: that key or address, then the addresses that end;
+    answered with one key, CLOSE_YES), "forget" (`data`: the server's key and machine; `accept`: what may be typed to
+    confirm). `ask` is the question's last part (what to type, or the keys), which stays on screen when the rest is
+    cut."""
 
     kind: str
     title: str
@@ -3839,9 +3938,10 @@ class Sidebar(Engine):
         self.rule_pressed: Optional[float] = None
         self.rule_at = 0  # the separator's line for [ and ], also where the automatic layout dropped it (rule_line)
         self.keychain_y = -1  # the line of the keychain warning, for clicks (-1: not drawn)
-        # the lines of the 5-hour usage (none: not drawn); a right click on one opens their menu (USAGE_ITEM), a left
-        # click does nothing
+        # the lines of the 5-hour usage (none: not drawn) and the subscription drawn on each (its usage file's name);
+        # a right click on one opens that subscription's menu (usage_item), a left click does nothing
         self.usage_ys: List[int] = []
+        self.usage_names: List[str] = []
 
     # cursor ----------------------------------------------------------------------------------------------------
     def sections(self) -> Sections:
@@ -4046,11 +4146,20 @@ class Sidebar(Engine):
         return next((t for g in self.cache[1] + self.rigs_all for t in g.terms if t.address == address), None)
 
     def ask_rename(self, item: Optional[Item]) -> None:
-        """e: rename the space, server or agent under the cursor. The current shown name is filled in; enter keeps
-        what is there, an empty line or the own name removes the rename, esc cancels."""
+        """e: rename the space, server or agent under the cursor; "Rename" in a usage line's menu: that
+        subscription (its display name, names.json "account:<its usage file's name>"). The current shown name is
+        filled in; enter keeps what is there, an empty line or the own name removes the rename, esc cancels. A
+        subscription's question keeps the usage lines drawn now (`data`): a failed check, or the lines hidden in
+        another window, empties them before the answer, and their names must still be refused then (rename)."""
         self.expand()
         group = self.find_group(item.group) if item else None
-        if item is not None and item.kind in ("agent", "needs"):
+        if item is not None and item.kind == USAGE_KIND:
+            shown = usage_shown(item.address, self.names)  # names.json as groups() (find_group) just read it
+            with self.lock:
+                drawn = tuple(u.name for u in self.usage)
+            self.prompt = Prompt("rename", f"rename {shown} to:", shown, key=usage_key(item.address),
+                                 own=item.address, data=drawn)
+        elif item is not None and item.kind in ("agent", "needs"):
             term = self.term_of(item.address)
             if term is None:
                 self.notice.say("that terminal has ended")
@@ -4063,8 +4172,18 @@ class Sidebar(Engine):
             self.notice.say("e: cursor on a space, server or agent first")
 
     def rename(self, prompt: Prompt) -> None:
-        """Keep the new display name in names.json (see plan_rename). Nothing of hc changes."""
-        if prompt.key.startswith("term:"):
+        """Keep the new display name in names.json (see plan_rename). Nothing of hc changes. A subscription's name
+        is refused when another usage line shows it or goes back to it (usage_taken): one drawn when it was asked
+        (prompt.data) or now, and every MMINI_MARKS label, with a line or not yet (the "?" list names it, and its
+        line may come later); also "other" and MMINI_SHARED_USER, the "?" list's other names (mark_legend). A row's
+        name is refused when another row of its kind shows it."""
+        if prompt.key.startswith(ACCOUNT_KEY):
+            self.groups()  # names.json as it is now: a rename in another window counts
+            with self.lock:
+                drawn = prompt.data + tuple(u.name for u in self.usage)
+            taken = (usage_taken(prompt.own, drawn + tuple(ACCOUNT_MARKS), self.names)
+                     + (["other"] if ACCOUNT_MARKS else []) + ([SHARED_USER] if SHARED_USER else []))
+        elif prompt.key.startswith("term:"):
             taken = [t.shown for t in self.all_terms() if "term:" + t.address != prompt.key]
         else:
             taken = [g.shown for g in self.everything() if g.key != prompt.key]
@@ -4285,17 +4404,22 @@ class Sidebar(Engine):
                 self.notice.say("cancelled: the name did not match", bad=False)
 
     # the action menu -------------------------------------------------------------------------------------------
+    def usage_item_at(self, y: int) -> Optional[Item]:
+        """The menu item of the usage line drawn on line `y` (usage_item of its subscription), None for no line."""
+        return next((usage_item(name) for at, name in zip(self.usage_ys, self.usage_names) if at == y), None)
+
     def open_menu(self, item: Optional[Item], by_mouse: bool = False) -> None:
         """a, or a right click on a row (`by_mouse`): the menu of that row. The strip opens first (the menu needs the
-        room). A right click on a usage line (USAGE_ITEM): their menu, "Hide usage" first; the cursor stays where it
-        is (a usage line is no row)."""
+        room). A right click on a usage line (usage_item): that subscription's menu, titled with its shown name,
+        "Rename" and "Hide usage" first; the cursor stays where it is (a usage line is no row)."""
         if item is None:
             return
         self.expand()
-        if item == USAGE_ITEM:
+        if item.kind == USAGE_KIND:
+            self.groups()  # names.json as it is now (renamed in another window, perhaps)
             entries = menu_entries(item, None, self.first(), self.servers_shown(), read_agents_shown(self.state),
                                    read_devs_shown(self.state))
-            self.menu = Menu(item, USAGE_TITLE, entries, by_mouse=by_mouse)
+            self.menu = Menu(item, usage_shown(item.address, self.names), entries, by_mouse=by_mouse)
             return
         group = self.find_group(item.group) if item.group else None
         if item.kind in ("agent", "needs"):
@@ -4317,7 +4441,7 @@ class Sidebar(Engine):
     def run_entry(self, entry: Entry, item: Item) -> None:
         """What a menu entry does: the same as its direct key."""
         self.menu = None
-        if item != USAGE_ITEM:  # a usage line is no row: the cursor stays
+        if item.kind != USAGE_KIND:  # a usage line is no row: the cursor stays
             self.cursor = item
         if entry.action == "open":
             self.activate(item)
@@ -4629,9 +4753,12 @@ class Sidebar(Engine):
         # above those
         if self.keychain_y >= 0:
             s.put(self.keychain_y, 0, keychain_text(width - 1), curses.color_pair(1) | curses.A_BOLD)
+        self.usage_names = [u.name for u in usage[:len(self.usage_ys)]]
         if self.usage_ys:
             now = time.time()
-            for y, u, text in zip(self.usage_ys, usage, usage_texts(usage, now, width - 1)):
+            # each by its display name: names.json as sections() just read it (groups), so a rename in another
+            # window shows at the next draw
+            for y, u, text in zip(self.usage_ys, usage, usage_texts(usage, now, width - 1, names=self.names)):
                 s.put(y, 0, text, usage_attr(u.percent(now)))
         last = next((y for y in (self.usage_ys[0] if self.usage_ys else -1, self.keychain_y, self.open_y,
                                  self.arrow_y) if y >= 0), height)
@@ -4673,10 +4800,11 @@ class Sidebar(Engine):
 
     def draw_help(self, height: int, width: int) -> None:
         """The list of keys ("?") over the whole pane; nothing under it can be clicked until it closes. The status
-        dots' lines draw their dot and colour word in that colour (help_rows' spans)."""
+        dots' lines draw their dot and colour word in that colour (help_rows' spans). The account marks name each
+        subscription as its usage line does (names.json as draw just read it)."""
         self.s.scr.erase()
         self.rows, self.menu_at, self.help_x = {}, None, -1
-        for y, row in enumerate(help_rows(width - 1, height)):
+        for y, row in enumerate(help_rows(width - 1, height, self.names)):
             self.s.put(y, 0, row.text, curses.A_DIM if row.dim else 0)
             if row.status is not None:
                 for x, n in row.spans:
@@ -4684,14 +4812,14 @@ class Sidebar(Engine):
 
     def draw_menu(self, height: int, width: int, items: Sequence[Item]) -> None:
         """The open menu, over everything else, next to its row (menu_box). A menu whose row has gone (ended, deleted
-        in another window) closes. The usage lines' menu goes above the first of them, so it covers none; it closes
-        once they are not drawn (hidden, a failed check, a short pane)."""
+        in another window) closes. A usage line's menu goes above the first of them, so it covers none; it closes
+        once its subscription's line is not drawn (hidden, a failed check, a short pane, its file gone)."""
         self.menu_at = None
         menu = self.menu
         if menu is None:
             return
-        if menu.item == USAGE_ITEM:
-            if not self.usage_ys:
+        if menu.item.kind == USAGE_KIND:
+            if menu.item.address not in self.usage_names:
                 self.menu = None
                 return
             row_y = room = self.usage_ys[0]
@@ -4992,7 +5120,7 @@ class Sidebar(Engine):
             what, item = sidebar_hit(click[1], self.arrow_y, self.open_y, self.rows, click[0], self.help_x,
                                      self.rule_y, self.keychain_y, self.usage_ys)
             if click[2] == 3:  # the right button: the row's menu (none on the separator: it is no row)
-                item = USAGE_ITEM if what == "usage" else item  # a usage line: their menu ("Hide usage")
+                item = self.usage_item_at(click[1]) if what == "usage" else item  # a usage line: its menu
                 if item:
                     self.mouse_quiet = time.monotonic() + MOUSE_QUIET
                     self.open_menu(item, by_mouse=True)
@@ -5155,6 +5283,7 @@ class TabBar:
         self.forward_until = 0.0  # until then keys go on to the view (FORWARD_GRACE after a key closed a menu)
         self.mouse_quiet = 0.0  # presses until then are a double click's second, dropped while a question opens
         self.asked_again = float("-inf")  # when Close last asked again (CLOSE_AGAIN); not 0: see last_plus
+        self.hints_until = 0.0  # until then the key hints and the hc id show (show_hints: a click on the bar)
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -5203,16 +5332,14 @@ class TabBar:
             self.draw_tab_menu(layout.rows if layout.rows < hint_row else max(0, hint_row), hint_row, width, lead)
             s.scr.refresh()
             return
-        if 0 <= active and layout.rows < hint_row:  # a spare row between the tabs and the hints
-            s.put(layout.rows, 1 + lead, clip(tab_info(tabs[active], width - 3 - lead), width - 3 - lead),
-                  curses.A_DIM)
-        if hint_row >= 0:
+        if hint_row >= 0:  # the last row, the one below the tabs (TAB_ROWS): a notice, else the info row
             if notice:
                 s.put(hint_row, 1 + lead, clip(notice, width - 3 - lead), say)
             else:
-                name = str(snap.get("title") or snap.get("name") or "")
-                s.put(hint_row, 1 + lead, clip(name, max(1, width - 3 - lead)), curses.A_DIM)
-                hint = tab_hint(width - 6 - lead - len(name), self.alone)  # 2 columns between the name and the hint
+                hints = time.monotonic() < self.hints_until  # a click on the bar (show_hints)
+                left, hint = info_row(str(snap.get("title") or snap.get("name") or ""),
+                                      tabs[active] if active >= 0 else None, width - 3 - lead, hints, self.alone)
+                s.put(hint_row, 1 + lead, left, curses.A_DIM)
                 if hint:
                     s.put(hint_row, width - 2 - len(glyph(hint)), hint, curses.A_DIM)
         s.scr.refresh()
@@ -5285,6 +5412,7 @@ class TabBar:
         elif click[2] == 1 and index is not None and index < len(menu.entries):
             self.run_tab_entry(menu.entries[index], snap)
         else:
+            self.mouse_quiet = time.monotonic() + MOUSE_QUIET  # a double click's second press shows no hints
             self.close_menu()
 
     def watch_menu(self) -> None:
@@ -5329,6 +5457,8 @@ class TabBar:
         prompt = self.prompt
         if prompt is None:
             return
+        if key == curses.KEY_MOUSE:  # a press cancels: a double click's second press then shows no hints
+            self.mouse_quiet = time.monotonic() + MOUSE_QUIET
         if prompt.kind == "close":
             if not is_yes(key) or snap is None:
                 self.notice.say("not closed", bad=False)
@@ -5528,6 +5658,17 @@ class TabBar:
             elif snap is not None and hit and hit[0] == "plus":
                 self.plus(snap)
                 focus_view(self.win)
+            elif click[2] == 1 and not hit and time.monotonic() >= self.mouse_quiet:
+                # a left click on the bar off the tabs: the key hints (not the second press of a double click whose
+                # first ran a menu entry, closed the menu or cancelled a question: tmux sends it here without
+                # taking the keyboard back from the view)
+                self.show_hints()
+
+    def show_hints(self) -> None:
+        """For NOTICE_SECONDS, the row below the tabs (info_row) shows the space's name, the line about the shown
+        terminal with its hc id, and the key hints (owner, 24 Nov). Otherwise it shows that line only."""
+        self.notice.clear()
+        self.hints_until = time.monotonic() + NOTICE_SECONDS
 
     # the window without a sidebar ------------------------------------------------------------------------------
     def watch_sidebar(self, now: float) -> None:

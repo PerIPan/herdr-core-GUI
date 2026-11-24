@@ -80,7 +80,7 @@ view=$(t -f "$here/mmini.tmux.conf" new-session -d -s mmini -x "$cols" -y "$rows
 pane "$view" || fail "tmux could not start: $view"
 side=$(t split-window -f -hb -d -l "$width" -t "$view" -P -F '#{pane_id}' "$py sidebar" 2>&1)
 pane "$side" || fail "tmux could not make the sidebar: $side"
-tabs=$(t split-window -vb -d -l 3 -t "$view" -P -F '#{pane_id}' "$py tabs" 2>&1)
+tabs=$(t split-window -vb -d -l 2 -t "$view" -P -F '#{pane_id}' "$py tabs" 2>&1)
 pane "$tabs" || fail "tmux could not make the tab bar: $tabs"
 printf 'side=%s\ntabs=%s\nview=%s\n' "$side" "$tabs" "$view" >"$win/panes.tmp" && mv -f "$win/panes.tmp" "$win/panes" ||
   fail "cannot write $win/panes"
