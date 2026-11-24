@@ -2,7 +2,8 @@
 # Builds mmini.app: each start opens one Ghostty window with three panes, run by a tmux of the window's own
 # (start.sh, mmini.tmux.conf). Sidebar on the left (needs you, spaces, servers, dev servers, agents), tab bar on top
 # (one tab per terminal of the chosen space or server), and below it the chosen terminal itself (view.sh runs
-# `hc attach`). The app gets Ghostty's icon.
+# `hc attach`, behind `mmini.py view`, a relay that sends a file dropped for another machine's terminal there with
+# `hc put`). The app gets Ghostty's icon.
 #
 # Install (clones this repo to ~/.local/share/mmini, then builds):
 #
@@ -22,7 +23,8 @@
 #   shared. Closing the window ends its tmux and the panes; the terminals in herdr-core keep running.
 # - One click acts, in any pane: tmux passes the click to the pane under the pointer at once. After a pick the
 #   keyboard goes to the shown terminal. A right click on a sidebar row or a tab, or in the shown terminal, opens
-#   its menu; keys typed then go on to the terminal. A file dropped on the window lands in the terminal.
+#   its menu; keys typed then go on to the terminal. A file dropped on the window lands in the terminal; for a
+#   terminal on another machine the file is copied there first (hc put; an image over 8 MB as a smaller JPEG).
 # - The sidebar is MMINI_WIDTH columns (30) until the divider is dragged with the mouse; then it keeps the dragged
 #   width, also in later windows (~/.local/state/mmini/width; remove it to go back to 30). The tab bar is 3 rows. A
 #   resized window keeps both.
@@ -35,12 +37,17 @@
 #   Ghostty's own selection.
 # - The window title names the shown terminal and its server ("web · me@mini"). Claude Code sets its own unless
 #   CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 is in the env block of its settings.json where it runs.
+# - At the bottom of the open sidebar, one line per Claude subscription: how much of its 5-hour window is used (u
+#   or a right click on a line hides them). Only once usage.sh is Claude Code's status line command on the home
+#   machine (README: 5-hour usage); without it nothing is drawn.
 #
 # Tested without Ghostty (tests/test_mmini.py, written hc answers, pseudo terminals; tmux in a pseudo terminal):
 # the sidebar, the tab bar and its menu, view switching, menus, prompts, the separator drag, "needs you", the
-# account marks, the keychain line, the dev servers; the tmux layout, clicks, sizes, zoom and divider drag. Untested:
-# the launcher app itself and the window in Ghostty, the title in Ghostty, switch time over the network, a locked
-# keychain, adding and forgetting a real machine, opening a page in the browser.
+# account marks, the keychain line, the dev servers, the usage lines and usage.sh; the tmux layout, clicks,
+# sizes, zoom and divider drag; drops sent with a stand-in hc put. Untested: the launcher app itself and the
+# window in Ghostty, the title in Ghostty, switch time over the network, a locked keychain, adding and
+# forgetting a real machine, opening a page in the browser, a real drop in Ghostty and hc put to a real machine.
+# usage.sh also ran as the status line of Claude Code 2.1.331 on one Mac mini, for two subscriptions.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -71,7 +78,7 @@ case "$tv" in
 esac
 python3 -c 'import curses' 2>/dev/null || { echo "mmini: this python3 has no curses module" >&2; exit 1; }
 [ -x "$HOME/.local/bin/hc" ] || { echo "mmini: $HOME/.local/bin/hc not found" >&2; exit 1; }
-for f in mmini.py view.sh start.sh mmini.tmux.conf; do
+for f in mmini.py view.sh start.sh mmini.tmux.conf usage.sh; do
   [ -r "$install/$f" ] || { echo "mmini: $install/$f missing; install: git clone https://github.com/PerIPan/herdr-core-ghostty-UI $install && sh $install/build.sh" >&2; exit 1; }
 done
 [ "$here" = "$install" ] || echo "mmini: note: build.sh runs from $here, the app starts the files in $install" >&2
@@ -138,5 +145,5 @@ echo "built $app ($icon; Ghostty ${version:-version unknown}; $("$tmux" -V))"
 if [ -d "$HOME/Desktop/mmini.app" ]; then
   echo "  old:    $HOME/Desktop/mmini.app is an older build that is no longer updated: drag it to the Trash"
 fi
-echo "  starts: $install/start.sh (tmux with mmini.py sidebar and tabs, and view.sh)"
+echo "  starts: $install/start.sh (tmux with mmini.py sidebar, tabs and view; view.sh runs under the view)"
 echo "  state:  $HOME/.local/state/mmini (one w-XXXXXX folder per window)"

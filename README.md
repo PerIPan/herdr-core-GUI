@@ -72,7 +72,7 @@ space, Close.
   machine `hc machine ls` knows, else this Mac.
 - **Servers.** Every machine `hc machine ls` knows, named `user@host` of its SSH target. Hidden until shown (`v`).
 - **Agents with live status.** `idle`, `working`, `done`, `blocked`, `error`, as herdr-core reports them, each
-  with a coloured dot. The list is read every 2 seconds.
+  with a coloured dot (see [Status dots](#status-dots)). The list is read every 2 seconds.
 - **Needs you.** One section at the top for agents that are `blocked` or in `error`, and agents `done` but not
   shown since. Shown only while it has a row.
 - **Account marks.** Claude Code agents can carry a mark (`¹`, `²`, `³`) for the Claude login they bill, from the
@@ -82,22 +82,35 @@ space, Close.
   read its login from the keychain and bills the API instead. Checked at the start, then every 4 hours, every minute
   while locked. Read-only: the keychain is never unlocked and no password is ever asked for. Off with
   `MMINI_KEYCHAIN=0`.
+- **5-hour usage.** At the bottom of the open sidebar, one line per Claude subscription: its name, its mark and the
+  share of its 5-hour window used (`claude ¹  42%`). Dim under 50%, bold red from 80%. The numbers are Claude
+  Code's own, saved on the home machine by `usage.sh`; read every 10 minutes. Hidden with `u`, or with Hide usage
+  in the menu of a right click on a line; hidden, nothing is read. Needs the setup in
+  [5-hour usage](#5-hour-usage); without it nothing is drawn. Off with `MMINI_USAGE=0`.
 - **Dev servers.** Web pages served by `node` (or `MMINI_DEV_PROGRAM`) on the home machine, one row per port, asked
   every 60 seconds. A click opens `http://<host>:<port>/` in the default browser.
 - **One click.** A click acts in any pane at once: tmux passes it to the pane under the pointer. After a pick the
   keyboard goes to the shown terminal.
 - **Rename, create, delete.** Display names for spaces, servers and terminals; new spaces and shells; servers
-  added with `hc machine add`. A delete asks for the name to be typed first.
+  added with `hc machine add`. Delete space and End terminal list everything that ends and end it on `y`, taken only
+  while the whole list shows and only half a second after it appears: a word typed into the sidebar by mistake
+  ("tidy") ends nothing. Any other key cancels. When the list changed meanwhile, it is shown again and `y` is asked
+  again. Forget server asks for the server's name to be typed first.
 - **Tab menu.** A right click on a tab, or in the shown terminal, opens its menu: New terminal, Rename, Move to
   space, Close. Close lists everything that ends with the tab (the tab bar grows until the whole list shows) and
   closes on `y`; any other key cancels. When the list changed meanwhile, it is shown again and `y` is asked again.
   A menu opened with a right click is picked from with the mouse only: keys typed then go on to the terminal, so
-  keys typed after an accidental right click never act on the menu.
+  keys typed after an accidental right click never act on the menu. The same holds for the sidebar's row menu;
+  once a question asked from a right-click menu is answered or cancelled with a key, the keyboard goes back to the
+  shown terminal.
 - **Drops land in the terminal.** A file dropped on the window reaches the shown terminal as its path, also when
-  the sidebar or the tab bar had the keyboard.
+  the sidebar or the tab bar had the keyboard. A terminal on another machine gets the file itself: it is copied
+  there with `hc put`, over herdr-core's own connection to that machine, and its path on that machine is pasted in
+  place of the path on this Mac. Images over 8 MB go as a smaller JPEG copy. A drop with a file that cannot be
+  sent is pasted unchanged, and the tab bar says why.
 - **Resizable.** The sidebar's divider and the line above the agents can be dragged with the mouse. Both are kept
   for the next window.
-- **Hide sections.** Servers, agents and dev servers, each with one key.
+- **Hide sections.** Servers, agents, dev servers and the usage lines, each with one key.
 - **Window title.** The shown terminal and its server: `api · me@my-server`.
 - **Fast switching.** 18 ms from a click to the first byte of the new terminal, measured on one machine with its
   own terminals; network time comes on top. The old terminal stays on screen until the new one is drawn. Keys typed
@@ -107,12 +120,13 @@ space, Close.
 
 | What | Version, place |
 |------|----------------|
-| macOS | AppleScript, `osacompile`, `lsof`, `perl`, `open` and `security` are used, all part of macOS |
+| macOS | AppleScript, `osacompile`, `lsof`, `perl`, `open`, `security` and `sips` are used, all part of macOS |
 | git | To install and update. Part of the Xcode Command Line Tools (`xcode-select --install`) |
 | Ghostty | 1.3.0 or newer (its AppleScript control came with 1.3.0) |
 | tmux | 3.5 or newer: `brew install tmux`. Tested with 3.8. Only mmini's own settings are read (`mmini.tmux.conf`), never `~/.tmux.conf` |
 | herdr-core | `hc` at `~/.local/bin/hc` (where its installer puts it), with the machines added (`hc machine add me@my-server`). Tested with 0.1.21 |
 | Python | `python3` with `curses`, 3.9 or newer. The one from the Xcode Command Line Tools is enough |
+| jq | Only for the 5-hour usage, only on the home machine: `/usr/bin/jq` where macOS has it, else `brew install jq` |
 
 ## Install
 
@@ -138,9 +152,62 @@ Remove:
 rm -rf /Applications/mmini.app ~/Applications/mmini.app ~/.local/share/mmini ~/.local/state/mmini
 ```
 
+## 5-hour usage
+
+After each answer, Claude Code hands its status line command the share of the subscription's 5-hour window used
+and the time the window resets (`rate_limits` in
+[Claude Code's status line input](https://code.claude.com/docs/en/statusline)). `usage.sh` is such a command: it
+saves these two numbers (and the 7-day ones) to `~/.local/state/mmini/usage/<name>.json` and prints nothing. The
+status line stays empty. mmini reads the files on the home machine through `hc exec`, every 10 minutes and at
+once on `r`. No login, no token, no network connection of its own: only the numbers Claude Code already has.
+
+Set it up on the home machine, where Claude Code runs:
+
+1. Put the files there, in the same folder as on this Mac (`build.sh` is not needed there):
+
+   ```sh
+   git clone https://github.com/PerIPan/herdr-core-ghostty-UI ~/.local/share/mmini
+   ```
+
+   Skip this step when the home machine is this Mac: `usage.sh` is already in `~/.local/share/mmini`.
+
+2. Add a `statusLine` to the `settings.json` of each Claude Code config folder, with one name per subscription.
+   The default folder, `~/.claude/settings.json`:
+
+   ```json
+   {"statusLine": {"type": "command", "command": "sh \"$HOME/.local/share/mmini/usage.sh\" claude"}}
+   ```
+
+   A second subscription in a config folder of its own (`CLAUDE_CONFIG_DIR=~/.claude-2`), in
+   `~/.claude-2/settings.json`:
+
+   ```json
+   {"statusLine": {"type": "command", "command": "sh \"$HOME/.local/share/mmini/usage.sh\" claude-2"}}
+   ```
+
+   Keep the other settings in the file; a `statusLine` set before is replaced. A name is 1 to 32 of the letters
+   A to Z (upper or lower case, no accents), digits, `.`, `_` or `-`. A name with a mark in `MMINI_MARKS` shows that
+   mark (`claude ¹`).
+
+   When both config folders share one `settings.json` (one a link to the other), one command can pick the name by
+   the folder, `CLAUDE_CONFIG_DIR` (unset for the default folder):
+
+   ```json
+   {"statusLine": {"type": "command", "command": "case \"${CLAUDE_CONFIG_DIR:-}\" in */.claude-2 | */.claude-2/) n=claude-2 ;; *) n=claude ;; esac; sh \"$HOME/.local/share/mmini/usage.sh\" \"$n\""}}
+   ```
+
+3. Send a message in a session of each subscription: its line shows at the next check (within 10 minutes), or at
+   once on `r`.
+
+The lines show the share used only. The reset time is read to tell a window that has passed: its line shows `0%`.
+`u`, or Hide usage in the menu of a right click on a line, hides them in every window; hidden, the files are not
+read. `u` again, or Show usage in any row's menu, brings them back, read at once.
+
+Update it there with `git -C ~/.local/share/mmini pull`.
+
 ## Keys
 
-Sidebar (`?` shows the full list):
+Sidebar (`?` shows the full list, then what the status dots mean):
 
 | Key | Action |
 |-----|--------|
@@ -152,6 +219,7 @@ Sidebar (`?` shows the full list):
 | e / d | Rename / delete, end or forget |
 | m | Move an agent to another space |
 | v / g / w | Show or hide servers / agents / dev servers |
+| u, right click on a usage line | Show or hide the 5-hour usage lines (the right click opens their menu: Hide usage) |
 | c / o / q | Fold to a strip, then hide / open again / hide |
 | [ ] (also - =) | Line above the agents one row up or down |
 | z | The shown terminal gets the whole window; a click on the line on top (`‹ back`) brings the panes back |
@@ -171,6 +239,21 @@ ends it; a pick of another terminal ends it too).
 
 In the shown terminal, ctrl+\ detaches (`hc attach`'s own key).
 
+## Status dots
+
+Every tab, and every agent in the sidebar, has a dot in the colour of its herdr-core status:
+
+| Dot | Status | Meaning |
+|-----|--------|---------|
+| red | `blocked`, `error` | Waits for you (a permission or a question), or failed |
+| yellow | `working` | Working |
+| green | `done` | Finished its turn: an answer to read |
+| blue | `idle` | Waiting, nothing new |
+| grey, hollow | none | No status: a plain shell, or a program that reports none |
+
+A space or server row shows the most urgent dot of its terminals: the first colour in this table that one of them
+has. The `?` list in the sidebar ends with the same table, shortened.
+
 ## Settings
 
 Environment variables, read at start. `start.sh` is typed into Ghostty's own shell, so an `export` in that shell's
@@ -178,7 +261,7 @@ startup file (`~/.zshrc` for zsh, the macOS default) applies.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `MMINI_FIRST` | the only machine in `hc machine ls`, else this Mac | The home machine's name in `hc`: its terminals become spaces; the keychain check and the dev servers run there. With no terminal on it, this Mac is home |
+| `MMINI_FIRST` | the only machine in `hc machine ls`, else this Mac | The home machine's name in `hc`: its terminals become spaces; the keychain check, the dev servers and the usage check run there. With no terminal on it, this Mac is home |
 | `MMINI_HC` | `~/.local/bin/hc` | The `hc` program |
 | `MMINI_WIDTH` | `30` | Width of the open sidebar in columns, until its divider is dragged |
 | `MMINI_NARROW` | `6` | Width of the folded strip in columns |
@@ -191,6 +274,7 @@ startup file (`~/.zshrc` for zsh, the macOS default) applies.
 | `MMINI_SHARED_MARK` | `³` | The mark for `MMINI_SHARED_USER` |
 | `MMINI_DEV_PROGRAM` | `node` | The program name whose listening ports are listed as dev servers (at most 15 characters) |
 | `MMINI_KEYCHAIN=0` | on | No keychain check and no keychain warning |
+| `MMINI_USAGE=0` | on | No usage check and no usage lines |
 
 Example, in `~/.zshrc`:
 
@@ -206,9 +290,11 @@ Then `hc label my-server/t3 account=work` gives that terminal's agent the mark `
 One Ghostty window runs `start.sh`: a tmux server of the window's own, with `mmini.tmux.conf` only, and three panes:
 
 - **Sidebar** (left): `python3 mmini.py sidebar`, drawn with curses. It lists the terminals (`hc ls`), reads labels
-  and parents (`hc get`, every 30 seconds) and runs the keychain and dev server checks (`hc exec`).
+  and parents (`hc get`, every 30 seconds) and runs the keychain, dev server and usage checks (`hc exec`).
 - **Tab bar** (top right): `python3 mmini.py tabs`, one tab per terminal of the chosen space or server.
-- **View** (below the tab bar): `view.sh`, which runs `hc attach` on the picked terminal.
+- **View** (below the tab bar): `python3 mmini.py view`, a relay around `view.sh`, which runs `hc attach` on the
+  picked terminal. The relay passes every byte on unchanged, both ways; only a drop for a terminal on another
+  machine is rewritten (see Features). One relay per window: switching terminals starts no extra process.
 
 tmux passes each click to the pane under the pointer, with no click spent on moving the keyboard first. Its own
 keys, menus and status line are switched off; a line on top shows only while the view is zoomed. The sidebar and
@@ -237,15 +323,44 @@ else the project folder below `~/dev`, else the last folder of its working direc
   admin rights sees no others), only ports reachable from other machines. The page opens at the host part of the
   home machine's SSH target (`localhost` when home is this Mac); a `~/.ssh/config` alias that is not a real host
   name does not reach it.
+- Drops to a terminal on another machine reach only a program that asks for bracketed paste (Claude Code does).
+  Any other program gets the path on this Mac, unchanged.
+- A pasted path counts as a drop: while a terminal on another machine is shown, a paste made only of paths of
+  files on this Mac (1 to 20 of them) sends those files there. A program on another machine can put such paths on
+  this Mac's clipboard.
+- Hidden files, files in hidden folders (a name that starts with a dot, such as `~/.ssh`) and files in this
+  account's Library folder are never sent; iCloud Drive and the cloud storage folders inside Library are. Such a
+  drop is pasted unchanged, and the tab bar says why.
+- At most 8 MB per file (`hc put`'s limit). A larger image (PNG, JPEG, HEIC, HEIF, TIFF, GIF, BMP, WebP) goes as a
+  JPEG copy of at most 2576 pixels a side, made with macOS's `sips` in a temporary folder only this account can
+  read, and deleted right after, also when the window closes during the send. A larger file of another kind is not
+  sent. `hc put` puts `_` in place of each space in the file name.
+- Keys typed while a drop is sent wait and follow it. After half a second the tab bar says the drop is being sent.
+  A drop not sent within 60 seconds is pasted unchanged, followed by the keys that waited.
+- Files sent before a failed one stay on the other machine, and so may a file still being sent when the 60 seconds
+  run out.
+- A drop is pasted only into the terminal it was dropped on: when another terminal is shown by the time its files
+  are sent, nothing is pasted, and the tab bar says so.
+- A drop was never tried in Ghostty itself, nor with `hc put` to a real machine: the tests use a stand-in `hc`.
 - tmux sits between Ghostty and the shown terminal: Ghostty's own scrollback and search see what tmux draws, and
   shift+enter and other modified keys reach the terminal as CSI u codes (tmux's extended keys), tried in a pseudo
   terminal, not yet in Ghostty.
 - The keychain warning was never seen with a locked keychain: the answer of `security` when locked is taken from
   macOS's error codes.
-- The automated tests run without Ghostty and without a real `hc`; one starts the real tmux in a pseudo terminal
-  (layout, sizes, a click, hiding and bringing back the sidebar). Not covered: the app and its window in Ghostty,
-  the folder icon, mouse clicks and drags in Ghostty itself, adding or forgetting a real machine, switch time over
-  the network, and opening a page in the browser.
+- 5-hour usage: the number is the last one a session on the home machine saw. Use elsewhere (claude.ai, the Claude
+  apps on a phone, Claude Code on another machine) shows up only with the next answer on the home machine. A window
+  whose reset time has passed shows `0%` until the next answer starts a new one. Only claude.ai subscriptions: with
+  an API key Claude Code hands no such numbers, and nothing is drawn. Only Claude Code of the account the home
+  machine's herdr-core runs as: mmini reads that account's `~/.local/state/mmini/usage` (`MMINI_STATE` there is not
+  read). `usage.sh` was tried as the status line of Claude Code 2.1.331 on one Mac mini, for two subscriptions.
+- A session that still runs on another login than its config folder's (one started before a `/login` there)
+  reports that login's numbers under the folder's name. A higher number is kept for 10 minutes at most, so the
+  next answer of a right session puts it right.
+- The automated tests run without Ghostty and without a real `hc`; two start the real tmux in a pseudo terminal
+  (layout, sizes, a click, hiding and bringing back the sidebar; a drop pasted by tmux into the view and sent with a
+  stand-in `hc put`). Not covered: the app and its window in Ghostty, the folder icon, mouse clicks, drags and drops
+  in Ghostty itself, adding or forgetting a real machine, switch time over the network, and opening a page in the
+  browser.
 
 ## Tests
 
@@ -253,8 +368,8 @@ else the project folder below `~/dev`, else the last folder of its working direc
 /usr/bin/python3 -m unittest discover -s tests
 ```
 
-Standard library only, about 35 seconds. The tests never call the real `hc` and never call Ghostty. One test
-starts the real tmux; it is skipped when tmux is not installed.
+Standard library only, under a minute. The tests never call the real `hc` and never call Ghostty. Two tests start
+the real tmux; they are skipped when tmux is not installed.
 
 ## Licence
 

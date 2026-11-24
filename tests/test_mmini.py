@@ -1,10 +1,12 @@
 """Offline tests for mmini.py and view.sh: no real hc, no Ghostty, no curses screen."""
 
+import ast
 import atexit
 import itertools
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -18,6 +20,10 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
+# The private notes: left out of the public copy (`git archive`, .gitattributes), which ships these tests. A test
+# that compares them with what is drawn runs only where they are (skip_without_notes).
+NOTES = ROOT / "INTERNAL.md"
+skip_without_notes = unittest.skipUnless(NOTES.exists(), "INTERNAL.md: private notes, not in the public copy")
 sys.path.insert(0, str(ROOT))
 sys.dont_write_bytecode = True
 # Only the settings the fixtures are written for: none of the shell's MMINI_* settings reach mmini or view.sh. The
@@ -483,6 +489,42 @@ class SidebarPlanTests(unittest.TestCase):
             self.assertTrue(all(len(line) <= 29 and line.isascii() for line in ascii_lines))
             self.assertIn(" < back  click: zoom ends", ascii_lines)
 
+    def test_the_list_of_keys_ends_with_the_status_dots(self):
+        rows = mmini.help_rows(29, 60)
+        tail = [(r.text, r.dim, r.status, r.spans) for r in rows[-7:]]
+        self.assertEqual(tail, [(" status dots", True, None, ()),
+                                (" ●       red: blocked, error", False, "blocked", ((1, 1), (9, 3))),
+                                (" ●       yellow: working", False, "working", ((1, 1), (9, 6))),
+                                (" ●       green: done, to read", False, "done", ((1, 1), (9, 5))),
+                                (" ●       blue: idle, no news", False, "idle", ((1, 1), (9, 4))),
+                                (" ○       grey: no status", False, "", ((1, 1), (9, 4))),
+                                (" spaces, servers: most urgent", True, None, ())])
+        self.assertEqual([r.text for r in rows], mmini.help_lines(29, 60))
+        self.assertEqual((rows[0].dim, [r for r in rows[1:-7] if r.dim or r.status is not None]), (True, []))
+        # each colour as dot_attr draws that status (STATUS_COLOR: 1 red, 3 yellow, 2 green, 4 blue; none dim)
+        colours = {"red": 1, "yellow": 3, "green": 2, "blue": 4, "grey": 0}
+        for status, _, word, _ in mmini.DOT_HELP:
+            self.assertEqual(mmini.STATUS_COLOR.get(status, 0), colours[word], status)
+        self.assertEqual(mmini.STATUS_COLOR["error"], colours["red"])
+        # the order of the list is the order summary_status takes the most urgent in
+        self.assertEqual([s for s, *_ in mmini.DOT_HELP[:-1]], [s for s in mmini.STATUS_ORDER if s != "error"])
+        self.assertTrue(all(mmini.text_width(r.text) <= 29 for r in rows))  # every line fits 30 columns
+
+    def test_the_status_dots_cut_on_a_narrow_pane(self):
+        for width in range(0, 30):
+            for row in mmini.help_rows(width, 60):
+                self.assertLessEqual(mmini.text_width(row.text), width)
+                for x, n in row.spans:
+                    self.assertGreater(n, 0)
+                    self.assertNotIn("…", row.text[x:x + n])  # the cut mark stays plain
+                    self.assertLessEqual(x + n, len(row.text))
+        red = next(r for r in mmini.help_rows(11, 60) if r.status == "blocked")
+        self.assertEqual((red.text, red.spans), (" ●       r…", ((1, 1), (9, 1))))
+        self.assertEqual(next(r for r in mmini.help_rows(9, 60) if r.status == "blocked").spans, ((1, 1),))
+        short = mmini.help_rows(29, 5)
+        self.assertEqual([r.text for r in short][-1], " …")  # a short pane: the dots go first
+        self.assertTrue(all(r.status is None for r in short))
+
     def test_the_list_of_keys_on_a_short_or_narrow_pane(self):
         self.assertEqual(mmini.help_lines(29, 0), [])
         self.assertEqual(mmini.help_lines(0, 10), [])
@@ -490,7 +532,8 @@ class SidebarPlanTests(unittest.TestCase):
         self.assertEqual(len(short), 5)
         self.assertEqual(short[-1], " …")
         self.assertTrue(all(mmini.text_width(line) <= 10 for line in mmini.help_lines(10, 40)))
-        self.assertEqual(len(mmini.help_lines(29, 40)), 1 + len(mmini.help_entries()))
+        dots = len(mmini.DOT_HELP) + 2  # their title, a line per colour, the note
+        self.assertEqual(len(mmini.help_lines(29, 60)), 1 + len(mmini.help_entries()) + dots)
         self.assertEqual(len(mmini.help_entries()), len(mmini.KEY_HELP) + 3)  # the marks of the tests: ¹ ² ³
 
     def test_servers_section_is_always_there_for_add_server_while_shown(self):
@@ -663,6 +706,10 @@ class SidebarFrameTests(unittest.TestCase):
         self.assertEqual(mmini.sidebar_hit(0, -1, -1, {}), ("", None))  # no arrows on a one-line screen
         self.assertEqual(mmini.sidebar_hit(1, 1, -1, rows), ("step", None))  # an arrow's line is never a row
         self.assertEqual(mmini.sidebar_hit(3, 4, 3, rows), ("open", None))
+        # the usage lines (usage_ys): no rows, but told apart (a right click opens their menu)
+        self.assertEqual(mmini.sidebar_hit(6, 9, -1, rows, usage_ys=[5, 6, 7]), ("usage", None))
+        self.assertEqual(mmini.sidebar_hit(4, 9, -1, rows, usage_ys=[5, 6, 7]), ("", None))
+        self.assertEqual(mmini.sidebar_hit(9, 9, -1, rows, usage_ys=[5, 6, 7]), ("step", None))
 
     def test_c_steps_open_strip_hidden(self):
         self.assertEqual(mmini.SIDEBAR_STATES, ("open", "strip", "hidden"))
@@ -829,6 +876,13 @@ class StateTests(unittest.TestCase):
         self.assertEqual(mmini.current_target(self.state), "t5")
         self.assertEqual([p.name for p in self.state.iterdir()], ["target"])
         self.assertEqual(mmini.read_text(self.state / "missing"), "")
+
+    def test_a_failed_atomic_write_leaves_no_temp_file(self):
+        (self.state / "taken").mkdir(parents=True)  # a folder where the file should go: os.replace fails
+        with self.assertRaises(OSError):
+            mmini.write_atomic(self.state / "taken", "hidden\n")
+        self.assertEqual([p.name for p in self.state.iterdir()], ["taken"])  # no .taken.<pid>.<tid>.tmp left
+        self.assertTrue((self.state / "taken").is_dir())
 
     def test_last_round_trip(self):
         self.assertEqual(mmini.read_last(self.state), {})
@@ -1182,10 +1236,11 @@ def hc_error(kind, message="x", code=1):
 
 
 class FakeHc:
-    """Answers `hc ls --json`, `hc get`, `hc run`, `hc label`, `hc exec`, `hc keep/kill/wait/rm` and `hc machine
-    ls/rm` from a small table, the way herdr-core 0.1.21 answered them in an isolated core: keep on a finished
-    terminal is "invalid_params", rm of a live one is "live", anything about a removed one "not_found", and a kill
-    ends the children that die with their parent."""
+    """Answers `hc ls --json`, `hc get`, `hc run`, `hc label`, `hc exec`, `hc keep/kill/wait/rm`, `hc machine
+    ls/rm` and `hc put --json` from a small table, the way herdr-core 0.1.21 answered them in an isolated core: keep
+    on a finished terminal is "invalid_params", rm of a live one is "live", anything about a removed one
+    "not_found", a kill ends the children that die with their parent, and a put over 8 MB is "invalid_params"
+    (exit 6); a put lands beside the terminal with spaces made "_"."""
 
     def __init__(self, terms, infos=None, machines=()):
         self.terms = list(terms)
@@ -1195,9 +1250,14 @@ class FakeHc:
         self.calls = []
         self.fail = ""
         self.dirs = set()
-        # `hc exec --json` of the keychain check and of the dev servers: (exit code, stderr) and DEV_SCRIPT's output
+        # `hc exec --json` of the keychain check and of the dev servers: (exit code, stderr) and DEV_SCRIPT's output;
+        # of the 5-hour usage: USAGE_SCRIPT's output (no files: nothing), or None for an exec that fails
         self.keychain = (0, 'Keychain "/Users/x/Library/Keychains/login.keychain-db" no-timeout\n')
         self.lsof = ""
+        self.usage = ""
+        self.puts = []  # (address, local path, its size, its first bytes) of each `hc put`
+        self.put_answer = None  # a put's stdout instead of the JSON it would print (junk, for the tests)
+        self.put_error = None  # (kind, message, exit code) a put fails with
 
     def find(self, address):
         return next((t for t in self.terms if t["address"] == address), None)
@@ -1250,8 +1310,25 @@ class FakeHc:
             return exec_json(*self.keychain)
         if args[0] == "exec" and mmini.DEV_SCRIPT in args:
             return exec_json(0, "", self.lsof)
+        if args[0] == "exec" and mmini.USAGE_SCRIPT in args:
+            if self.usage is None:
+                raise hc_error("machine_unreachable", "mmini: not connected")
+            return exec_json(0, "", self.usage)
         if args[0] == "exec":
             return "/Users/x\n" + ("dir" if args[-1] in self.dirs else "none") + "\n"
+        if args[0] == "put":
+            assert args[1] == "--json" and kw.get("timeout") == mmini.PUT_TIMEOUT, (args, kw)
+            address, path = args[2], args[3]
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                self.puts.append((address, path, size, f.read(4)))
+            if self.put_error:
+                raise hc_error(*self.put_error)
+            if size > 8_000_000:
+                raise hc_error("invalid_params", "at most 8 MB per put", 6)
+            if self.put_answer is not None:
+                return self.put_answer
+            return json.dumps({"bytes": size, "path": "/Users/x/dev/app/" + os.path.basename(path).replace(" ", "_")})
         if args[0] in ("keep", "kill", "wait", "rm"):
             address = args[1]
             if self.find(address) is None and address not in self.finished:
@@ -1427,13 +1504,18 @@ class SidebarLogicTests(unittest.TestCase):
         self.assertEqual(lines[2], mmini.glyph(" ● other"))
         self.assertEqual(lines[3:7], [" + new space", "", "", ""])  # the servers section is hidden by default
         self.assertEqual(self.scr.reversed_rows(), [1])
-        self.assertIn(" agents", lines[-7][:8])
+        self.assertEqual(lines[-7], " agents")  # the heading alone: no "grouped" after it (owner, 24 Nov)
         self.assertEqual(lines[-6], mmini.glyph(" dev · 2"))
         self.assertTrue(lines[-5].startswith(mmini.glyph("  ● atlas")) and lines[-5].endswith("idle"))
         self.assertEqual(lines[-3], mmini.glyph(" other · 1"))
         self.assertEqual(lines[-1], fold_line("open"))  # the arrow on the last line, a dim "?" at its end
         self.assertEqual(lines[-9:-7], ["", "─" * 29])  # no key hints above the rule
         self.assertNotIn("rig", " ".join(lines))
+        self.assertNotIn("grouped", " ".join(lines))
+        self.side.mode = "strip"  # the strip draws the heading too, cut at its edge
+        self.scr.width = 6
+        self.side.draw()
+        self.assertNotIn("grouped", " ".join(self.scr.lines()))
 
     def test_enter_on_group_shows_first_then_remembered(self):
         self.key("j", 10)
@@ -2229,6 +2311,18 @@ class TabBarLogicTests(unittest.TestCase):
         self.assertEqual(self.bar.notice.current(), "")
         self.assertEqual(tm.calls[-1], ("select-pane", "-t", "%0", ";", "resize-pane", "-Z", "-t", "%0"))
 
+    def test_u_is_no_key_here(self):
+        # u shows or hides the usage lines in the sidebar only: the tab bar has none, and the key is free here too
+        mmini.show("t1", self.win)
+        for key in ("u", "U"):
+            self.bar.handle_key(ord(key), self.snap, "t1")
+            self.assertEqual((self.bar.notice.current(), self.bar.menu, self.bar.prompt), ("", None, None))
+        self.assertEqual(mmini.current_target(self.win), "t1")
+        self.assertFalse((self.state / "usagelines").exists())
+        self.assertIsNone(re.search(r"\bu\b", mmini.tab_keys(True) + mmini.tab_keys(False)))
+        letters = [k for k, _ in mmini.KEY_HELP if len(k) == 1]
+        self.assertEqual(len(letters), len(set(letters)))  # no key of the sidebar twice
+
 class TabEngineTests(unittest.TestCase):
     """The tab bar runs the engine (a thread of its own) only while its window has no live sidebar."""
 
@@ -2320,6 +2414,156 @@ class TabEngineTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: (self.snap() or {}).get("name") == "other"))
         self.assertEqual(mmini.read_text(self.state / "group"), "space:other")
         self.assertIn("t2", [t["address"] for t in self.snap()["tabs"]])
+
+
+class UnlistedShownTests(unittest.TestCase):
+    """The tabs stay with the shown terminal when a listing misses it (a rename meant for the shown terminal t3q went
+    to another account's session rig/t5, whose tab the tab bar showed above t3q). Two accounts on one Mac mini: its
+    own (mmini, me@mini) and a shared one (rig, guest@mini); the view on mmini/t3q in the space beta."""
+
+    TERMS = [dict(term("rig/t5", "/Users/guest", "claude-code", None, "done"), turn=10),
+             term("mmini/t3p", "/Users/me", "zsh"), term("mmini/t3q", "/Users/me", "zsh")]
+    INFOS = {"mmini/t3p": {"labels": {"space": "alpha"}}, "mmini/t3q": {"labels": {"space": "beta"}}}
+    MACHINES = [("rig", "guest@mini"), ("mmini", "me@mini")]
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.state = Path(self._tmp.name) / "state"
+        self.win = self.state / "w-1"
+        self.hc = FakeHc(self.TERMS, self.INFOS, machines=self.MACHINES)
+        self.down = False  # `hc ls` fails (the cores not reached yet); `hc machine ls` still answers
+
+        def run(*args, **kw):
+            if self.down and args[:2] == ("ls", "--json"):
+                raise subprocess.TimeoutExpired("hc", 10)
+            return self.hc(*args, **kw)
+
+        self.shows = []  # every show(): a pick, never wanted from a listing
+        real_show = mmini.show
+
+        def show(address, win=mmini.WINDOW, title=None):
+            self.shows.append(address)
+            real_show(address, win, title)
+
+        for target, value in ((mmini, {"run_hc": run, "show": show, "attach_pid": lambda win=None: 4242}),
+                              (mmini.curses, {"color_pair": lambda n: n << 8})):
+            patcher = mock.patch.multiple(target, **value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        mmini.write_servers_shown(True, self.state)
+        mmini.write_atomic(self.state / "group", "space:beta\n")  # the group shown last
+        mmini.write_atomic(self.win / "target", "mmini/t3q\n")  # the view is attached to it (attach_pid)
+
+    def tabs(self):
+        return [t["address"] for t in mmini.read_snapshot(self.win)["tabs"]]
+
+    def start(self, engine):
+        """A start whose first `hc ls` fails: the sidebar brought back, or the tab bar taking over the engine."""
+        self.down = True
+        engine.refresh_once()
+        self.assertTrue(engine.loaded.is_set())
+        engine.begin(True)
+        self.down = False
+        engine.refresh_once()
+        engine.sync()
+        return engine
+
+    def test_a_start_without_a_listing_keeps_the_shown_terminals_space(self):
+        """The reproduction: with no terminal listed, the saved space looked gone and the fallback took the first
+        server, guest@mini; its tab "t5" then stayed above t3q after the listing came back."""
+        for engine in (mmini.Sidebar(FakeScr(40, 30), self.state, self.win), mmini.Engine(self.state, self.win)):
+            self.start(engine)
+            self.assertEqual(engine.cur, "space:beta", type(engine).__name__)
+            self.assertEqual(mmini.read_text(self.state / "group"), "space:beta")
+            self.assertEqual(self.tabs(), ["mmini/t3q"])
+            self.assertEqual(self.shows, [])  # the view was never switched
+
+    def test_a_start_without_a_listing_follows_the_shown_terminal_once_it_is_listed(self):
+        """The saved group names another space (set in another window): once listed, the shown terminal's space
+        becomes the current one, as a start with a listing does (begin)."""
+        mmini.write_atomic(self.state / "group", "space:alpha\n")
+        engine = self.start(mmini.Engine(self.state, self.win))
+        self.assertEqual((engine.cur, self.tabs(), self.shows), ("space:beta", ["mmini/t3q"], []))
+
+    def test_the_tab_bars_own_engine_keeps_the_space_too(self):
+        """The sidebar hidden: the tab bar's engine (its own threads) starts while `hc ls` fails."""
+        mmini.write_sidebar_state("hidden", self.state)
+        self.down = True
+        bar = mmini.TabBar(FakeScr(5, 60), self.win, self.state)
+        self.addCleanup(bar.stop_engine)
+        bar.watch_sidebar(100.0)
+        self.assertTrue(wait_for(lambda: (self.win / "tabs.json").exists()))  # begin() has run, with no listing
+        self.assertEqual(bar.engine.cur, "space:beta")
+        self.down = False
+        mmini.write_atomic(self.win / "poke", "x\n")
+        self.assertTrue(wait_for(lambda: (mmini.read_snapshot(self.win) or {}).get("tabs")))
+        self.assertEqual((bar.engine.cur, self.tabs(), self.shows), ("space:beta", ["mmini/t3q"], []))
+
+    def test_a_start_whose_listing_misses_the_shown_terminal_keeps_the_view(self):
+        """The sidebar comes back while the Mac mini's own core is away for a moment: the view keeps t3q (it was
+        switched to rig/t5, the fall-back group's terminal), and t3q's space comes back once it is listed."""
+        mini = self.hc.terms
+        self.hc.terms = [t for t in mini if t["address"].startswith("rig/")]
+        engine = mmini.Engine(self.state, self.win)
+        engine.refresh_once()
+        engine.begin(True)
+        self.assertEqual((mmini.current_target(self.win), self.shows), ("mmini/t3q", []))
+        self.hc.terms = mini
+        engine.refresh_once()
+        engine.sync()
+        self.assertEqual((engine.cur, self.tabs(), self.shows), ("space:beta", ["mmini/t3q"], []))
+
+    def test_the_tabs_come_back_when_the_shown_terminal_is_listed_again(self):
+        """A listing without the Mac mini's own terminals (its core away for a moment): the space has gone, so the
+        fallback picks a group; once t3q is listed again, the tabs go back to its space, the view never moves."""
+        side = mmini.Sidebar(FakeScr(40, 30), self.state, self.win)
+        side.refresh_once()
+        side.sync()
+        self.assertEqual(side.cur, "space:beta")
+        mini = self.hc.terms
+        self.hc.terms = [t for t in mini if t["address"].startswith("rig/")]
+        side.refresh_once()
+        side.sync()
+        self.assertEqual(side.cur, "rig:rig")  # nothing else is listed
+        self.hc.terms = mini
+        side.refresh_once()
+        side.sync()
+        self.assertEqual((side.cur, self.tabs(), self.shows), ("space:beta", ["mmini/t3q"], []))
+        side.set_current("rig:rig")  # a later choice is not undone: the follow happens once
+        side.sync()
+        self.assertEqual(side.cur, "rig:rig")
+
+    def test_a_shown_terminal_that_ended_still_falls_back(self):
+        """No listing yet: nothing is decided. A listing without the shown terminal (it ended, its space with it):
+        the fallback as before, and it stays."""
+        side = mmini.Sidebar(FakeScr(40, 30), self.state, self.win)
+        self.down = True
+        side.refresh_once()
+        side.sync()
+        self.assertEqual(side.cur, "space:beta")  # hc has not answered: the saved space is kept
+        self.down = False
+        self.hc.terms = [t for t in self.hc.terms if t["address"] != "mmini/t3q"]
+        side.refresh_once()
+        side.sync()
+        self.assertEqual(side.cur, "space:alpha")  # fallback_group: the first space (no space has an agent)
+        side.refresh_once()
+        side.sync()
+        self.assertEqual((side.cur, self.shows), ("space:alpha", []))
+
+    def test_a_terminal_of_a_hidden_server_keeps_the_tabs_where_they_are(self):
+        """Listed, but in no group while the servers are hidden (shown alone from "needs you"): not missing, so the
+        tabs stay with their space when the servers are shown again."""
+        mmini.write_servers_shown(False, self.state)
+        side = mmini.Sidebar(FakeScr(40, 30), self.state, self.win)
+        side.refresh_once()
+        side.sync()
+        side.show_alone("rig/t5")
+        self.assertEqual(side.cur, "space:beta")
+        mmini.write_servers_shown(True, self.state)
+        side.sync()
+        side.sync()
+        self.assertEqual(side.cur, "space:beta")
 
 
 STUB_HC = """#!/bin/sh
@@ -2570,6 +2814,17 @@ class ClosedPaneTests(unittest.TestCase):
             env.pop("MMINI_WINDOW", None)
             self.closed_pane(["/bin/sh", str(ROOT / "view.sh")], env)
             self.assertFalse(os.path.exists(os.path.join(tmp, "state", "view.loop")))
+
+    def test_view_relay_ends_and_view_sh_with_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp) / "hc"
+            stub.write_text(STUB_HC)
+            stub.chmod(0o755)
+            env = dict(self.env(tmp), MMINI_HC=str(stub), STUB_LOG=os.path.join(tmp, "log"),
+                       MMINI_STATE=os.path.join(tmp, "state"))
+            env.pop("MMINI_WINDOW", None)
+            self.closed_pane([sys.executable, str(ROOT / "mmini.py"), "view"], env)
+            self.assertTrue(wait_for(lambda: not os.path.exists(os.path.join(tmp, "state", "view.loop"))))
 
 
 def applescript_literals(line):
@@ -3400,6 +3655,25 @@ class MenuTests(unittest.TestCase):
                 self.assertEqual(tail, [mmini.Entry("agents", "Hide agents" if agents else "Show agents", "g"),
                                         mmini.Entry("devs", "Hide dev servers" if devs else "Show dev servers", "w")])
 
+    def test_the_usage_lines_menu_and_show_usage_once_hidden(self):
+        rows = ((mmini.Item("group", "", ""), self.space), (mmini.Item("group", "", ""), self.rig),
+                (mmini.Item("agent", "space:dev", "t1"), self.space), (mmini.NEW_SPACE, None), (mmini.ADD_RIG, None),
+                (mmini.Item("needs", "", "t3"), None), (mmini.Item("dev", "", "3917"), None))
+        for item, group in rows:
+            shown = mmini.menu_entries(item, group, "mmini")
+            self.assertEqual(mmini.menu_entries(item, group, "mmini", usage=True), shown)  # the default: shown
+            self.assertNotIn("usage", [e.action for e in shown])  # no usage entry while they are shown
+            hidden = mmini.menu_entries(item, group, "mmini", usage=False)
+            self.assertEqual(hidden, shown + [mmini.Entry("usage", "Show usage", "u")])  # last, like a switch
+        # their own menu (a right click on a usage line): Hide usage first, then the three switches
+        for usage in (True, False):
+            entries = mmini.menu_entries(mmini.USAGE_ITEM, None, "mmini", True, False, True, usage)
+            self.assertEqual(entries, [mmini.Entry("usage", "Hide usage", "u"),
+                                       mmini.Entry("servers", "Hide servers", "v"),
+                                       mmini.Entry("agents", "Show agents", "g"),
+                                       mmini.Entry("devs", "Hide dev servers", "w")])
+        self.assertLessEqual(mmini.menu_width(mmini.menu_entries(mmini.USAGE_ITEM, None)), 29)
+
     def test_every_entry_names_its_direct_key(self):
         keys = {}
         for item, group in ((mmini.Item("group", "", ""), self.space), (mmini.Item("group", "", ""), self.rig),
@@ -3608,6 +3882,46 @@ class PromptLayoutTests(unittest.TestCase):
         self.assertEqual(mmini.prompt_lines(title, ask, 29, 0), [])
         self.assertTrue(all(len(line) <= 10 for line in mmini.prompt_lines(title, ask, 10, 20)))
 
+    def test_one_key_question_whole_or_cut(self):
+        title = "delete space dev? ends 3: tracker (claude-code), atlas (claude-code), t1f (zsh)."
+        ask = mmini.DELETE_ASK["space"]
+        self.assertEqual(mmini.yes_height(title, ask, 29), 5)  # 3 lines of what ends, 2 of keys
+        whole, cut = mmini.yes_lines(title, ask, 29, 5)
+        self.assertEqual((whole, cut), (["delete space dev? ends 3:", "tracker (claude-code), atlas",
+                                         "(claude-code), t1f (zsh).", "y deletes · any other key", "cancels"], False))
+        self.assertEqual(mmini.yes_lines(title, ask, 29, 9), (whole, False))  # more room: the same lines
+        lines, cut = mmini.yes_lines(title, ask, 29, 5)
+        self.assertEqual((lines, cut), (whole, False))  # just enough room
+        lines, cut = mmini.yes_lines(title, ask, 29, 4)
+        self.assertTrue(cut)  # one line short: cut, marked, and the keys say so
+        self.assertEqual(lines, [mmini.clip("delete space dev? ends 3: …", 29), "the list is cut: widen the",
+                                 "sidebar · any other key", "cancels"])
+        self.assertEqual(mmini.yes_lines(title, ask, 29, 0), ([], True))  # no room at all: nothing on screen, cut
+
+    def test_one_key_answers(self):
+        self.assertTrue(mmini.is_yes(ord("y")) and mmini.is_yes(ord("Y")))
+        for key in ("n", "d", "\n", " "):
+            self.assertFalse(mmini.is_yes(ord(key)), key)
+        self.assertFalse(mmini.is_yes(mmini.curses.KEY_MOUSE))
+        self.assertTrue(mmini.yes_waits(True, float("-inf"), 100.0))  # cut: never
+        self.assertTrue(mmini.yes_waits(False, 99.5, 100.0))  # asked again half a second ago
+        self.assertFalse(mmini.yes_waits(False, 100.0 - mmini.CLOSE_AGAIN, 100.0))
+        self.assertFalse(mmini.yes_waits(False, float("-inf"), 0.2))  # a clock that starts near 0
+        self.assertTrue(mmini.yes_waits(False, 99.6, 100.0, mmini.DELETE_HOLD))  # d asked a moment ago
+        self.assertFalse(mmini.yes_waits(False, 100.0 - mmini.DELETE_HOLD, 100.0, mmini.DELETE_HOLD))
+        self.assertLess(mmini.DELETE_HOLD, mmini.CLOSE_AGAIN)
+        # a cut list does not take y: its hint says any *other* key cancels (review of 24 Nov)
+        for cut in (mmini.DELETE_CUT, mmini.CLOSE_CUT):
+            self.assertTrue(cut.startswith("the list is cut: ") and cut.endswith(" · any other key cancels"), cut)
+        asked = mmini.Prompt("delete", "end a? ends 1: a (zsh).", data=("t1", "t1"), by_mouse=True)
+        same = mmini.Prompt("delete", "end b? ends 1: b (zsh).", data=("t1", "t1"))  # renamed only
+        self.assertIsNone(mmini.changed_question(asked, same))
+        more = mmini.Prompt("delete", "end a? ends 2: a (zsh), k (zsh).", data=("t1", "t1", "t3"))
+        again = mmini.changed_question(asked, more)
+        self.assertEqual((again.title, again.data, again.by_mouse),
+                         ("changed: end a? ends 2: a (zsh), k (zsh).", ("t1", "t1", "t3"), True))
+        self.assertEqual(more.title, "end a? ends 2: a (zsh), k (zsh).")  # a copy: the new question stays as built
+
     def test_frame_gives_the_question_its_lines_and_the_list_two(self):
         f = mmini.sidebar_frame
         self.assertEqual(f(24, False, True, False, 4), (18, 23, -1, 5))
@@ -3674,6 +3988,11 @@ class ActionTests(unittest.TestCase):
 
     def ends(self):
         return [c for c in self.hc.calls if c[0] in ("keep", "kill", "wait", "rm")]
+
+    def held(self):
+        """As if d's question had been on screen long enough for y: DELETE_HOLD after d asked, CLOSE_AGAIN after it
+        asked again (yes_waits). These tests press keys far faster than anyone types."""
+        self.side.asked_at -= self.side.yes_hold
 
     # rows ------------------------------------------------------------------------------------------------------
     def test_servers_from_hc_machine_ls_show_without_terminals(self):
@@ -4008,30 +4327,39 @@ class ActionTests(unittest.TestCase):
         self.assertFalse(any(c[0] == "run" for c in self.hc.calls))
 
     # delete ----------------------------------------------------------------------------------------------------
-    def test_delete_space_confirmation_text_and_a_wrong_name_cancels(self):
+    def test_delete_space_lists_what_ends_and_another_key_cancels(self):
         self.go(mmini.Item("group", "space:dev", ""))
         self.key("d")
         p = self.side.prompt
         self.assertEqual(p.title, "delete space dev? ends 3: atlas (claude-code), t1f (zsh), tracker (claude-code).")
-        self.assertEqual(p.ask, "type dev to confirm:")
-        lines = self.scr.lines()  # the whole question above the typed line, the list keeps the rest
+        self.assertEqual(p.ask, mmini.DELETE_ASK["space"])
+        lines = self.scr.lines()  # the whole question, then its keys (no typed line); the list keeps the rest
         self.assertEqual(lines[-6:-1], ["delete space dev? ends 3:", "atlas (claude-code), t1f",
-                                        "(zsh), tracker (claude-code).", "type dev to confirm:", "> _"])
-        self.type("de")
-        self.assertEqual(self.side.notice.current(), "cancelled: the name did not match")
+                                        "(zsh), tracker (claude-code).", "y deletes · any other key", "cancels"])
+        self.assertEqual(self.scr.cells[(len(lines) - 2, 0)][1], mmini.curses.A_BOLD)  # the keys bold, the list dim
+        self.assertEqual(self.scr.cells[(len(lines) - 6, 0)][1], mmini.curses.A_DIM)
+        self.key("n")  # any other key: nothing ends
+        self.assertIsNone(self.side.prompt)
+        self.assertEqual(self.side.notice.current(), mmini.DELETE_NO)
+        for key in (27, 10, "d", "x", mmini.curses.KEY_DOWN):  # esc, enter, d again, a letter, an arrow: all cancel
+            self.go(mmini.Item("group", "space:dev", ""))
+            self.key("d", key)
+            self.assertIsNone(self.side.prompt, key)
         self.assertEqual(self.ends(), [])
         self.assertEqual(len(self.side.groups()[0]), 3)
 
-    def test_delete_space_ends_every_terminal_in_order_and_moves_on(self):
+    def test_delete_space_ends_every_terminal_in_order_on_y_and_moves_on(self):
         mmini.change_names({"space:dev": "Main", "term:t1": "tr", "space:other": "Side"}, self.state)
         self.go(mmini.Item("group", "space:dev", ""))
         self.key(10)  # dev is the current group and its terminal is shown
         self.assertEqual(mmini.current_target(self.win), "t2")
         self.key("d")
-        self.assertEqual(self.side.prompt.ask, "type Main to confirm:")
-        self.type("Main")
+        self.assertTrue(self.side.prompt.title.startswith("delete space Main? ends 3:"))
+        self.held()
+        self.key("y")  # one key: no name typed
         addresses = ["t2", "t3", "t1"]  # as listed: atlas, t1f, tr (shown names)
         self.assertEqual(self.ends(), [step for a in addresses for step in mmini.end_steps(a)])
+        self.assertIsNone(self.side.prompt)
         spaces, _ = self.side.groups()
         self.assertEqual([g.key for g in spaces], ["space:home", "space:other"])
         self.assertEqual(self.side.cursor, mmini.Item("group", "space:other", ""))  # the next group
@@ -4040,13 +4368,222 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(mmini.read_names(self.state), {"space:other": "Side"})  # its names went with it
         self.assertEqual(self.side.notice.current(), "")
 
-    def test_delete_space_typing_its_own_name_works_too(self):
+    def test_delete_space_takes_capital_y_too_and_the_last_space_moves_back(self):
         mmini.change_names({"space:other": "Side"}, self.state)
         self.go(mmini.Item("group", "space:other", ""))
         self.key("d")
-        self.type("other")
+        self.held()
+        self.key("Y")
         self.assertEqual(self.ends(), mmini.end_steps("t4"))
         self.assertEqual(self.side.cursor, mmini.Item("group", "space:dev", ""))  # the last space: the one before
+
+    def test_a_click_cancels_the_delete_and_acts(self):
+        self.go(mmini.Item("group", "space:dev", ""))
+        self.key("d")
+        other = mmini.Item("group", "space:other", "")
+        self.click(5, self.line_of(other))
+        self.assertIsNone(self.side.prompt)
+        self.assertEqual(self.side.notice.current(), mmini.DELETE_NO)
+        self.assertEqual(self.ends(), [])
+        self.assertEqual(self.side.cursor, other)  # the press acted
+        self.key("d")
+        self.side.mouse_quiet = time.monotonic() + 5  # the second press of the double click that opened it
+        with pressed(5, 1):
+            self.key(mmini.curses.KEY_MOUSE)
+        self.assertEqual(self.side.prompt.kind, "delete")  # dropped: still asking
+        self.held()
+        self.key("y")
+        self.assertEqual(self.ends(), mmini.end_steps("t4"))
+
+    def test_delete_from_the_right_click_menu_takes_y(self):
+        self.click(5, self.line_of(mmini.Item("group", "space:other", "")), button=3)
+        self.assertTrue(self.side.menu.by_mouse)
+        entry = next(i for i, e in enumerate(self.side.menu.entries) if e.action == "delete")
+        box = self.side.menu_at
+        self.click(box.left + 3, box.entry_y(entry))
+        self.assertEqual((self.side.prompt.kind, self.side.prompt.by_mouse), ("delete", True))
+        self.held()
+        self.key("y")
+        self.assertEqual(self.ends(), mmini.end_steps("t4"))
+
+    def test_d_and_y_typed_in_one_go_end_nothing(self):
+        # review of 24 Nov: a word typed while the sidebar kept the keyboard (after j/k, or a click on a heading)
+        # ended a whole space: d asked, and the word's y answered at once. The clock stands still here: every key
+        # of the word comes in the same instant, as typed keys come a few tenths of a second apart.
+        clock = [1000.0]
+        dev = mmini.Item("group", "space:dev", "")
+        with mock.patch.object(mmini.time, "monotonic", lambda: clock[0]):
+            for word in ("tidy", "lady"):  # d asks (in "lady": a opens the menu, d is its Delete space); y waits
+                self.go(dev)
+                self.key(*word)
+                self.assertEqual((self.side.prompt.kind, self.ends()), ("delete", []), word)
+                self.key("x")  # the next key typed cancels it
+                self.assertEqual((self.side.prompt, self.side.notice.current()), (None, mmini.DELETE_NO), word)
+            self.go(dev)
+            self.key(*"dynamic")  # n, right after the y, cancels
+            self.assertEqual(self.ends(), [])
+            self.assertNotEqual(getattr(self.side.prompt, "kind", None), "delete")
+            self.key(27)
+            self.go(dev)
+            self.key("d")
+            clock[0] += mmini.DELETE_HOLD - 0.01
+            self.key("y")  # still too soon
+            self.assertEqual(self.ends(), [])
+            clock[0] += 0.01  # the list read: y is taken
+            self.key("y")
+        self.assertEqual(sorted({c[1] for c in self.ends()}), ["t1", "t2", "t3"])
+        self.assertIsNone(self.side.prompt)
+
+    def test_a_question_from_a_right_click_menu_gives_the_keyboard_back(self):
+        # the right click gave the sidebar the keyboard (mmini.tmux.conf); once its question is answered or
+        # cancelled with a key, typing goes to the terminal again, as after the tab bar's Close
+        def ask_by_menu(row, action):
+            self.click(5, self.line_of(row), button=3)
+            entry = next(i for i, e in enumerate(self.side.menu.entries) if e.action == action)
+            box = self.side.menu_at
+            self.click(box.left + 3, box.entry_y(entry))
+            self.assertTrue(self.side.prompt.by_mouse)
+
+        dev, other = mmini.Item("group", "space:dev", ""), mmini.Item("group", "space:other", "")
+        with mock.patch.object(mmini, "focus_view") as focus:
+            ask_by_menu(other, "delete")
+            focus.assert_not_called()  # the question has the keyboard
+            self.key("n")
+            self.assertEqual(self.side.notice.current(), mmini.DELETE_NO)
+            focus.assert_called_once_with(self.win)
+            focus.reset_mock()
+            ask_by_menu(dev, "delete")
+            self.hc.terms.append(term("t30", "/Users/x/dev", "zsh", "late"))  # what ends changes meanwhile
+            self.side.refresh_once()
+            self.held()
+            self.key("y")
+            self.assertTrue(self.side.prompt.title.startswith("changed: "))
+            focus.assert_not_called()  # asked again: the keyboard stays for the answer
+            self.held()
+            self.key("y")
+            self.assertEqual(sorted({c[1] for c in self.ends()}), ["t1", "t2", "t3", "t30"])
+            focus.assert_called_once_with(self.win)
+            focus.reset_mock()
+            ask_by_menu(other, "delete")
+            self.hc.terms = [t for t in self.hc.terms if t["address"] != "t4"]  # gone meanwhile
+            self.side.refresh_once()
+            self.held()
+            self.key("y")
+            self.assertEqual(self.side.notice.current(), "that space has gone")
+            focus.assert_called_once_with(self.win)
+            focus.reset_mock()
+            ask_by_menu(mmini.Item("group", "rig:vps", ""), "rename")  # a typed question too
+            self.key(27)
+            focus.assert_called_once_with(self.win)
+            focus.reset_mock()
+            self.go(mmini.Item("group", "space:home", ""))
+            self.key("d", "n")  # d typed: the sidebar had the keyboard on purpose, and keeps it
+            self.assertEqual(self.side.notice.current(), mmini.DELETE_NO)
+            focus.assert_not_called()
+
+    def test_delete_asks_again_when_what_ends_has_changed(self):
+        self.go(mmini.Item("group", "space:dev", ""))
+        self.key("d")
+        self.assertEqual(self.side.prompt.data, ("space:dev", "t2", "t3", "t1"))
+        self.hc.terms.append(term("t30", "/Users/x/dev", "zsh", "late"))  # started meanwhile, in that space
+        self.side.refresh_once()
+        self.held()
+        self.key("y")
+        self.assertEqual(self.ends(), [])
+        self.assertEqual(set(self.side.prompt.data), {"space:dev", "t1", "t2", "t3", "t30"})
+        self.assertTrue(self.side.prompt.title.startswith("changed: delete space dev? ends 4:"))
+        self.assertTrue(any(line.startswith("changed: delete space") for line in self.scr.lines()))  # on screen
+        self.key("y")  # at once: not taken
+        self.assertEqual(self.ends(), [])
+        self.assertIsNotNone(self.side.prompt)
+        self.held()
+        self.key("y")
+        self.assertEqual(sorted({c[1] for c in self.ends()}), ["t1", "t2", "t3", "t30"])
+        self.assertIsNone(self.side.prompt)
+
+    def test_end_asks_again_when_a_child_now_ends_with_it(self):
+        self.go(mmini.Item("agent", "space:dev", "t1"))
+        self.key("d")
+        self.assertEqual(self.side.prompt.title, "end tracker? ends 1: tracker (claude-code).")
+        self.hc.infos["t3"] = {"parent": "t1"}  # t1f now ends with tracker
+        self.side.refresh_once(full=True)
+        self.held()
+        self.key("y")
+        self.assertEqual(self.ends(), [])
+        self.assertEqual(self.side.prompt.title, "changed: end tracker? ends 2: tracker (claude-code), t1f (zsh).")
+        self.held()
+        self.key("y")
+        self.assertEqual(self.ends(), mmini.end_steps("t1") + mmini.end_steps("t3"))
+
+    def test_y_ends_nothing_once_the_terminal_or_space_has_gone(self):
+        self.go(mmini.Item("agent", "space:dev", "t2"))
+        self.key("d")
+        self.hc.terms = [t for t in self.hc.terms if t["address"] != "t2"]  # ended elsewhere meanwhile
+        self.side.refresh_once()
+        self.held()
+        self.key("y")
+        self.assertEqual(self.side.notice.current(), "that terminal has ended")
+        self.assertIsNone(self.side.prompt)
+        self.go(mmini.Item("group", "space:other", ""))
+        self.key("d")
+        self.hc.terms = [t for t in self.hc.terms if t["address"] != "t4"]
+        self.side.refresh_once()
+        self.held()
+        self.key("y")
+        self.assertEqual(self.side.notice.current(), "that space has gone")
+        self.assertEqual(self.ends(), [])
+
+    def test_a_cut_list_does_not_take_y_until_it_all_shows(self):
+        kids = [term(f"t{n}", "/Users/x/dev", "zsh", f"child-number-{n}") for n in range(20, 32)]
+        self.hc.terms += kids
+        self.side.refresh_once()
+        self.scr.height = 12  # 12 lines: the list keeps two, the question gets the rest
+        self.go(mmini.Item("group", "space:dev", ""))
+        self.key("d")
+        self.assertTrue(self.side.yes_cut)
+        lines = self.scr.lines()
+        self.assertIn("the list is cut: widen the", lines)
+        self.assertTrue(any(line.endswith("…") for line in lines))  # the cut is marked
+        self.held()  # long enough: only the cut keeps y from being taken
+        self.key("y")
+        self.assertEqual(self.ends(), [])
+        self.assertIsNotNone(self.side.prompt)  # still asking
+        self.scr.height = 30  # taller: the question takes every line it needs
+        self.side.draw()
+        self.assertFalse(self.side.yes_cut)
+        self.assertEqual(self.scr.lines()[-3:-1], ["y deletes · any other key", "cancels"])
+        self.held()
+        self.key("y")
+        self.assertEqual(len([c for c in self.ends() if c[0] == "kill"]), 15)
+
+    def test_the_delete_question_at_every_size(self):
+        self.go(mmini.Item("group", "space:dev", ""))
+        self.key("d")
+        p = self.side.prompt
+        for height in range(1, 31):
+            for width in (8, 30, 80):
+                case = (height, width)
+                self.scr.height, self.scr.width = height, width
+                self.side.draw()
+                lines = self.scr.lines()
+                if height >= 2:
+                    self.assertTrue(lines[-1].lstrip().startswith(mmini.glyph("‹")), case)  # never drawn over
+                keys = mmini.wrap_words(mmini.DELETE_CUT if self.side.yes_cut else p.ask, width - 1)
+                if height >= 6:  # room for the keys: the line above "‹" ends them
+                    self.assertEqual(lines[-2], keys[-1], case)
+                # whole when the list of rows keeps two lines: y is taken then, else not
+                self.assertEqual(self.side.yes_cut, mmini.yes_height(p.title, p.ask, width - 1) > height - 3, case)
+        self.assertIsNotNone(self.side.prompt)
+
+    def test_a_paste_cancels_the_delete_and_goes_to_the_view(self):
+        self.go(mmini.Item("group", "space:dev", ""))
+        self.key("d")
+        with mock.patch.object(mmini, "paste_to_view", return_value=True) as paste:
+            self.side.pasted("y")
+        paste.assert_called_once_with("y", self.win)
+        self.assertIsNone(self.side.prompt)
+        self.assertEqual(self.side.notice.current(), mmini.DELETE_NO)
+        self.assertEqual(self.ends(), [])
 
     def test_end_terminal_lists_children_and_shows_a_sibling(self):
         self.hc.infos["t3"] = {"parent": "t1"}  # t1f was started from tracker: it ends with it
@@ -4057,21 +4594,23 @@ class ActionTests(unittest.TestCase):
         self.key("d")
         p = self.side.prompt
         self.assertEqual((p.title, p.ask), ("end tracker? ends 2: tracker (claude-code), t1f (zsh).",
-                                            "type tracker to confirm:"))
-        self.type("tracker")
+                                            mmini.DELETE_ASK["end"]))
+        self.held()
+        self.key("y")
         self.assertEqual(self.ends(), mmini.end_steps("t1") + mmini.end_steps("t3"))
         self.assertEqual(self.hc.finished, {})  # removed, not left as finished terminals
         self.assertEqual(self.side.cursor, mmini.Item("agent", "space:dev", "t2"))  # the agent before it
         self.assertEqual(mmini.current_target(self.win), "t2")  # dev still has a terminal: shown
 
-    def test_end_an_unnamed_terminal_by_its_address_and_the_last_one_leaves_nothing(self):
+    def test_end_an_unnamed_terminal_and_the_last_one_leaves_nothing(self):
         self.hc.terms.append(term("t20", "/Users/x/dev/solo", "python3"))
         self.side.refresh_once()
         self.go(mmini.Item("agent", "space:solo", "t20"))
         self.key(10)
         self.key("d")
-        self.assertEqual(self.side.prompt.ask, "type t20 to confirm:")
-        self.type("t20")
+        self.assertEqual(self.side.prompt.title, "end t20? ends 1: t20 (python3).")
+        self.held()
+        self.key("y")
         self.assertEqual(self.ends(), mmini.end_steps("t20"))
         self.assertNotIn("space:solo", [g.key for g in self.side.everything()])
         self.assertEqual(self.side.cursor, mmini.Item("group", "space:other", ""))  # no group left of it: neighbour
@@ -4084,7 +4623,8 @@ class ActionTests(unittest.TestCase):
         self.side.refresh_once()
         self.go(mmini.Item("agent", "space:dev", "t1"))
         self.key(10, "d")
-        self.type("only")
+        self.held()
+        self.key("y")
         self.assertEqual(mmini.current_target(self.win), "")  # the view says to pick a terminal
         self.assertEqual(self.side.everything(), [])
 
@@ -4098,8 +4638,9 @@ class ActionTests(unittest.TestCase):
 
         self.go(mmini.Item("group", "space:dev", ""))
         self.key("d")
+        self.held()
         with mock.patch.object(mmini, "run_hc", flaky):
-            self.type("dev")
+            self.key("y")
         self.assertEqual(self.side.notice.current(), "end: 1 of 3 failed, t3: core went away")
         self.assertTrue(self.side.notice.bad)
         self.assertIn(("rm", "t1"), self.hc.calls)
@@ -4120,6 +4661,12 @@ class ActionTests(unittest.TestCase):
 
     def test_forget_needs_the_name_and_never_offers_this_mac_or_home(self):
         self.go(mmini.Item("group", "rig:vps", ""))
+        self.key("d", "y")  # not d's one-key question: y is typed, nothing happens yet
+        self.assertEqual((self.side.prompt.kind, self.side.prompt.text), ("forget", "y"))
+        self.assertEqual(self.scr.lines()[-2], "> y_")
+        self.key(10)
+        self.assertNotIn(("machine", "rm", "vps"), self.hc.calls)
+        self.assertEqual(self.side.notice.current(), "cancelled: the name did not match")
         self.key("d")
         self.type("vp")
         self.assertNotIn(("machine", "rm", "vps"), self.hc.calls)
@@ -4138,7 +4685,7 @@ class ActionTests(unittest.TestCase):
 
 class ScriptTests(unittest.TestCase):
     def test_shell_syntax(self):
-        for name in ("view.sh", "build.sh", "start.sh"):
+        for name in ("view.sh", "build.sh", "start.sh", "usage.sh"):
             out = subprocess.run(["/bin/sh", "-n", str(ROOT / name)], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, out.stderr)
 
@@ -4151,10 +4698,18 @@ class ScriptTests(unittest.TestCase):
         self.assertNotIn("Application Support/com.mitchellh.ghostty", text)  # the config is not even read
         self.assertNotRegex(text, r"ghostty/config")
 
+    def test_start_runs_the_view_relay_with_tmuxs_terminal_type(self):
+        text = (ROOT / "start.sh").read_text()
+        line = next(x for x in text.splitlines() if "mmini.py\") view" in x)
+        self.assertEqual(line.strip(), '"exec python3 $(q "$here/mmini.py") view" 2>&1)')  # no ${term}: no xterm-mmini
+        self.assertNotIn("view.sh\")", text)  # nothing starts view.sh itself any more
+        self.assertIn('"$py sidebar"', text)
+        self.assertIn('"$py tabs"', text)
+
     def test_build_needs_tmux_and_the_new_files(self):
         text = (ROOT / "build.sh").read_text()
         self.assertIn('echo "mmini: tmux not found (brew install tmux)" >&2; exit 1', text)
-        self.assertIn("for f in mmini.py view.sh start.sh mmini.tmux.conf; do", text)
+        self.assertIn("for f in mmini.py view.sh start.sh mmini.tmux.conf usage.sh; do", text)
 
     def test_launcher_types_start_sh_into_one_window(self):
         text = (ROOT / "build.sh").read_text()
@@ -4182,15 +4737,25 @@ class ScriptTests(unittest.TestCase):
                       "adding and forgetting a real machine"):
             self.assertIn(words, header)
         readme = " ".join((ROOT / "README.md").read_text().split())
-        for words in ("A delete asks for the name to be typed first", "names.json",
+        for words in ("Delete space and End terminal list everything that ends and end it on `y`",
+                      "Forget server asks for the server's name to be typed first", "names.json",
                       "A right click on a tab, or in the shown terminal, opens its menu", "brew install tmux",
                       "A file dropped on the window reaches the shown terminal"):
             self.assertIn(words, readme)
 
 
-class StartScriptTests(unittest.TestCase):
-    """start.sh with the real tmux, in a pseudo terminal, against a stand-in hc that lists nothing. Skipped where
-    tmux is not installed."""
+class TmuxWindowCase(unittest.TestCase):
+    """start.sh with the real tmux, in a pseudo terminal, against a stand-in hc (HC: a shell script). Skipped where
+    tmux is not installed. No tests of its own."""
+
+    HC = ('#!/bin/sh\ncase "$1 $2" in "ls --json") echo \'{"terminals": [{"address": "t1", '
+          '"agent": "zsh", "cwd": "/tmp/work", "state": "live", "name": "one"}]}\' ;; '
+          '"machine ls") echo \'{"machines": []}\' ;; "get t1") echo "{}" ;; '
+          '"attach t1") trap "exit 0" TERM; while :; do sleep 1; done ;; esac\nexit 0\n')
+
+    def extra_env(self, tmp):
+        """Settings for start.sh besides the fixtures' own."""
+        return {}
 
     def setUp(self):
         self.tmux = shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux")
@@ -4200,13 +4765,11 @@ class StartScriptTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         tmp = Path(self._tmp.name)
+        self.tmp = tmp
         self.win = tmp / "state" / "w-test01"
         self.win.mkdir(parents=True)
         hc = tmp / "hc"
-        hc.write_text('#!/bin/sh\ncase "$1 $2" in "ls --json") echo \'{"terminals": [{"address": "t1", '
-                      '"agent": "zsh", "cwd": "/tmp/work", "state": "live", "name": "one"}]}\' ;; '
-                      '"machine ls") echo \'{"machines": []}\' ;; "get t1") echo "{}" ;; '
-                      '"attach t1") trap "exit 0" TERM; while :; do sleep 1; done ;; esac\nexit 0\n')
+        hc.write_text(self.HC)
         hc.chmod(0o755)
         self.sock = "mmini-" + self.win.name
         self.addCleanup(lambda: subprocess.run([self.tmux, "-L", self.sock, "kill-server"], capture_output=True))
@@ -4214,6 +4777,7 @@ class StartScriptTests(unittest.TestCase):
         env.update(TERM="xterm-256color", MMINI_HC=str(hc), MMINI_STATE=str(tmp / "state"),
                    MMINI_WINDOW=str(self.win), MMINI_KEYCHAIN="0", MMINI_BROWSER="0",
                    PYTHONDONTWRITEBYTECODE="1")
+        env.update(self.extra_env(tmp))
         import pty
         pid, fd = pty.fork()
         if pid == 0:
@@ -4262,10 +4826,26 @@ class StartScriptTests(unittest.TestCase):
                 active = parts[0]
         return out, active
 
+
+class StartScriptTests(TmuxWindowCase):
+    """start.sh with the real tmux, in a pseudo terminal, against a stand-in hc with one terminal of this Mac."""
+
     def test_layout_sizes_click_and_close(self):
         self.assertTrue(wait_for(lambda: len(mmini.read_panes(self.win)) == 3, 10))
         ids = mmini.read_panes(self.win)
         side, tabs, view = ids["side"], ids["tabs"], ids["view"]
+        # the view pane runs the relay (tmux's terminal type, not xterm-mmini), and view.sh runs under it: the attach
+        # mmini.py may end is still a child of view.loop
+        relay = int(self.t("display", "-p", "-t", view, "#{pane_pid}").strip())
+        self.assertTrue(wait_for(lambda: (self.win / "view.loop").exists(), 10))
+        loop = int(mmini.read_text(self.win / "view.loop"))
+        self.assertEqual(mmini.proc_info(loop)[0], relay)
+        self.assertTrue(mmini.proc_info(relay)[1].endswith("mmini.py view"), mmini.proc_info(relay))
+        self.assertTrue(wait_for(lambda: mmini.attach_pid(self.win) != 0, 10))
+        environ = subprocess.run(["/bin/ps", "-E", "-o", "command=", "-p", str(relay)], capture_output=True,
+                                 text=True).stdout
+        self.assertIn("TERM=screen-256color", environ)
+        self.assertNotIn("TERMINFO=", environ)
 
         def laid_out(cols, rows):
             panes, active = self.panes()
@@ -4602,6 +5182,30 @@ class ServerTests(unittest.TestCase):
         self.assertEqual([t for t in said if re.search(r"\brigs?\b", t) and not t.startswith(("rig_", "rig:"))], [])
 
 
+class PublicCopyTests(unittest.TestCase):
+    """The public copy (`git archive`) ships tests/ but not INTERNAL.md: its suite must pass all the same."""
+
+    def test_only_tests_skipped_without_the_notes_read_them(self):
+        tree = ast.parse(Path(__file__).read_text())
+
+        def skipped(node: ast.AST) -> bool:
+            return any(isinstance(d, ast.Name) and d.id == "skip_without_notes"
+                       for d in getattr(node, "decorator_list", []))
+
+        def check(node: ast.AST, inside: bool) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.ClassDef, ast.FunctionDef)):
+                    reads = any(isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "NOTES"
+                                and n.attr in ("read_text", "read_bytes", "open") for n in ast.walk(child))
+                    if isinstance(child, ast.FunctionDef) and reads:
+                        self.assertTrue(inside or skipped(child), child.name)
+                    check(child, inside or skipped(child))
+
+        check(tree, False)
+        named = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value == NOTES.name]
+        self.assertEqual(len(named), 1)  # only in NOTES: no test reaches the notes another way
+
+
 class HelpTests(unittest.TestCase):
     """"?": the list of keys over the sidebar, closed by any key or click; the dim "?" on the last line."""
 
@@ -4632,6 +5236,54 @@ class HelpTests(unittest.TestCase):
         self.side.mouse_quiet = 0.0
         with pressed(x, y, button):
             self.key(mmini.curses.KEY_MOUSE)
+
+    def test_the_status_dots_are_drawn_in_their_colours(self):
+        self.scr.height = 60  # tall enough for the whole list
+        self.key("?")
+        lines = self.scr.lines()
+        self.assertEqual(lines[:len(mmini.help_lines(29, 60))], mmini.help_lines(29, 60))
+        at = lines.index(" status dots")
+        self.assertEqual(self.scr.cells[(at, 1)][1], mmini.curses.A_DIM)
+        dim = mmini.curses.A_DIM
+        for i, (pair, word) in enumerate(((1, "red"), (3, "yellow"), (2, "green"), (4, "blue"), (0, "grey"))):
+            y = at + 1 + i
+            attr = pair << 8 if pair else dim  # as dot_attr: the colour pair, or dim for no status
+            self.assertEqual(self.scr.cells[(y, 1)][1], attr, word)  # the dot
+            self.assertEqual({self.scr.cells[(y, x)][1] for x in range(9, 9 + len(word))}, {attr}, word)
+            self.assertEqual(self.scr.cells[(y, 9 + len(word))], (":", 0), word)  # the rest plain
+            self.assertEqual(self.scr.cells[(y, 9 + len(word) + 2)][1], 0, word)
+        self.assertEqual(lines[at + 6], " spaces, servers: most urgent")
+        self.assertEqual(self.scr.cells[(at + 6, 1)][1], dim)
+        self.assertEqual(self.scr.cells[(1, 1)][1], 0)  # a key line: plain
+        self.key("j")
+        self.assertFalse(self.side.help)
+
+    def test_the_readme_says_the_same_as_the_list(self):
+        # README's table names every colour, every status and the most urgent rule; its keys table has u (the public
+        # copy has README, so this runs there too)
+        readme = (ROOT / "README.md").read_text()
+        dots = readme[readme.index("## Status dots"):]
+        dots = dots[:dots.index("\n## ")]
+        for status, _, word, _ in mmini.DOT_HELP:
+            self.assertIn(f"| {word}", dots)
+            if status:
+                self.assertIn(f"`{status}`", dots)
+        self.assertIn("`error`", dots)
+        self.assertIn("most urgent", dots)
+        # a plain shell with no status is no agent row (Term.is_agent): its dot shows on its tab only
+        self.assertNotIn("Every terminal has a dot", dots)
+        self.assertIn("every agent in the sidebar", dots)
+        keys = readme[readme.index("## Keys"):readme.index("## Status dots")]
+        self.assertIn("| u, right click on a usage line | Show or hide the 5-hour usage lines", keys)
+        self.assertIn("then what the status dots mean", keys)
+
+    @skip_without_notes
+    def test_the_notes_say_the_same_as_the_list(self):
+        # INTERNAL.md's block is what the list draws at the default width
+        notes = NOTES.read_text()
+        section = notes[notes.index("## Status dots"):]
+        block = next(b for b in section.split("\n\n") if all(line.startswith("    ") for line in b.splitlines()))
+        self.assertEqual([" " + line[4:] for line in block.splitlines()], mmini.help_lines(29, 60)[-7:])
 
     def test_question_mark_shows_the_list_and_any_key_closes_it_without_acting(self):
         self.assertEqual(self.scr.line(23), fold_line("open"))
@@ -5961,7 +6613,7 @@ class SeparatorDragTests(unittest.TestCase):
         self.side.draw()
         self.assertEqual(self.rule_line(), 20)
         mmini.write_split(12, 24, self.state)
-        self.side.prompt = mmini.Prompt("delete", " ".join(["word"] * 60), ask="type yes:")  # a long question
+        self.side.prompt = mmini.Prompt("forget", " ".join(["word"] * 60), ask="type yes:")  # a long typed question
         self.side.draw()
         self.assertEqual(self.rule_line(), 11)
 
@@ -6527,6 +7179,35 @@ class SwitchFileTests(unittest.TestCase):
             (state / "devservers").write_text("junk\n")
             self.assertTrue(mmini.read_devs_shown(state))  # junk: the default
 
+    def test_the_usage_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            self.assertTrue(mmini.read_usage_shown(state))  # no file: shown
+            mmini.write_usage_shown(False, state)
+            self.assertEqual((state / "usagelines").read_text(), "hidden\n")  # the same words as the others
+            self.assertFalse(mmini.read_usage_shown(state))
+            mmini.write_usage_shown(True, state)
+            self.assertEqual((state / "usagelines").read_text(), "shown\n")
+            self.assertTrue(mmini.read_usage_shown(state))
+            (state / "usagelines").write_text("junk\n")
+            self.assertTrue(mmini.read_usage_shown(state))  # junk: the default
+            self.assertFalse((state / "usage").exists())  # usage.sh's folder: never this switch
+
+    def test_the_usage_switch_leaves_usage_sh_folder_alone(self):
+        # on a one-Mac setup the sidebar's state folder is the one usage.sh saves into (usage/<name>.json): the
+        # switch must neither fail on that folder nor take its place
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            folder = state / "usage"
+            folder.mkdir()
+            (folder / "claude.json").write_text("saved\n")
+            for shown in (False, True, False):
+                mmini.write_usage_shown(shown, state)
+                self.assertEqual(mmini.read_usage_shown(state), shown)
+            self.assertEqual(sorted(p.name for p in state.iterdir()), ["usage", "usagelines"])  # no temp file
+            self.assertEqual([p.name for p in folder.iterdir()], ["claude.json"])
+            self.assertEqual((folder / "claude.json").read_text(), "saved\n")
+
 
 def sections_sample(needs=2, devs=2, agents=True, servers=True):
     spaces, rigs = mmini.build_groups(mmini.parse(SAMPLE), "mmini", machines=["mmini", "rig"])
@@ -6951,6 +7632,8 @@ class ExtrasSidebarTests(unittest.TestCase):
         lines = mmini.help_lines(29, 40)
         self.assertIn(" g       show/hide agents", lines)
         self.assertIn(" w       dev servers on/off", lines)
+        at = lines.index(" u       show/hide usage")
+        self.assertEqual(lines[at + 1], "         (or right click it)")  # the right click on a usage line
         self.assertIn(" ¹       claude, main", lines)
         self.assertIn(" ²       work", lines)
         self.assertIn(" ³       other, guest", lines)
@@ -7018,7 +7701,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(mmini.mark_legend(**none), [])
         with mock.patch.multiple(mmini, ACCOUNT_MARKS={}, SHARED_USER=""):
             self.assertEqual(mmini.help_entries(), list(mmini.KEY_HELP))
-            self.assertEqual(len(mmini.help_lines(29, 40)), 1 + len(mmini.KEY_HELP))
+            self.assertEqual(len(mmini.help_lines(29, 60)), 1 + len(mmini.KEY_HELP) + len(mmini.DOT_HELP) + 2)
 
     def test_shared_user_alone_and_its_mark(self):
         mark = mmini.account_mark
@@ -7075,6 +7758,1811 @@ class SettingsTests(unittest.TestCase):
         engine.refresh_extras(1002.0)
         self.assertEqual(len(keychain()), 1)
         self.assertEqual(engine.keychain, "unlocked")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The 5-hour usage: usage.sh, the check, the lines at the bottom of the open sidebar
+# ---------------------------------------------------------------------------------------------------------------
+JQ = next((j for j in ("/usr/bin/jq", shutil.which("jq") or "", "/opt/homebrew/bin/jq") if j and os.access(j, os.X_OK)),
+          "")
+
+
+def status_input(five=None, seven=None, **extra):
+    """What Claude Code hands its status line command (the fields usage.sh reads, and a few it does not)."""
+    data = {"model": {"display_name": "Opus"}, "workspace": {"current_dir": "/Users/x/dev"}, **extra}
+    limits = {}
+    if five is not None:
+        limits["five_hour"] = {"used_percentage": five[0], "resets_at": five[1]}
+    if seven is not None:
+        limits["seven_day"] = {"used_percentage": seven[0], "resets_at": seven[1]}
+    if limits:
+        data["rate_limits"] = limits
+    return json.dumps(data)
+
+
+def usage_line(name, used, resets, at=0):
+    """One line of a file usage.sh writes."""
+    return json.dumps({"name": name, "five_hour": {"used_percentage": used, "resets_at": resets}, "at": at})
+
+
+@unittest.skipUnless(JQ, "no jq on this Mac")
+class UsageScriptTests(unittest.TestCase):
+    """usage.sh, run as Claude Code runs it: `sh usage.sh <name>`, the JSON on stdin."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.state = Path(self._tmp.name) / "state"
+        self.folder = self.state / "usage"
+        self.now = int(time.time())
+
+    def run_usage(self, stdin, *args, script=None, **env):
+        """usage.sh with `stdin`; the result, after checking it printed nothing and ended with 0."""
+        environ = {"PATH": "/usr/bin:/bin", "HOME": self._tmp.name, "MMINI_STATE": str(self.state), **env}
+        environ = {k: v for k, v in environ.items() if v is not None}
+        out = subprocess.run(["/bin/sh", str(script or ROOT / "usage.sh"), *args], input=stdin, env=environ,
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
+        return out
+
+    def saved(self, name="claude"):
+        return json.loads((self.folder / f"{name}.json").read_text())
+
+    def files(self):
+        return sorted(p.name for p in self.folder.iterdir()) if self.folder.exists() else []
+
+    def test_writes_one_line_of_json(self):
+        self.run_usage(status_input((42.4, self.now + 3600.0), (7, self.now + 86400)), "claude")
+        text = (self.folder / "claude.json").read_text()
+        self.assertEqual(text.count("\n"), 1)
+        data = json.loads(text)
+        self.assertEqual(data["name"], "claude")
+        self.assertEqual(data["five_hour"], {"used_percentage": 42.4, "resets_at": self.now + 3600})  # whole seconds
+        self.assertEqual(data["seven_day"], {"used_percentage": 7, "resets_at": self.now + 86400})
+        self.assertLessEqual(abs(data["at"] - time.time()), 5)
+        self.assertEqual(list(data), ["name", "five_hour", "seven_day", "at"])
+        self.assertEqual(mmini.parse_usage(text), [mmini.Usage("claude", 42.4, self.now + 3600)])  # mmini reads it
+
+    def test_hidden_usage_lines_do_not_stop_the_saving(self):
+        # one Mac: the sidebar's switch (u) sits in this same state folder; usage.sh still saves (a switch file named
+        # "usage" took the folder's place, and mkdir failed without a word on every answer)
+        mmini.write_usage_shown(False, self.state)
+        self.run_usage(status_input((42, self.now + 3600)), "claude")
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 42)
+        self.assertFalse(mmini.read_usage_shown(self.state))
+
+    def test_seven_day_only_when_present(self):
+        self.run_usage(status_input((10, self.now + 3600)), "claude-2")
+        self.assertNotIn("seven_day", self.saved("claude-2"))
+        self.run_usage(status_input((11, self.now + 3600), ("x", 5)), "claude-2")
+        self.assertNotIn("seven_day", self.saved("claude-2"))
+
+    def test_no_rate_limits_no_file(self):
+        for stdin in (status_input(), status_input(seven=(7, self.now + 86400)),  # an API key, the first prompt
+                      status_input(rate_limits={"five_hour": None}), status_input(rate_limits="x"),
+                      status_input(rate_limits={"five_hour": {"used_percentage": "42", "resets_at": self.now}}),
+                      status_input(rate_limits={"five_hour": {"used_percentage": 42}}),  # no resets_at
+                      status_input(rate_limits={"five_hour": {"used_percentage": True, "resets_at": self.now}}),
+                      "", "junk", "[1, 2]", "null"):
+            self.run_usage(stdin, "claude")
+            self.assertEqual([f for f in self.files() if not f.startswith(".")], [], stdin)
+        self.assertEqual(self.files(), [])  # no temporary file left behind either
+
+    def test_a_name_that_is_not_allowed_writes_nothing(self):
+        stdin = status_input((42, self.now + 3600))
+        for args in ((), ("",), ("a/b",), ("../x",), ("a b",), ("x" * 33,), ("é",), ("$(touch pwned)",), ("a\nb",)):
+            self.run_usage(stdin, *args)
+        self.assertEqual(self.files(), [])
+        self.assertFalse((Path(self._tmp.name) / "pwned").exists())
+        self.assertFalse((self.state / "x.json").exists())
+        self.run_usage(stdin, "x" * 32)
+        self.run_usage(stdin, "Work_1.b-2")
+        self.assertEqual(self.files(), ["Work_1.b-2.json", "x" * 32 + ".json"])
+
+    def test_the_name_check_is_the_same_in_a_utf_8_locale(self):
+        # Claude Code runs it with the session's locale (LANG=en_US.UTF-8 on most Macs); there sh's [A-Za-z] can
+        # match letters such as é, and ${#name} counts characters, not bytes. mmini reads ASCII names only.
+        stdin = status_input((42, self.now + 3600))
+        for locale in ({"LC_ALL": "en_US.UTF-8"}, {"LANG": "en_US.UTF-8"}, {"LC_CTYPE": "en_US.UTF-8"}):
+            for name in ("é", "ß", "Ä", "ı", "ü", "ñ", "x" * 31 + "é", "claudé"):
+                self.run_usage(stdin, name, **locale)
+            self.assertEqual(self.files(), [], locale)
+        self.run_usage(stdin, "claude-2", LC_ALL="en_US.UTF-8")
+        self.run_usage(stdin, "x" * 32, LC_ALL="en_US.UTF-8")
+        self.run_usage(stdin, "y" * 33, LC_ALL="en_US.UTF-8")
+        self.assertEqual(self.files(), ["claude-2.json", "x" * 32 + ".json"])
+        self.assertEqual(self.saved("claude-2")["five_hour"], {"used_percentage": 42, "resets_at": self.now + 3600})
+
+    def test_atomic_a_new_file_replaces_the_old_one(self):
+        self.run_usage(status_input((10, self.now + 3600)), "claude")
+        with open(self.folder / "claude.json") as old:  # a reader that has the old file open keeps the old file
+            self.run_usage(status_input((20, self.now + 3600)), "claude")
+            self.assertEqual(json.loads(old.read())["five_hour"]["used_percentage"], 10)
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 20)
+        self.assertEqual(self.files(), ["claude.json"])  # the temporary file was renamed, none left over
+        self.assertIn('tmp=$(mktemp "$dir/.$name.XXXXXX"', (ROOT / "usage.sh").read_text())  # in the same folder
+        self.assertIn('mv -f "$tmp" "$file"', (ROOT / "usage.sh").read_text())
+
+    def test_a_newer_number_is_never_replaced_by_an_older_one(self):
+        reset = self.now + 3600
+        self.run_usage(status_input((40, reset)), "claude")
+        self.run_usage(status_input((30, reset)), "claude")  # an idle session's last answer: same window, lower
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 40)
+        self.run_usage(status_input((35, reset + 1)), "claude")  # resets_at a second off: still the same window
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 40)
+        self.run_usage(status_input((40, reset)), "claude")  # the same number: written again (a fresh "at")
+        self.run_usage(status_input((55.5, reset)), "claude")
+        self.assertEqual(self.saved()["five_hour"], {"used_percentage": 55.5, "resets_at": reset})
+        self.run_usage(status_input((90, reset - 5 * 3600)), "claude")  # an earlier window: never
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 55.5)
+        self.run_usage(status_input((2, reset + 5 * 3600)), "claude")  # the next window: lower, but newer
+        self.assertEqual(self.saved()["five_hour"], {"used_percentage": 2, "resets_at": reset + 5 * 3600})
+
+    def test_a_higher_number_is_kept_for_ten_minutes_only(self):
+        reset = self.now + 3600
+        self.folder.mkdir(parents=True, exist_ok=True)
+        line = json.loads(usage_line("claude", 80, reset))
+        line["at"] = self.now - 11 * 60  # written 11 minutes ago (a session on another login, say)
+        (self.folder / "claude.json").write_text(json.dumps(line) + "\n")
+        self.run_usage(status_input((44, reset)), "claude")  # a right session's answer: lower, but the 80 is old
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 44)
+        line["at"] = self.now - 5 * 60  # 5 minutes old: still kept
+        (self.folder / "claude.json").write_text(json.dumps(line) + "\n")
+        self.run_usage(status_input((44, reset)), "claude")
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 80)
+
+    def test_a_saved_window_that_has_passed_or_is_junk_is_replaced(self):
+        for saved in (usage_line("claude", 90, self.now - 60), usage_line("claude", 90, self.now + 10 ** 6),
+                      "junk", "", '{"five_hour": {"used_percentage": "x", "resets_at": 1}}'):
+            self.folder.mkdir(parents=True, exist_ok=True)
+            (self.folder / "claude.json").write_text(saved + "\n")
+            self.run_usage(status_input((5, self.now - 120)), "claude")  # a passed window is still written over
+            self.run_usage(status_input((5, self.now + 3000)), "claude")
+            self.assertEqual(self.saved()["five_hour"], {"used_percentage": 5, "resets_at": self.now + 3000}, saved)
+
+    def test_default_folder_and_the_folder_made(self):
+        self.run_usage(status_input((42, self.now + 3600)), "claude", MMINI_STATE=None)
+        self.assertTrue((Path(self._tmp.name) / ".local/state/mmini/usage/claude.json").is_file())
+
+    def test_no_jq_nothing(self):
+        script = Path(self._tmp.name) / "usage.sh"
+        text = (ROOT / "usage.sh").read_text()
+        where = 'for j in /usr/bin/jq "$(command -v jq 2>/dev/null)" /opt/homebrew/bin/jq; do'
+        self.assertEqual(text.count(where), 1)
+        script.write_text(text.replace(where, 'for j in /nonexistent/jq "$(command -v jq 2>/dev/null)"; do'))
+        self.run_usage(status_input((42, self.now + 3600)), "claude", script=script, PATH="/bin")
+        self.assertEqual(self.files(), [])
+
+    def test_fast(self):
+        start = time.monotonic()
+        for i in range(5):
+            self.run_usage(status_input((i, self.now + 3600)), "claude")
+        self.assertLess((time.monotonic() - start) / 5, 1.0)  # about 10 ms on the Mac mini
+
+
+class UsageParseTests(unittest.TestCase):
+    """The usage check: its script, its answer, its schedule (pure, and the script run with sh)."""
+
+    def test_parse(self):
+        lines = [usage_line("work", 87.5, 2000), "", "junk", "[1]", "null", '"x"',
+                 usage_line("claude", 42, 1000), usage_line("claude", 99, 1001),  # a name twice: the first
+                 usage_line("bad name", 1, 1), usage_line("", 1, 1), usage_line("x" * 33, 1, 1),
+                 usage_line("t1", True, 1), usage_line("t2", "4", 1), usage_line("t3", None, 1),
+                 usage_line("t4", 1, 1.5), usage_line("t5", 1, "1"), usage_line("t6", 1, -1),
+                 usage_line("t7", 1, 10 ** 10 + 1), usage_line("t8", 1, False),
+                 '{"name": "t9", "five_hour": [42, 1]}', '{"name": "t10"}', '{"name": 5, "five_hour": {}}',
+                 '{"name": "t11", "five_hour": {"used_percentage": NaN, "resets_at": 1}}',
+                 '{"name": "t12", "five_hour": {"used_percentage": 1e999, "resets_at": 1}}']
+        self.assertEqual(mmini.parse_usage("\n".join(lines)), [mmini.Usage("claude", 42.0, 1000),
+                                                              mmini.Usage("work", 87.5, 2000)])
+        self.assertEqual(mmini.parse_usage(""), [])
+
+    def test_junk_that_json_reads_is_left_out_never_raised(self):
+        # a hand-written or broken file: a whole number too large for a float (jq keeps such a literal as it is;
+        # float() raises OverflowError), and nesting deeper than Python 3.9's json can follow (RecursionError)
+        lines = ['{"name": "huge", "five_hour": {"used_percentage": 1' + "0" * 400 + ', "resets_at": 1}}',
+                 "[" * 4000, '{"a":' * 3000, "{" * 4000,
+                 '{"name": "deep", "five_hour": {"used_percentage": ' + "[" * 4000 + ', "resets_at": 1}}',
+                 usage_line("big", 10 ** 300, 2000),  # large but a float: kept, drawn as 100 %
+                 usage_line("claude", 42, 1000)]
+        self.assertEqual(mmini.parse_usage("\n".join(lines)), [mmini.Usage("big", 1e300, 2000),
+                                                              mmini.Usage("claude", 42.0, 1000)])
+
+    def test_a_check_whose_answer_cannot_be_read_failed(self):
+        hc = FakeHc([])
+        hc.usage = usage_line("claude", 42, 1000)
+        with mock.patch.object(mmini, "parse_usage", side_effect=RuntimeError("surprise")):
+            self.assertIsNone(mmini.fetch_usage("mmini", hc))  # a failure (backs off), never an exception
+
+    def test_at_most_six_by_name(self):
+        names = ["c10", "c2", "b", "a-2", "a", "c1", "d", "e"]
+        out = "\n".join(usage_line(n, 1, 1) for n in names)
+        self.assertEqual([u.name for u in mmini.parse_usage(out)], ["a", "a-2", "b", "c1", "c2", "c10"])
+
+    def test_percent_shown(self):
+        U = mmini.Usage
+        self.assertEqual(U("a", 42.4, 100).percent(50), 42)
+        self.assertEqual(U("a", 42.5, 100).percent(50), 43)  # half up, not to even
+        self.assertEqual(U("a", 0.4, 100).percent(50), 0)
+        self.assertEqual(U("a", 150, 100).percent(50), 100)
+        self.assertEqual(U("a", -3, 100).percent(50), 0)
+        self.assertEqual(U("a", 95, 100).percent(100), 0)  # the window has passed: a new one starts
+        self.assertEqual(U("a", 95, 100).percent(101), 0)
+
+    def test_the_call_is_an_argument_list_on_the_home_machine(self):
+        args = mmini.exec_args("mmini", mmini.USAGE_SCRIPT)
+        self.assertEqual(args, ["exec", "--json", "--timeout", "20", "--on", "mmini", "/bin/sh", "-c",
+                                mmini.USAGE_SCRIPT])
+        self.assertIn('"$HOME"/.local/state/mmini/usage/*.json', mmini.USAGE_SCRIPT)
+
+    def run_script(self, home):
+        out = subprocess.run(["/bin/sh", "-c", mmini.USAGE_SCRIPT], env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual((out.returncode, out.stderr), (0, ""))
+        return out.stdout
+
+    def test_the_script_prints_every_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.run_script(tmp), "")  # no folder: nothing, and still exit 0
+            folder = Path(tmp) / ".local/state/mmini/usage"
+            folder.mkdir(parents=True)
+            self.assertEqual(self.run_script(tmp), "")
+            (folder / "claude.json").write_text(usage_line("claude", 42, 1000) + "\n")
+            (folder / "work.json").write_text(usage_line("work", 7, 2000))  # no newline at its end
+            (folder / ".claude.AbC123").write_text("half")  # usage.sh's temporary file: not read
+            (folder / "notes.txt").write_text("x")
+            (folder / "dir.json").mkdir()
+            (folder / "big.json").write_text("x" * 10000)
+            out = self.run_script(tmp)
+            self.assertNotIn("half", out)
+            self.assertIn("x" * mmini.USAGE_BYTES + "\n", out)
+            self.assertNotIn("x" * (mmini.USAGE_BYTES + 1), out)
+            self.assertEqual(mmini.parse_usage(out), [mmini.Usage("claude", 42, 1000), mmini.Usage("work", 7, 2000)])
+            for i in range(80):
+                (folder / f"z{i:02}.json").write_text(usage_line(f"z{i:02}", 1, 1) + "\n")
+            self.assertEqual(self.run_script(tmp).count('"five_hour"'), mmini.USAGE_FILES - 1)  # big.json counts
+
+    def test_fetch(self):
+        hc = FakeHc([])
+        hc.usage = usage_line("claude", 42, 1000) + "\n"
+        self.assertEqual(mmini.fetch_usage("mmini", hc), [mmini.Usage("claude", 42, 1000)])
+        self.assertEqual(hc.calls[-1], tuple(mmini.exec_args("mmini", mmini.USAGE_SCRIPT)))
+        hc.usage = ""
+        self.assertEqual(mmini.fetch_usage("mmini", hc), [])  # not set up: no lines, but not a failure
+        hc.usage = None
+        self.assertIsNone(mmini.fetch_usage("mmini", hc))
+        for answer in (exec_json(1, "", usage_line("claude", 1, 1)), exec_json(0, "", "", timed_out=True),
+                       exec_json(None), "junk"):
+            self.assertIsNone(mmini.fetch_usage("mmini", lambda *a, **k: answer), answer)
+
+    def test_the_schedule_start_then_every_ten_minutes(self):
+        due = mmini.usage_due
+        self.assertTrue(due(None, 0.0))
+        self.assertFalse(due(100.0, 699.0))
+        self.assertTrue(due(100.0, 700.0))
+
+    def test_failed_checks_back_off_to_an_hour(self):
+        due = mmini.usage_due
+        waits = [next(w for w in range(60, 3 * 3600, 60) if due(0.0, float(w), fails)) for fails in range(1, 9)]
+        self.assertEqual(waits, [600, 1200, 2400, 3600, 3600, 3600, 3600, 3600])
+        self.assertTrue(due(0.0, 3600.0, 10 ** 6))  # no overflow
+        self.assertFalse(due(0.0, 3599.0, 10 ** 6))
+
+
+class UsageTextTests(unittest.TestCase):
+    """The usage lines' text and look (pure)."""
+
+    NOW = 1_800_000_000  # 2027-01-15 08:00 UTC
+
+    def texts(self, entries, room, marks=None):
+        marks = {"claude": "¹", "claude-2": "²"} if marks is None else marks
+        return mmini.usage_texts(entries, self.NOW, room, marks)
+
+    def test_the_widest_form_that_fits(self):
+        one = [mmini.Usage("claude", 42.2, self.NOW + 6 * 60 + 3600)]
+        self.assertEqual(self.texts(one, 40), [" claude ¹  42%"])
+        self.assertEqual(self.texts(one, 14), [" claude ¹  42%"])
+        self.assertEqual(self.texts(one, 13), [" claude ¹ 42%"])
+        self.assertEqual(self.texts(one, 12), [" ¹ 42%"])
+        self.assertEqual(self.texts(one, 6), [" ¹ 42%"])
+        self.assertEqual(self.texts(one, 5), [" 42%"])
+        self.assertEqual(self.texts(one, 4), [" 42%"])
+        self.assertEqual(self.texts(one, 3), [""])
+        self.assertEqual(self.texts(one, 0), [""])
+
+    def test_no_reset_time_at_any_width(self):
+        # owner, 24 Nov: "no need for the 'resets xx:xx'": the name, its mark and the share, nothing after it
+        entries = [mmini.Usage("claude", 42, self.NOW + 3600), mmini.Usage("claude-2", 87, self.NOW + 7200)]
+        for room in range(0, 80):
+            for line in self.texts(entries, room):
+                self.assertTrue(line == "" or line.endswith("%"), (room, line))
+                self.assertNotIn("·", line)
+                self.assertNotIn("resets", line)
+                self.assertIsNone(re.search(r"\d:\d\d", line), (room, line))
+
+    @skip_without_notes
+    def test_the_design_notes_show_what_the_default_width_draws(self):
+        # INTERNAL.md's example, the owner's two subscriptions, is compared with the screen: it must be the form
+        # drawn at MMINI_WIDTH's default (the room is a column less), not a wider one
+        notes = NOTES.read_text()
+        section = notes[notes.index("## 5-hour usage"):]
+        block = next(b for b in section.split("\n\n") if all(line.startswith("    ") for line in b.splitlines()))
+        shown = [line[4:] for line in block.splitlines()]
+        U = mmini.Usage
+        entries = [U("claude", 42, self.NOW + 6 * 3600 + 300), U("claude-2", 87, self.NOW + 7 * 3600 + 1800)]
+        self.assertIn('WIDTH = env_int("MMINI_WIDTH", 30,', (ROOT / "mmini.py").read_text())  # the default: 30
+        self.assertEqual([" " + line for line in shown], self.texts(entries, 30 - 1))
+
+    def test_without_a_mark_the_name_alone(self):
+        one = [mmini.Usage("solo", 9, self.NOW + 3600)]
+        self.assertEqual(self.texts(one, 29, {}), [" solo   9%"])
+        self.assertEqual(self.texts(one, 10, {}), [" solo   9%"])
+        self.assertEqual(self.texts(one, 9, {}), [" solo 9%"])
+        self.assertEqual(self.texts(one, 7, {}), [" so… 9%"])
+        self.assertEqual(self.texts(one, 3, {}), [" 9%"])
+
+    def test_every_line_in_one_form_the_shares_lined_up(self):
+        two = [mmini.Usage("claude", 5, self.NOW + 3600), mmini.Usage("claude-2", 100, self.NOW + 2 * 3600)]
+        self.assertEqual(self.texts(two, 40), [" claude ¹     5%", " claude-2 ² 100%"])
+        self.assertEqual(self.texts(two, 16), [" claude ¹     5%", " claude-2 ² 100%"])
+        self.assertEqual(self.texts(two, 15), [" ¹ 5%", " ² 100%"])  # " claude-2 ² 100%" needs 16 in both forms
+        self.assertEqual(self.texts(two, 8), [" ¹ 5%", " ² 100%"])
+
+    def test_a_window_that_has_passed_shows_0(self):
+        # its resets_at is still read: a window that has reset was not used yet (the next message starts it)
+        entries = [mmini.Usage("claude", 97, self.NOW), mmini.Usage("claude-2", 50, self.NOW + 60)]
+        self.assertEqual(self.texts(entries, 40), [" claude ¹     0%", " claude-2 ²  50%"])
+        self.assertEqual(self.texts(entries[:1], 40), [" claude ¹   0%"])
+        self.assertEqual(self.texts([mmini.Usage("claude", 97, self.NOW + 1)], 40), [" claude ¹  97%"])
+
+    def test_every_width_fits(self):
+        entries = [mmini.Usage("claude", 42, self.NOW + 3600), mmini.Usage("claude-2", 87, self.NOW + 60),
+                   mmini.Usage("a-very-long-subscription-name", 3, self.NOW + 99)]
+        for marks in ({"claude": "¹", "claude-2": "²"}, {}):
+            for room in range(0, 60):
+                lines = self.texts(entries, room, marks)
+                self.assertEqual(len(lines), 3)
+                for line in lines:
+                    self.assertLessEqual(mmini.text_width(line), room, (room, line))
+                if room >= 6:
+                    self.assertTrue(all(line.endswith("%") for line in lines), (room, lines))
+        self.assertEqual(self.texts([], 29), [])
+
+    def test_tone(self):
+        tone = mmini.usage_tone
+        self.assertEqual([tone(p) for p in (0, 49, 50, 79, 80, 100)], ["low", "low", "", "", "high", "high"])
+        with mock.patch.object(mmini.curses, "color_pair", lambda n: n << 8):
+            self.assertEqual(mmini.usage_attr(49), mmini.curses.A_DIM)
+            self.assertEqual(mmini.usage_attr(50), 0)
+            self.assertEqual(mmini.usage_attr(80), (1 << 8) | mmini.curses.A_BOLD)  # as the keychain warning
+
+
+class UsageFrameTests(unittest.TestCase):
+    """Where the usage lines go: above the keychain warning and "‹", below the list and a message (pure)."""
+
+    def test_open_sidebar(self):
+        f, rows = mmini.sidebar_frame, mmini.usage_rows
+        self.assertEqual(f(40, False, False, usage=2), (37, 39, -1, 0))
+        self.assertEqual(rows(40, False, False, 37, 0), [37, 38])
+        self.assertEqual(f(40, False, False, keychain=True, usage=2), (36, 39, -1, 0))
+        self.assertEqual(rows(40, False, True, 36, 0), [36, 37])  # the keychain warning on 38
+        self.assertEqual(f(40, True, False, keychain=True, usage=2), (35, 39, -1, 1))
+        self.assertEqual(rows(40, False, True, 35, 1), [36, 37])  # the message on 35, above them
+        self.assertEqual(f(40, False, False), f(40, False, False, usage=0))  # none: as before
+        self.assertEqual(rows(40, False, False, *[f(40, False, False)[i] for i in (0, 3)]), [])
+
+    def test_every_line_has_one_use_and_the_list_keeps_its_lines(self):
+        for height in range(0, 30):
+            for keychain in (False, True):
+                for message, prompt in ((False, False), (True, False), (False, True)):
+                    for strip in (False, True):
+                        for usage in (0, 1, 2, 6):
+                            case = (height, keychain, message, prompt, strip, usage)
+                            body, arrow, opener, extra = mmini.sidebar_frame(height, message, prompt, strip, 8,
+                                                                             keychain, 3, usage)
+                            ys = mmini.usage_rows(height, strip, keychain, body, extra)
+                            kc = mmini.keychain_line(height, strip, keychain)
+                            self.assertIn(len(ys), (0, usage), case)  # all of them or none
+                            self.assertEqual(body + extra + len(ys) + (kc >= 0) + (arrow >= 0) + (opener >= 0),
+                                             height, case)
+                            if ys:
+                                self.assertGreaterEqual(body, mmini.USAGE_LIST_MIN, case)
+                                self.assertEqual(ys, list(range(ys[0], ys[0] + usage)), case)
+                                self.assertEqual(ys[-1] + 1, next(y for y in (kc, opener, arrow) if y >= 0), case)
+                            without = mmini.sidebar_frame(height, message, prompt, strip, 8, keychain, 3)
+                            self.assertEqual((body + len(ys), arrow, opener, extra), without, case)
+                            if height >= 1:
+                                self.assertGreaterEqual(body, 1, case)
+                            if usage and height >= 2 + keychain + mmini.USAGE_LIST_MIN + usage + 9 + strip:
+                                self.assertTrue(ys, case)  # a prompt of 9 lines never pushes them out of a tall pane
+
+    def test_short_sidebars_drop_them_first(self):
+        f = mmini.sidebar_frame
+        self.assertEqual(f(8, False, False, usage=2), (5, 7, -1, 0))  # the list keeps 5 lines
+        self.assertEqual(f(7, False, False, usage=2), (6, 6, -1, 0))  # one short: none of the two
+        self.assertEqual(f(9, True, False, keychain=True, usage=2), (6, 8, -1, 1))  # the message wins
+        self.assertEqual(f(10, True, False, keychain=True, usage=2), (5, 9, -1, 1))
+
+
+class UsageSidebarTests(unittest.TestCase):
+    """The Sidebar with usage lines: the check's schedule (FakeHc's exec, a fake clock) and the drawing (FakeScr)."""
+
+    MACHINES = [("mmini", "me@mini"), ("guest", "guest@mini")]
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.state = Path(self._tmp.name) / "state"
+        self.win = self.state / "w-1"
+        terms = [tterm("mmini/t1", "/Users/x/dev", "claude-code", "atlas", "idle", 3),
+                 tterm("mmini/t2", "/Users/x/dev", "claude-code", "tracker", "working", 2),
+                 tterm("mmini/t4", "/Users/x/dev/other", "zsh", "sh")]
+        self.hc = FakeHc(terms, {"mmini/t1": {"labels": {"account": "claude"}}}, machines=self.MACHINES)
+        self.reset = int(time.time()) + 2 * 3600
+        self.hc.usage = "\n".join([usage_line("work", 87.4, self.reset + 600), usage_line("claude", 42, self.reset),
+                                   usage_line("solo", 55, self.reset)]) + "\n"
+        for target, value in ((mmini, {"run_hc": self.hc, "FIRST": "mmini"}),
+                              (mmini.curses, {"color_pair": lambda n: n << 8})):
+            patcher = mock.patch.multiple(target, **value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.scr = FakeScr(40, 30)
+        self.side = mmini.Sidebar(self.scr, self.state, self.win)
+        self.side.refresh_once()
+        self.now = 1000.0
+        self.side.refresh_extras(self.now)
+        self.side.sync()
+        self.side.draw()
+
+    key = SidebarLogicTests.key
+    mouse = ExtrasSidebarTests.mouse
+    lines = ExtrasSidebarTests.lines
+
+    def calls(self):
+        return [c for c in self.hc.calls if c[0] == "exec" and mmini.USAGE_SCRIPT in c]
+
+    def test_lines_at_the_bottom_above_fold(self):
+        lines = self.lines()
+        want = [" claude ¹  42%", " solo      55%", " work ²    87%"]  # no reset time
+        self.assertEqual(lines[36:39], [mmini.glyph(w) for w in want])
+        self.assertEqual(lines[39], mmini.glyph(fold_line("open")))
+        self.assertEqual(self.side.usage_ys, [36, 37, 38])
+        self.assertEqual(self.side.body_height, 36)
+        self.assertEqual(self.scr.cells[(36, 1)][1], mmini.curses.A_DIM)  # under 50 %: dim
+        self.assertEqual(self.scr.cells[(37, 1)][1], 0)  # 50-79: as any text
+        self.assertEqual(self.scr.cells[(38, 1)][1], (1 << 8) | mmini.curses.A_BOLD)  # 80 and more: the warning's
+        self.assertTrue(all(mmini.text_width(line) <= 29 for line in self.scr.lines()))
+
+    def test_above_the_keychain_warning(self):
+        self.hc.keychain = (36, "User interaction is not allowed.")
+        self.side.keychain_asked = True
+        self.side.refresh_extras(self.now + 1)
+        self.side.draw()
+        lines = self.lines()
+        self.assertEqual(self.side.usage_ys, [35, 36, 37])
+        self.assertTrue(lines[35].startswith(" claude"))
+        self.assertEqual(lines[38], " keychain locked: API billing")
+        self.assertEqual(lines[39], mmini.glyph(fold_line("open")))
+
+    def test_the_rest_of_the_sidebar_is_unchanged(self):
+        with_usage = self.lines()
+        with mock.patch.dict(os.environ, {"MMINI_USAGE": "0"}):
+            self.side.draw()
+        without = self.lines()
+        self.assertNotIn("%", "".join(without))
+        # the same rows in the same order, the agents (anchored to the list's last line) 3 lines higher
+        self.assertEqual([line for line in with_usage[:36] if line], [line for line in without[:39] if line])
+        self.assertEqual(with_usage[31:36], without[34:39])
+        self.assertEqual(with_usage[39], without[39])
+
+    def test_none_in_the_strip(self):
+        self.key("c")
+        self.assertEqual(self.side.mode, "strip")
+        self.assertEqual(self.side.usage_ys, [])
+        self.assertNotIn("%", "".join(self.scr.lines()))
+        self.key("o")
+        self.assertEqual(len(self.side.usage_ys), 3)
+
+    def test_nothing_without_data_or_after_a_failed_check(self):
+        self.hc.usage = ""  # usage.sh not set up
+        self.side.refresh_extras(self.now + mmini.USAGE_SECONDS)
+        self.side.draw()
+        self.assertEqual(self.side.usage_ys, [])
+        self.assertNotIn("%", "".join(self.scr.lines()))
+        self.hc.usage = usage_line("claude", 1, self.reset)
+        self.side.refresh_extras(self.now + 2 * mmini.USAGE_SECONDS)
+        self.side.draw()
+        self.assertEqual(len(self.side.usage_ys), 1)
+        self.hc.usage = None  # the home machine does not answer
+        self.side.refresh_extras(self.now + 3 * mmini.USAGE_SECONDS)
+        self.side.draw()
+        self.assertEqual(self.side.usage_ys, [])
+        self.assertEqual(self.side.usage_fails, 1)
+
+    def test_a_junk_file_neither_hides_the_others_nor_asks_every_second(self):
+        self.hc.usage = "\n".join(['{"name": "x", "five_hour": {"used_percentage": 1' + "0" * 400 +
+                                   ', "resets_at": 1}}', "[" * 4000, usage_line("claude", 7, self.reset)]) + "\n"
+        before = len(self.calls())
+        for step in range(1, 11):
+            self.side.refresh_extras(self.now + mmini.USAGE_SECONDS + step)
+        self.assertEqual(len(self.calls()), before + 1)  # once, then not again before the next minute
+        self.assertEqual((self.side.usage_at, self.side.usage_fails), (self.now + mmini.USAGE_SECONDS + 1, 0))
+        self.side.draw()
+        self.assertEqual([u.name for u in self.side.usage], ["claude"])
+        self.assertEqual(len(self.side.usage_ys), 1)
+
+    def test_asked_at_the_start_then_every_ten_minutes_and_at_once_on_r(self):
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.calls()[0][4:6], ("--on", "mmini"))
+        for step in (1.0, 60.0, 300.0, 599.0):
+            self.side.refresh_extras(self.now + step)
+        self.assertEqual(len(self.calls()), 1)
+        self.side.refresh_extras(self.now + 600.0)
+        self.assertEqual(len(self.calls()), 2)
+        self.key("r")
+        self.side.refresh_extras(self.now + 601.0)
+        self.assertEqual(len(self.calls()), 3)
+
+    def test_failed_checks_back_off(self):
+        self.hc.usage = None
+        start = self.now + 600.0
+        at = []
+        for minute in range(0, 4 * 60):
+            before = len(self.calls())
+            self.side.refresh_extras(start + minute * 60.0)
+            if len(self.calls()) > before:
+                at.append(minute)
+        self.assertEqual(at, [0, 10, 30, 70, 130, 190])  # 10, 20, 40, then every 60 minutes
+        self.hc.usage = usage_line("claude", 1, self.reset)
+        self.key("r")  # r asks at once, also while backing off
+        self.side.refresh_extras(start + 196 * 60.0)
+        self.assertEqual((len(self.side.usage), self.side.usage_fails), (1, 0))
+
+    def test_off_with_mmini_usage_0(self):
+        self.hc.calls.clear()
+        with mock.patch.dict(os.environ, {"MMINI_USAGE": "0"}):
+            self.assertFalse(mmini.usage_enabled())
+            self.side.usage_asked = True
+            self.side.refresh_extras(self.now + 600)
+            self.side.draw()
+            self.assertEqual(self.calls(), [])
+            self.assertEqual(self.side.usage_ys, [])
+        self.assertTrue(mmini.usage_enabled())
+
+    def test_a_new_home_machine_drops_them_and_asks_at_once(self):
+        engine = mmini.Engine(self.state, self.win)
+        mini = self.hc.terms
+        self.hc.terms = []  # no terminal of the mini yet: this Mac is home
+        engine.refresh_once()
+        engine.refresh_extras(self.now)
+        self.assertEqual([("--on" in c) for c in self.calls()][-1:], [False])
+        self.assertEqual(len(engine.usage), 3)
+        self.hc.terms = mini
+        self.hc.usage = ""
+        engine.refresh_once()
+        engine.refresh_extras(self.now + 1)  # not a minute later: at once, and this Mac's lines are gone
+        self.assertEqual(self.calls()[-1][4:6], ("--on", "mmini"))
+        self.assertEqual(engine.usage, [])
+
+    def right_click(self, y):
+        self.side.mouse_quiet = 0.0
+        with pressed(3, y, 3):
+            self.key(mmini.curses.KEY_MOUSE)
+
+    def test_a_left_click_does_nothing(self):
+        target, cursor = mmini.current_target(self.win), self.side.cursor
+        for y in self.side.usage_ys:
+            self.side.mouse_quiet = 0.0
+            with pressed(3, y, 1):
+                self.key(mmini.curses.KEY_MOUSE)
+        self.assertNotIn(36, self.side.rows)
+        self.assertIsNone(self.side.menu)
+        self.assertEqual((mmini.current_target(self.win), self.side.cursor), (target, cursor))
+        self.assertEqual(self.side.notice.current(), "")
+        self.assertFalse([c for c in self.hc.calls if c[0] == "run"])
+        self.assertEqual(len(self.side.usage_ys), 3)
+
+    def test_a_right_click_opens_their_menu_above_them(self):
+        cursor = self.side.cursor
+        before = self.lines()[36:39]
+        for y in self.side.usage_ys:
+            self.right_click(y)
+            menu = self.side.menu
+            self.assertEqual((menu.item, menu.title, menu.by_mouse), (mmini.USAGE_ITEM, "5-hour usage", True))
+            self.assertEqual([e.label for e in menu.entries],
+                             ["Hide usage", "Show servers", "Hide agents", "Hide dev servers"])
+            self.assertEqual(self.side.cursor, cursor)  # a usage line is no row: the cursor stays
+            box = self.side.menu_at
+            self.assertEqual(box.top + box.height, 36, y)  # just above the first of them, whichever was clicked
+            self.assertEqual(self.lines()[36:39], before)  # none of them covered
+            self.assertIn("Hide usage", self.lines()[box.entry_y(0)])
+            self.assertIn("5-hour usage", self.lines()[box.top])
+            self.side.mouse_quiet = 0.0
+            with pressed(20, 2):  # a click outside closes it, and does nothing else
+                self.key(mmini.curses.KEY_MOUSE)
+            self.assertIsNone(self.side.menu)
+        self.assertFalse((self.state / "usagelines").exists())  # nothing written yet
+
+    def test_hide_usage_in_their_menu_hides_them_and_stops_the_check(self):
+        self.right_click(37)
+        box = self.side.menu_at
+        self.side.mouse_quiet = 0.0
+        with mock.patch.object(mmini, "focus_view") as focus, pressed(box.left + 2, box.entry_y(0)):
+            self.key(mmini.curses.KEY_MOUSE)
+        focus.assert_called_once_with(self.win)  # a right-click menu: the keyboard back to the view
+        self.assertIsNone(self.side.menu)
+        self.assertEqual(mmini.read_text(self.state / "usagelines"), "hidden")
+        self.assertEqual(self.side.notice.current(), "usage hidden (u shows it)")
+        self.assertEqual(self.side.usage_ys, [])
+        self.assertNotIn("%", "".join(self.scr.lines()))
+        self.assertEqual(self.side.body_height, 39 - 1)  # the list gets their lines (one is the notice's)
+        before = len(self.calls())
+        for minute in range(1, 30):
+            self.side.refresh_extras(self.now + minute * 60.0)
+        self.key("r")  # r neither
+        self.side.refresh_extras(self.now + 31 * 60.0)
+        self.assertEqual(len(self.calls()), before)  # no hc exec while hidden
+        self.assertEqual(self.side.usage, [])  # and the last lines are dropped
+
+    def test_hidden_every_row_menu_offers_show_usage(self):
+        for item in list(self.side.rows.values())[:3]:  # shown: no usage entry in a row's menu
+            self.side.cursor, self.side.cursor_pos = item, self.side.items().index(item)
+            self.key("a")
+            self.assertNotIn("usage", [e.action for e in self.side.menu.entries])
+            self.key(27)
+        self.key("u")
+        self.assertEqual(self.side.usage_ys, [])
+        for y, item in sorted(self.side.rows.items()):
+            self.side.cursor, self.side.cursor_pos = item, self.side.items().index(item)
+            self.key("a")
+            self.assertEqual(self.side.menu.entries[-1], mmini.Entry("usage", "Show usage", "u"), item)
+            self.key(27)
+        row = min(self.side.rows)
+        self.right_click(row)  # a right click on a row: the same entry, picked with a click
+        menu, box = self.side.menu, self.side.menu_at
+        self.assertEqual(menu.entries[-1].label, "Show usage")
+        before = len(self.calls())
+        self.side.mouse_quiet = 0.0
+        with pressed(box.left + 2, box.entry_y(len(menu.entries) - 1)):
+            self.key(mmini.curses.KEY_MOUSE)
+        self.assertTrue(mmini.read_usage_shown(self.state))
+        self.assertEqual(mmini.read_text(self.state / "usagelines"), "shown")
+        self.assertEqual(self.side.notice.current(), "usage shown (u hides it)")
+        self.side.refresh_extras(self.now + 1)  # asked at once, not a minute later
+        self.assertEqual(len(self.calls()), before + 1)
+        self.side.draw()
+        self.assertEqual(len(self.side.usage_ys), 3)
+
+    def test_u_shows_and_hides_them_for_every_window(self):
+        other = mmini.Sidebar(FakeScr(40, 30), self.state, self.state / "w-2")  # another window
+        other.refresh_once()
+        other.refresh_extras(self.now)
+        other.sync()
+        other.draw()
+        self.assertEqual(len(other.usage_ys), 3)
+        self.key("u")
+        self.assertEqual(self.side.notice.current(), "usage hidden (u shows it)")
+        self.assertEqual(self.side.usage_ys, [])
+        other.draw()
+        self.assertEqual(other.usage_ys, [])  # the other window follows the shared file at its next draw
+        before = len(self.calls())
+        other.refresh_extras(self.now + 600)
+        self.assertEqual(len(self.calls()), before)
+        self.key("U")  # shown again
+        self.assertEqual(self.side.notice.current(), "usage shown (u hides it)")
+        self.side.refresh_extras(self.now + 1)
+        other.refresh_extras(self.now + 601)  # its lines were dropped while hidden: asked at once there too
+        self.assertEqual(len(self.calls()), before + 2)
+        for side in (self.side, other):
+            side.draw()
+            self.assertEqual(len(side.usage_ys), 3)
+
+    def test_u_works_beside_usage_sh_folder(self):
+        # one Mac: usage.sh saves into this same state folder (usage/<name>.json); u hides and shows the lines all
+        # the same and never touches that folder
+        folder = self.state / "usage"
+        folder.mkdir(parents=True)
+        (folder / "claude.json").write_text(usage_line("claude", 42, self.reset) + "\n")
+        before = (folder / "claude.json").read_text()
+        self.key("u")
+        self.assertEqual(self.side.notice.current(), "usage hidden (u shows it)")
+        self.assertEqual(self.side.usage_ys, [])
+        self.assertFalse(mmini.read_usage_shown(self.state))
+        self.key("u")
+        self.assertEqual(self.side.notice.current(), "usage shown (u hides it)")
+        self.assertTrue(mmini.read_usage_shown(self.state))
+        self.assertTrue(folder.is_dir())
+        self.assertEqual([p.name for p in folder.iterdir()], ["claude.json"])
+        self.assertEqual((folder / "claude.json").read_text(), before)
+        self.assertEqual([p.name for p in self.state.iterdir() if p.name.endswith(".tmp")], [])
+
+    def test_u_in_the_strip_and_in_the_menu(self):
+        self.key("c", "u")  # works in the strip too (no lines there): the file changes
+        self.assertEqual(self.side.mode, "strip")
+        self.assertFalse(mmini.read_usage_shown(self.state))
+        self.key("o", "a")
+        self.key("u")  # its letter in a row's menu: Show usage
+        self.assertIsNone(self.side.menu)
+        self.assertTrue(mmini.read_usage_shown(self.state))
+
+    def test_their_menu_closes_when_they_go(self):
+        self.right_click(36)
+        self.assertIsNotNone(self.side.menu)
+        mmini.write_usage_shown(False, self.state)  # another window hides them
+        self.side.draw()
+        self.assertIsNone(self.side.menu)
+        self.assertIsNone(self.side.menu_at)
+        mmini.write_usage_shown(True, self.state)
+        self.side.draw()  # back at the next draw
+        self.right_click(36)
+        self.assertEqual(self.side.menu.item, mmini.USAGE_ITEM)
+        self.hc.usage = None  # a failed check: the lines go, and their menu with them
+        self.side.refresh_extras(self.now + mmini.USAGE_SECONDS)
+        self.side.draw()
+        self.assertIsNone(self.side.menu)
+
+    def test_keys_typed_after_the_right_click_go_to_the_view(self):
+        self.right_click(36)
+        with mock.patch.object(mmini, "send_keys_to_view") as send:
+            self.key("u")  # meant for the terminal, as after any right click: nothing hidden
+        send.assert_called_once()
+        self.assertEqual(send.call_args[0][0][0], ord("u"))
+        self.assertIsNone(self.side.menu)
+        self.assertTrue(mmini.read_usage_shown(self.state))
+
+    def test_off_with_mmini_usage_0_no_switch(self):
+        mmini.write_usage_shown(False, self.state)
+        with mock.patch.dict(os.environ, {"MMINI_USAGE": "0"}):
+            self.key("u")
+            self.assertEqual(self.side.notice.current(), "usage is off (MMINI_USAGE=0)")
+            self.assertEqual(mmini.read_text(self.state / "usagelines"), "hidden")  # left as it is
+            self.key("a")
+            self.assertNotIn("usage", [e.action for e in self.side.menu.entries])  # nothing to show
+
+    def test_a_notice_and_a_prompt_go_above_them(self):
+        self.side.notice.say("hello there", bad=False)
+        self.side.draw()
+        lines = self.lines()
+        self.assertEqual(lines[35], "hello there")
+        self.assertTrue(lines[36].startswith(" claude"))
+        self.key("s")  # the new-space prompt
+        lines = self.lines()
+        typed = next(i for i, line in enumerate(lines) if line.startswith("> "))
+        self.assertEqual(typed, 35)
+        self.assertTrue(lines[36].startswith(" claude"))
+
+    def test_short_sidebars_drop_them_before_the_list(self):
+        for height in range(3, 16):
+            self.scr.height = height
+            self.side.draw()
+            lines = self.lines()
+            if self.side.usage_ys:
+                self.assertGreaterEqual(self.side.body_height, mmini.USAGE_LIST_MIN, height)
+                self.assertEqual(len(self.side.usage_ys), 3, height)
+            else:
+                self.assertNotIn("%", "".join(lines), height)
+            self.assertEqual(self.side.usage_ys != [], height >= 1 + 3 + mmini.USAGE_LIST_MIN, height)
+            cursor = self.side.cursor_pos
+            plan = self.side.sections().plan(self.side.body_height, cursor)
+            self.assertTrue(any(row.item == cursor for _, row in plan), height)  # the cursor's line stays
+
+    def test_a_menu_never_covers_them(self):
+        for y, item in sorted(self.side.rows.items()):
+            items = self.side.items()
+            self.side.cursor, self.side.cursor_pos = item, items.index(item)
+            self.side.draw()
+            before = self.lines()[36:39]
+            self.key("a")
+            if self.side.menu is None:
+                continue
+            self.assertEqual(self.lines()[36:39], before, (y, item))
+            self.side.menu = None
+            self.side.draw()
+
+    def test_the_readme_says_how_to_set_it_up(self):
+        readme = " ".join((ROOT / "README.md").read_text().split())
+        for words in ("MMINI_USAGE=0", "5-hour usage", "The status line stays empty",
+                      '{"statusLine": {"type": "command", "command": "sh \\"$HOME/.local/share/mmini/usage.sh\\" '
+                      'claude"}}',
+                      # one Mac (home is this Mac): the install folder is there, and a clone into it would fail
+                      "Skip this step when the home machine is this Mac"):
+            self.assertTrue(words in readme, words)
+
+    def test_the_shipped_notes_name_no_reset_time(self):
+        # owner, 24 Nov: "no need for the 'resets xx:xx'": README, build.sh's header and the code's module
+        # docstring say the share only, and that the lines can be hidden
+        build = " ".join((ROOT / "build.sh").read_text().replace("#", " ").split())
+        code = " ".join((ROOT / "mmini.py").read_text()[:2000].split())
+        readme = " ".join((ROOT / "README.md").read_text().split())
+        for name, text in (("build.sh", build), ("mmini.py", code), ("README.md", readme)):
+            self.assertIsNone(re.search(r"when (the window|it) resets|resets \d\d:\d\d", text), name)
+        self.assertIn("how much of its 5-hour window is used (u or a right click on a line hides them)", build)
+
+
+
+# The view relay: drops to a terminal of another machine ------------------------------------------------------------
+OPEN, CLOSE = mmini.PASTE_OPEN, mmini.PASTE_CLOSE
+
+
+def parse_all(chunks, cap=mmini.PASTE_CAP):
+    """Feed `chunks` one read each; the plain bytes (joined, with what was held at the end) and the pastes."""
+    parser = mmini.PasteParser(cap)
+    plain, pastes = b"", []
+    for chunk in chunks:
+        for kind, payload in parser.feed(chunk, 0.0):
+            if kind == "data":
+                plain += payload
+            else:
+                pastes.append(payload)
+    return plain + parser.take(), pastes
+
+
+def stored_png(path, width, height):
+    """A PNG of a colour ramp, stored without compression: width * height * 3 bytes on disk (over 8 MB when
+    asked), and small as a JPEG."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    row = b"\0" + bytes(i * 255 // (width * 3) for i in range(width * 3))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(row * height, 0)) + chunk(b"IEND", b""))
+
+
+def big_file(path, size=9_000_000):
+    """A file of `size` bytes without writing them (sparse)."""
+    with open(path, "wb") as f:
+        f.truncate(size)
+
+
+class PasteParserTests(unittest.TestCase):
+    """PasteParser: plain bytes at once, pastes whole, markers split anywhere."""
+
+    STREAM = b"ab\x1b[A" + OPEN + b"/Users/me/Desktop/shot\\ one.png" + CLOSE + b"cd\x1b[B"
+
+    def test_plain_keys_go_on_at_once(self):
+        parser = mmini.PasteParser()
+        for keys in (b"abc", b"\x1b[A", b"\x03", b"\x1b[<0;3;50M", b"\x1b[20~", b"\x1b[2004h", b"\r"):
+            self.assertEqual(parser.feed(keys, 1.0), [("data", keys)], keys)
+            self.assertIsNone(parser.deadline())
+
+    def test_a_possible_marker_start_is_held_at_most_marker_hold(self):
+        for tail in (b"\x1b", b"\x1b[", b"\x1b[2", b"\x1b[20", b"\x1b[200"):
+            parser = mmini.PasteParser()
+            self.assertEqual(parser.feed(b"x" + tail, 5.0), [("data", b"x")], tail)
+            self.assertEqual(parser.deadline(), 5.0 + mmini.MARKER_HOLD)
+            self.assertEqual(parser.due(5.0 + mmini.MARKER_HOLD / 2), b"")
+            self.assertEqual(parser.due(5.0 + mmini.MARKER_HOLD), tail)  # then it goes on, unchanged
+            self.assertIsNone(parser.deadline())
+        parser = mmini.PasteParser()
+        parser.feed(b"\x1b", 1.0)
+        parser.feed(b"[", 1.015)  # grown, not new: the first byte's time counts
+        self.assertEqual(parser.deadline(), 1.0 + mmini.MARKER_HOLD)
+        self.assertEqual(parser.feed(b"A", 1.016), [("data", b"\x1b[A")])  # an arrow key after all
+        parser.feed(b"\x1b", 2.0)
+        self.assertEqual(parser.feed(b"q\x1b", 2.01), [("data", b"\x1bq")])  # a new hold: its own time
+        self.assertEqual(parser.deadline(), 2.01 + mmini.MARKER_HOLD)
+
+    def test_markers_split_at_every_byte_position(self):
+        whole = self.STREAM
+        want = (b"ab\x1b[Acd\x1b[B", [b"/Users/me/Desktop/shot\\ one.png"])
+        self.assertEqual(parse_all([whole]), want)
+        for i in range(len(whole) + 1):
+            for j in range(i, len(whole) + 1):
+                self.assertEqual(parse_all([whole[:i], whole[i:j], whole[j:]]), want, (i, j))
+        self.assertEqual(parse_all([bytes([b]) for b in whole]), want)  # a byte per read
+
+    def test_two_pastes_and_keys_in_one_read(self):
+        plain, pastes = parse_all([OPEN + b"one" + CLOSE + b"k" + OPEN + CLOSE + b"\x1b"])
+        self.assertEqual((plain, pastes), (b"k\x1b", [b"one", b""]))
+
+    def test_a_paste_over_the_cap_passes_through_unchanged(self):
+        stream = b"a" + OPEN + b"x" * 30 + CLOSE + b"b" + OPEN + b"short" + CLOSE
+        for size in (1, 7, len(stream)):
+            chunks = [stream[i:i + size] for i in range(0, len(stream), size)]
+            self.assertEqual(parse_all(chunks, cap=20), (b"a" + OPEN + b"x" * 30 + CLOSE + b"b", [b"short"]), size)
+
+    def test_a_paste_without_its_end_goes_on_unchanged_after_a_quiet_while(self):
+        parser = mmini.PasteParser()
+        self.assertEqual(parser.feed(b"k" + OPEN + b"/a", 10.0), [("data", b"k")])
+        self.assertEqual(parser.feed(b"/b", 10.5), [])
+        self.assertEqual(parser.deadline(), 10.5 + mmini.PASTE_IDLE)
+        self.assertEqual(parser.due(10.5 + mmini.PASTE_IDLE / 2), b"")
+        self.assertEqual(parser.due(10.5 + mmini.PASTE_IDLE), OPEN + b"/a/b")
+        self.assertEqual(parser.feed(b"x" + CLOSE, 12.0), [("data", b"x" + CLOSE)])  # no paste any more
+
+    def test_take_gives_back_what_is_held_as_typed(self):
+        parser = mmini.PasteParser()
+        parser.feed(OPEN + b"/a" + CLOSE[:3], 1.0)
+        self.assertEqual(parser.take(), OPEN + b"/a" + CLOSE[:3])
+        self.assertEqual(parser.feed(b"z", 1.0), [("data", b"z")])  # afresh
+        parser.feed(b"\x1b[", 1.0)
+        self.assertEqual(parser.take(), b"\x1b[")
+        self.assertEqual(mmini.raw_event(("paste", b"p")), OPEN + b"p" + CLOSE)
+        self.assertEqual(mmini.raw_event(("data", b"d")), b"d")
+
+
+class DropDecisionTests(unittest.TestCase):
+    """drop_files: which pastes are drops to send; shell_escape and drop_paste: what is pasted instead."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.shot = self.dir / "Screen Shot (1).png"
+        self.shot.write_bytes(b"png")
+        self.note = self.dir / "note.txt"
+        self.note.write_text("x")
+
+    def test_only_existing_local_files_shown_on_another_machine(self):
+        shot, note = str(self.shot), str(self.note)
+        text = mmini.shell_escape(shot) + " " + mmini.shell_escape(note)
+        self.assertEqual(mmini.drop_files(text, "rig/t1"), [shot, note])
+        self.assertEqual(mmini.drop_files("\n " + text + " \n", "mini/t7"), [shot, note])  # white space at the ends
+        self.assertEqual(mmini.drop_files(f"'{shot}'", "rig/t1"), [shot])  # quoted
+        self.assertIsNone(mmini.drop_files(text, "t1"))  # a terminal of this Mac opens the path itself
+        self.assertIsNone(mmini.drop_files(text, ""))  # nothing shown
+        for paste in ("", "   ", "hello world", str(self.dir), shot + "x", "note.txt", "~/note.txt",
+                      mmini.shell_escape(shot) + " hello", f"'{shot}", shot.replace(" ", "  ")):
+            self.assertIsNone(mmini.drop_files(paste, "rig/t1"), paste)
+
+    def test_at_most_twenty_files(self):
+        word = mmini.shell_escape(str(self.note))
+        self.assertEqual(len(mmini.drop_files(" ".join([word] * 20), "rig/t1")), 20)
+        self.assertIsNone(mmini.drop_files(" ".join([word] * 21), "rig/t1"))
+        self.assertEqual(mmini.drop_files(word + " " * mmini.DROP_TEXT, "rig/t1"), [str(self.note)])  # trimmed
+        self.assertIsNone(mmini.drop_files("/x" * mmini.DROP_TEXT, "rig/t1"))  # never split: too long for a drop
+
+    def test_escape_as_ghostty_does_and_back(self):
+        self.assertEqual(mmini.shell_escape("/a b/c(1)&$x.png"), "/a\\ b/c\\(1\\)\\&\\$x.png")
+        nasty = "/tmp/a b\\c\"d'e`f!g#h$i&j;k|l*m?n(o)p[q]r{s}t<u>v\tw~x=y%z.png"
+        self.assertEqual(shlex.split(mmini.shell_escape(nasty)), [nasty])
+        self.assertEqual(mmini.shell_escape("/Users/x/dev/app/shot_one.png"), "/Users/x/dev/app/shot_one.png")
+
+    def test_the_new_paste_keeps_the_white_space_at_its_ends(self):
+        self.assertEqual(mmini.drop_paste(" /a\\ b.png ", ["/r/a_b.png"]), OPEN + b" /r/a_b.png " + CLOSE)
+        self.assertEqual(mmini.drop_paste("/a /b", ["/r/a", "/r/my b"]), OPEN + b"/r/a /r/my\\ b" + CLOSE)
+
+    def test_landed_path(self):
+        self.assertEqual(mmini.landed_path('{"bytes": 3, "path": "/Users/x/dev/app/a.png"}'),
+                         "/Users/x/dev/app/a.png")
+        for junk in ("", "nope", "[]", '{"path": 3}', '{"bytes": 3}', '{"path": ""}',
+                     '{"path": "/x\\u001b[201~rm"}', '{"path": "/x\\ny"}', '{"path": "/x\\ud800.png"}'):
+            self.assertEqual(mmini.landed_path(junk), "", junk)
+
+    def test_hidden_files_and_the_library_folder_are_never_sent(self):
+        """A program on another machine can put a path on this Mac's clipboard (OSC 52): a paste of
+        ~/.ssh/id_ed25519 must not send the key there."""
+        home = "/Users/me"
+        for path in ("/Users/me/Desktop/Screen Shot.png", "/Users/me/Documents/a.pdf", "/Volumes/USB/Library/a.png",
+                     "/Users/me/Library/Mobile Documents/com~apple~CloudDocs/a.png",  # iCloud Drive
+                     "/Users/me/Library/CloudStorage/Dropbox/a.png", "/Users/me/library/cloudstorage/GoogleDrive/b",
+                     "/var/folders/xy/T/TemporaryItems/NSIRD_screencaptureui_1/Screenshot.png",  # a screenshot's
+                     "/Users/me/Libraryx/a.png", "/Users/first.last/a.png", "/Library/Desktop Pictures/a.heic"):
+            self.assertEqual(mmini.drop_refusal([path], home), "", path)
+        for path, why in (("/Users/me/.ssh/id_ed25519", "in a hidden folder"),
+                          ("/Users/me/.netrc", "a hidden file"),
+                          ("/Users/me/dev/.git/config", "in a hidden folder"),
+                          ("/Users/me/Desktop/../.aws/credentials", "in a hidden folder"),
+                          ("/Users/me/Desktop/./a.png", "in a hidden folder"),
+                          ("/Users/me/Library/Keychains/login.keychain-db", "in the Library folder"),
+                          ("/Users/me/Library/a.plist", "in the Library folder"),
+                          ("/users/ME/LIBRARY/Cookies/Cookies.binarycookies", "in the Library folder"),  # no case
+                          ("//Users//me/Library/Mail/V10/a.emlx", "in the Library folder"),
+                          ("/Users/me/Library/Mobile Documents", "in the Library folder")):
+            self.assertEqual(mmini.drop_refusal([path], home), f"drop: {os.path.basename(path)} not sent: {why}", path)
+        accented = unicodedata.normalize("NFD", "/Users/josé/Library/Keychains/k")  # as a file URL may spell it
+        self.assertEqual(mmini.drop_refusal([accented], "/Users/josé"), "drop: k not sent: in the Library folder")
+        self.assertEqual(mmini.drop_refusal(["/Users/me/a.png", "/Users/me/.zshrc", "/Users/me/.ssh/k"], home),
+                         "drop: .zshrc not sent: a hidden file")  # the first such file
+        self.assertEqual(mmini.drop_refusal([str(self.shot)]), "")  # this test's files, with the real home
+
+
+class DropSendTests(unittest.TestCase):
+    """send_drop and put_file with a stand-in hc: what is sent, the 8 MB path, and the notice on a failure."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.hc = FakeHc([])
+        self.shot = self.dir / "shot one.png"
+        self.shot.write_bytes(b"\x89PNG small")
+
+    def test_small_files_are_put_as_they_are(self):
+        note = self.dir / "note.txt"
+        note.write_text("x")
+        landed, why = mmini.send_drop([str(self.shot), str(note)], "rig/t1", self.hc)
+        self.assertEqual((landed, why), (["/Users/x/dev/app/shot_one.png", "/Users/x/dev/app/note.txt"], ""))
+        self.assertEqual([c[:3] for c in self.hc.calls], [("put", "--json", "rig/t1")] * 2)
+        self.assertEqual([p[:2] for p in self.hc.puts], [("rig/t1", str(self.shot)), ("rig/t1", str(note))])
+
+    def test_a_failure_names_the_file_and_why(self):
+        note = self.dir / "note.txt"
+        note.write_text("x")
+        self.hc.put_error = ("not_found", 'no terminal "rig/t1"', 3)
+        self.assertEqual(mmini.send_drop([str(note), str(self.shot)], "rig/t1", self.hc),
+                         (None, 'drop: note.txt not sent: no terminal "rig/t1"'))
+        self.assertEqual(len(self.hc.puts), 1)  # the first failure ends the drop
+        self.hc.put_error = None
+        self.hc.put_answer = "Saved."
+        self.assertEqual(mmini.send_drop([str(note)], "rig/t1", self.hc),
+                         (None, "drop: note.txt not sent: hc's answer was not understood"))
+
+        def slow(*args, **kw):
+            raise subprocess.TimeoutExpired("hc", mmini.PUT_TIMEOUT)
+
+        self.assertEqual(mmini.send_drop([str(note)], "rig/t1", slow),
+                         (None, "drop: note.txt not sent: hc did not answer"))
+
+        def broken(*args, **kw):
+            raise RuntimeError("boom")
+
+        self.assertEqual(mmini.send_drop([str(note)], "rig/t1", broken), (None, "drop: note.txt not sent: boom"))
+
+        def stdout_only(*args, **kw):  # hc's own 8 MB check, its error JSON on stdout only
+            raise subprocess.CalledProcessError(6, "hc", stderr="", output=json.dumps(
+                {"error": {"kind": "invalid_params", "message": "at most 8 MB per put"}}))
+
+        self.assertEqual(mmini.send_drop([str(note)], "rig/t1", stdout_only),
+                         (None, "drop: note.txt not sent: at most 8 MB per put"))
+        gone = str(self.dir / "gone.png")
+        self.assertEqual(mmini.send_drop([gone], "rig/t1", self.hc),
+                         (None, "drop: gone.png not sent: could not be read"))
+
+    def test_over_8_mb_another_kind_is_not_sent(self):
+        big = self.dir / "movie.mov"
+        big_file(big)
+        self.assertEqual(mmini.send_drop([str(big)], "rig/t1", self.hc), (None, "drop: movie.mov not sent: over 8 MB"))
+        self.assertEqual(self.hc.puts, [])
+        edge = self.dir / "edge.bin"
+        big_file(edge, mmini.PUT_MAX)  # exactly the limit: sent as it is
+        self.assertEqual(mmini.send_drop([str(edge)], "rig/t1", self.hc)[0], ["/Users/x/dev/app/edge.bin"])
+
+    def test_over_8_mb_an_image_goes_as_a_smaller_jpeg_copy_deleted_after(self):
+        big = self.dir / "Big Shot.PNG"
+        big_file(big)
+        made = []
+
+        def shrink(source, copy):
+            made.append((source, copy))
+            Path(copy).write_bytes(b"\xff\xd8\xff small")
+            return True
+
+        landed, why = mmini.send_drop([str(big)], "rig/t1", self.hc, shrink)
+        self.assertEqual((landed, why), (["/Users/x/dev/app/Big_Shot.jpg"], ""))
+        source, copy = made[0]
+        self.assertEqual((source, Path(copy).name), (str(big), "Big Shot.jpg"))  # the same stem
+        self.assertTrue(Path(copy).parent.name.startswith("mmini-drop-"))
+        self.assertEqual(self.hc.puts[0][1:], (copy, 9, b"\xff\xd8\xff "))
+        self.assertFalse(Path(copy).parent.exists())  # the copy and its folder are gone
+
+        def fails(source, copy):
+            made.append((source, copy))
+            return False
+
+        self.assertEqual(mmini.send_drop([str(big)], "rig/t1", self.hc, fails),
+                         (None, "drop: Big Shot.PNG not sent: over 8 MB, could not be made smaller"))
+        self.assertFalse(Path(made[-1][1]).parent.exists())
+
+        def still_big(source, copy):
+            made.append((source, copy))
+            big_file(copy)
+            return True
+
+        self.assertEqual(mmini.send_drop([str(big)], "rig/t1", self.hc, still_big),
+                         (None, "drop: Big Shot.PNG not sent: over 8 MB, also when made smaller"))
+        self.assertFalse(Path(made[-1][1]).parent.exists())
+        self.assertEqual(len(self.hc.puts), 1)
+        scratch = self.dir / "relay"  # the view relay's folder, which it removes when it ends
+        scratch.mkdir()
+        self.assertEqual(mmini.send_drop([str(big)], "rig/t1", self.hc, shrink, str(scratch))[1], "")
+        self.assertEqual(Path(made[-1][1]).parent.parent, scratch)
+        self.assertEqual(list(scratch.iterdir()), [])
+        scratch.rmdir()  # gone: the relay ended meanwhile
+        self.assertEqual(mmini.send_drop([str(big)], "rig/t1", self.hc, shrink, str(scratch)),
+                         (None, "drop: Big Shot.PNG not sent: over 8 MB, could not be made smaller"))
+        self.assertFalse(scratch.exists())
+        self.assertTrue(mmini.needs_copy(str(big)))
+        self.assertFalse(mmini.needs_copy(str(self.shot)))
+        self.assertFalse(mmini.needs_copy(str(self.dir / "gone.png")))
+
+    def test_a_drop_given_up_sends_no_more_files(self):
+        note = self.dir / "note.txt"
+        note.write_text("x")
+        landed, why = mmini.send_drop([str(self.shot), str(note)], "rig/t1", self.hc,
+                                      cancelled=lambda: len(self.hc.puts) > 0)
+        self.assertEqual((landed, why), (None, "drop: note.txt not sent: given up"))
+        self.assertEqual([p[1] for p in self.hc.puts], [str(self.shot)])
+
+    def test_sips_makes_a_real_jpeg_under_8_mb(self):
+        if not os.access(mmini.SIPS, os.X_OK):
+            self.skipTest("no sips")
+        sides = []
+
+        def shrink(source, copy):  # the real one, and the size it made
+            done = mmini.shrink_image(source, copy)
+            sides.append(mmini.image_side(copy))
+            return done
+
+        for name, width, height, side in (("screen shot.png", 1700, 1700, 1700), ("wide.png", 3000, 1000, 2576)):
+            big = self.dir / name
+            stored_png(big, width, height)  # 8.7 and 9 MB on disk
+            self.assertGreater(big.stat().st_size, mmini.PUT_MAX)
+            self.assertEqual(mmini.image_side(str(big)), width)
+            landed, why = mmini.send_drop([str(big)], "rig/t1", self.hc, shrink)
+            self.assertEqual((landed, why), (["/Users/x/dev/app/" + Path(name).stem.replace(" ", "_") + ".jpg"], ""))
+            _, copy, size, head = self.hc.puts[-1]
+            self.assertEqual(head[:3], b"\xff\xd8\xff")  # a JPEG
+            self.assertLess(size, mmini.PUT_MAX)
+            self.assertFalse(Path(copy).exists())
+            self.assertEqual(sides[-1], side)  # made smaller to 2576 pixels a side, never larger
+        self.assertEqual(mmini.image_side(str(self.dir / "none.png")), 0)
+
+
+class DropNoticeTests(unittest.TestCase):
+    """The request file "ask": the relay's notice line beside "menu", and the tab bar reading both once."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.win = Path(self._tmp.name)
+        patcher = mock.patch.object(mmini.curses, "color_pair", lambda n: n << 8)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.bar = mmini.TabBar(FakeScr(5, 70), self.win, self.win / "shared")
+        self.addCleanup(self.bar.stop_engine)
+        self.hc = FakeHc([term("mmini/t1", "/Users/x/dev/app", "claude-code", "alpha", "idle")])
+        terms = mmini.parse(self.hc("ls", "--json"))
+        spaces, _ = mmini.build_groups(terms, "mmini", {})
+        mmini.write_snapshot(spaces[0], self.win, everything=terms, infos={})
+        self.snap = mmini.read_snapshot(self.win)
+        mmini.write_atomic(self.win / "panes", PANES)
+        self.tm = FakeTmux().install(self)
+
+    def test_a_notice_is_shown_once(self):
+        mmini.ask_notice("drop: x.png not sent: over 8 MB", self.win)
+        self.assertEqual(mmini.read_text(self.win / "ask"), "notice drop: x.png not sent: over 8 MB")
+        self.assertNotEqual(mmini.pick_stamp(self.win)[2], 0)  # the tab bar's loop wakes up for it
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.assertEqual(self.bar.notice.current(), "drop: x.png not sent: over 8 MB")
+        self.assertIsNone(self.bar.menu)
+        self.assertEqual(self.tm.selected(), [])  # a notice takes no keyboard
+        self.assertFalse((self.win / "ask").exists())
+        self.bar.notice.clear()
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.assertEqual(self.bar.notice.current(), "")
+        self.bar.draw(self.snap, "mmini/t1")
+        mmini.ask_notice("drop: y.png not sent: hc did not answer", self.win)
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.bar.draw(self.snap, "mmini/t1")
+        self.assertIn("drop: y.png not sent: hc did not answer", "\n".join(self.bar.s.scr.lines()))
+
+    def test_a_menu_waiting_beside_it_still_opens(self):
+        mmini.write_atomic(self.win / "ask", "menu\n")  # a right click in the view, not read yet
+        mmini.ask_notice("drop: x.png not sent: over 8 MB", self.win)
+        self.assertEqual(mmini.read_text(self.win / "ask").splitlines(),
+                         ["menu", "notice drop: x.png not sent: over 8 MB"])
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.assertEqual(self.bar.menu.address, "mmini/t1")
+        self.assertEqual(self.tm.selected(), ["%2"])
+        self.assertEqual(self.bar.notice.current(), "drop: x.png not sent: over 8 MB")  # kept for after the menu
+
+    def test_info_is_a_notice_that_is_no_error_and_the_last_line_wins(self):
+        mmini.ask_notice("drop: sending shot.png to mini; keys wait", self.win, bad=False)
+        self.assertEqual(mmini.read_text(self.win / "ask"), "info drop: sending shot.png to mini; keys wait")
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.assertEqual((self.bar.notice.current(), self.bar.notice.bad),
+                         ("drop: sending shot.png to mini; keys wait", False))
+        mmini.ask_notice("drop: sending shot.png to mini; keys wait", self.win, bad=False)
+        mmini.ask_notice("drop: shot.png not sent: hc did not answer", self.win)
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.assertEqual((self.bar.notice.current(), self.bar.notice.bad),
+                         ("drop: shot.png not sent: hc did not answer", True))
+        mmini.ask_notice("drop: x not sent: y", self.win)
+        mmini.ask_notice("drop: 2 files sent to mini", self.win, bad=False)
+        self.bar.check_ask(self.snap, "mmini/t1")
+        self.assertEqual((self.bar.notice.current(), self.bar.notice.bad), ("drop: 2 files sent to mini", False))
+
+    def test_the_line_holds_no_control_character(self):
+        mmini.ask_notice("drop: a\nb\x1b[2J\udcff.png not sent: x", self.win)
+        lines = (self.win / "ask").read_text().splitlines()
+        self.assertEqual(lines, ["notice drop: a b [2J?.png not sent: x"])
+        for _ in range(12):
+            mmini.ask_notice("n", self.win)
+        self.assertEqual(len(mmini.read_text(self.win / "ask").splitlines()), mmini.ASK_LINES)
+        self.assertEqual(len(mmini.take_ask(self.win)), mmini.ASK_LINES)
+        self.assertEqual(mmini.take_ask(self.win), [])
+
+
+RELAY_CHILD = r"""
+import os, signal, struct, sys, termios, fcntl, tty
+rec = sys.argv[1]
+def put(name, text):
+    with open(os.path.join(rec, name), "a") as f:
+        f.write(text)
+lflag = termios.tcgetattr(0)[3]
+put("start", f"{bool(lflag & termios.ICANON)} {bool(lflag & termios.ECHO)}\n")
+def winch(*_):
+    rows, cols = struct.unpack("hhhh", fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))[:2]
+    put("size", f"{rows} {cols}\n")
+signal.signal(signal.SIGWINCH, winch)
+winch()
+put("pid", f"{os.getpid()}\n")
+tty.setraw(0)
+os.write(1, b"READY\r\n")
+got = b""
+while True:
+    try:
+        data = os.read(0, 4096)
+    except InterruptedError:
+        continue
+    if not data:
+        break
+    with open(os.path.join(rec, "in.bin"), "ab") as f:
+        f.write(data)
+    os.write(1, data.replace(b"\x1b", b"^"))
+    got += data
+    if b"@@exit7@@" in got:
+        os._exit(7)
+"""
+
+RELAY_HC = """#!/bin/sh
+# stands in for hc put: logs, waits a little (keys typed meanwhile must follow the paste), lands the file in /remote
+printf '%s\\n' "$*" >>"$HC_LOG"
+[ "$1 $2" = "put --json" ] || exit 1
+case "$4" in
+  *fail*) echo '{"error":{"kind":"invalid_params","message":"at most 8 MB per put"}}' >&2; exit 6 ;;
+esac
+sleep 0.3
+printf '{"bytes":%s,"path":"/remote/in/%s"}\\n' "$(wc -c <"$4" | tr -d ' ')" "$(basename "$4" | tr ' ' '_')"
+"""
+
+
+class RelayTests(unittest.TestCase):
+    """The real relay (mmini.relay_view) in a pseudo terminal, around a stand-in child that records what it reads,
+    with a stand-in hc (MMINI_HC)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.win = self.tmp / "w-1"
+        self.win.mkdir()
+        self.rec = self.tmp / "rec"
+        self.rec.mkdir()
+        (self.tmp / "child.py").write_text(RELAY_CHILD)
+        hc = self.tmp / "hc"
+        hc.write_text(RELAY_HC)
+        hc.chmod(0o755)
+        self.hc_log = self.tmp / "hc.log"
+        self.env = dict(os.environ, MMINI_HC=str(hc), MMINI_WINDOW=str(self.win), MMINI_STATE=str(self.tmp),
+                        HC_LOG=str(self.hc_log), PYTHONDONTWRITEBYTECODE="1")
+        self.out = b""
+        self.pid, self.fd, self.status = 0, -1, None
+        self.addCleanup(self.stop)
+
+    def start(self, target="rig/t1", cols=100, rows=30):
+        import fcntl
+        import pty
+        import struct
+        import termios
+        if target is not None:
+            mmini.write_atomic(self.win / "target", target + "\n")
+        code = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); import mmini; "
+                f"sys.exit(mmini.relay_view([sys.executable, {str(self.tmp / 'child.py')!r}, {str(self.rec)!r}]))")
+        pid, fd = pty.fork()
+        if pid == 0:
+            try:
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+                os.execve(sys.executable, [sys.executable, "-c", code], self.env)
+            finally:
+                os._exit(127)
+        self.pid, self.fd, self.status, self.out = pid, fd, None, b""
+        self.assertTrue(self.wait_out(b"READY"), self.out)
+
+    def stop(self):
+        """End this test's relay (its child ends with the pseudo terminal) and close its side; once only."""
+        if self.pid and self.status is None:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            self.reap()
+        if self.fd >= 0:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = -1
+
+    def reap(self, timeout=5.0):
+        """The relay's wait status once it ended. Its output is read meanwhile, as tmux does: a process that ends
+        waits for its terminal's output to be read first."""
+        deadline = time.monotonic() + timeout
+        while self.status is None and time.monotonic() < deadline:
+            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            if pid:
+                self.status = status
+                break
+            if self.fd >= 0:
+                self.read_some(0.02)
+            else:
+                time.sleep(0.02)
+        return self.status
+
+    def read_some(self, wait=0.05):
+        import select
+        ready, _, _ = select.select([self.fd], [], [], wait)
+        if ready:
+            try:
+                self.out += os.read(self.fd, 65536)
+            except OSError:
+                pass
+
+    def wait_out(self, want, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if want in self.out:
+                return True
+            self.read_some()
+        return False
+
+    def got(self):
+        path = self.rec / "in.bin"
+        return path.read_bytes() if path.exists() else b""
+
+    def wait_got(self, want, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.read_some()
+            if self.got() == want:
+                return True
+        return False
+
+    def child_pid(self):
+        text = mmini.read_text(self.rec / "pid")
+        return int(text) if text.isdigit() else 0
+
+    def test_keys_a_drop_resize_and_exit_code(self):
+        self.start(cols=100, rows=30)
+        self.assertEqual(mmini.read_text(self.rec / "start"), "True True")  # the pane's settings, not raw
+        self.assertEqual(mmini.read_text(self.rec / "size").splitlines()[0], "30 100")
+        keys = b"ls -la\r\x03\x1b[A\x1bOP\x1b[<0;3;50M\x7f\x1b"
+        os.write(self.fd, keys)
+        self.assertTrue(self.wait_got(keys), self.got())  # unchanged, the lone esc a moment later
+        self.assertIn(b"ls -la\r\x03^[A", self.out)  # and the child's output comes back as it wrote it
+        # a drop: Ghostty's escaped path in a bracketed paste, keys typed while it is sent
+        shot = self.tmp / "shot one.png"
+        shot.write_bytes(b"\x89PNG")
+        os.write(self.fd, OPEN + mmini.shell_escape(str(shot)).encode() + CLOSE[:2])
+        time.sleep(0.03)
+        os.write(self.fd, CLOSE[2:] + b"after")  # the end marker split over two reads
+        time.sleep(0.1)
+        os.write(self.fd, b" more")  # hc put takes 0.3 s: these wait, then follow the new paste
+        want = keys + OPEN + b"/remote/in/shot_one.png" + CLOSE + b"after more"
+        self.assertTrue(self.wait_got(want), self.got())
+        self.assertEqual(self.hc_log.read_text(), f"put --json rig/t1 {shot}\n")
+        # a resize of the pane reaches the child
+        import fcntl
+        import struct
+        import termios
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 41, 133, 0, 0))
+        self.assertTrue(wait_for(lambda: mmini.read_text(self.rec / "size").splitlines()[-1] == "41 133"),
+                        mmini.read_text(self.rec / "size"))
+        os.write(self.fd, b"@@exit7@@")
+        self.assertIsNotNone(self.reap())
+        self.assertEqual(os.waitstatus_to_exitcode(self.status), 7)  # the child's exit code is the relay's
+
+    def test_a_failed_drop_pastes_the_original_and_tells_the_tab_bar(self):
+        self.start()
+        bad = self.tmp / "fail shot.png"
+        bad.write_bytes(b"\x89PNG")
+        paste = OPEN + mmini.shell_escape(str(bad)).encode() + CLOSE
+        os.write(self.fd, paste + b"k")
+        self.assertTrue(self.wait_got(paste + b"k"), self.got())
+        self.assertEqual(mmini.read_text(self.win / "ask").splitlines()[-1],  # after "sending", on a slow machine
+                         "notice drop: fail shot.png not sent: at most 8 MB per put")
+
+    def test_a_terminal_of_this_mac_no_target_or_other_text_pass_unchanged(self):
+        shot = self.tmp / "shot.png"
+        shot.write_bytes(b"\x89PNG")
+        paste = OPEN + str(shot).encode() + CLOSE
+        for target in ("t1", ""):
+            with self.subTest(target=target):
+                self.start(target=target)
+                os.write(self.fd, paste + b"x" + OPEN + b"hello" + CLOSE)
+                self.assertTrue(self.wait_got(paste + b"x" + OPEN + b"hello" + CLOSE), self.got())
+                self.assertFalse(self.hc_log.exists())  # no hc call
+                os.write(self.fd, b"@@exit7@@")
+                self.reap()
+                self.stop()
+                (self.rec / "in.bin").unlink()
+        self.start(target="rig/t1")
+        os.write(self.fd, OPEN + b"some text, not a path" + CLOSE)
+        self.assertTrue(self.wait_got(OPEN + b"some text, not a path" + CLOSE), self.got())
+        self.assertFalse(self.hc_log.exists())
+
+    def test_a_pick_while_a_drop_is_sent_pastes_nothing(self):
+        self.start()
+        shot = self.tmp / "shot.png"
+        shot.write_bytes(b"\x89PNG")
+        os.write(self.fd, OPEN + str(shot).encode() + CLOSE)
+        self.assertTrue(wait_for(self.hc_log.exists))  # the put has started; it takes 0.3 s
+        mmini.write_atomic(self.win / "target", "rig/t2\n")  # a pick: another terminal of the same machine
+        os.write(self.fd, b"k")
+        self.assertTrue(self.wait_got(b"k"), self.got())  # the key that waited goes on, and no paste
+        time.sleep(0.2)
+        self.assertEqual(self.got(), b"k")
+        self.assertEqual(mmini.read_text(self.win / "ask").splitlines()[-1],
+                         "notice drop: not pasted: another terminal is shown now")
+
+    def test_closing_the_pane_ends_the_child(self):
+        self.start()
+        child = self.child_pid()
+        self.assertTrue(child)
+        os.close(self.fd)  # the pane is closed
+        self.fd = -1
+        self.assertIsNotNone(self.reap())
+        self.assertTrue(wait_for(lambda: subprocess.run(["/bin/kill", "-0", str(child)],
+                                                        capture_output=True).returncode != 0))
+
+    def test_sighup_and_sigterm_end_the_relay_and_the_child(self):
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            with self.subTest(sig=sig):
+                for name in ("pid", "start", "size"):
+                    (self.rec / name).unlink(missing_ok=True)
+                self.start()
+                child = self.child_pid()
+                os.kill(self.pid, sig)
+                self.assertIsNotNone(self.reap())
+                self.assertTrue(wait_for(lambda: subprocess.run(["/bin/kill", "-0", str(child)],
+                                                                capture_output=True).returncode != 0))
+                self.stop()
+
+    def test_stray_interrupts_do_not_end_the_relay(self):
+        self.start()
+        for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP):
+            os.kill(self.pid, sig)
+        time.sleep(0.3)
+        self.assertEqual(os.waitpid(self.pid, os.WNOHANG), (0, 0))
+        os.write(self.fd, b"z")
+        self.assertTrue(self.wait_got(b"z"))
+
+    def test_no_terminal_runs_the_child_in_its_place(self):
+        proc = subprocess.Popen([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(ROOT)!r}); "
+                                 "import mmini; mmini.relay_view(['/bin/sh', '-c', 'echo $$; exit 4'])"],
+                                env=self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+        out, _ = proc.communicate(timeout=20)
+        self.assertEqual(proc.returncode, 4)
+        self.assertEqual(out.split(), [str(proc.pid)])  # exec'd in its place: no relay, no pseudo terminal
+
+
+class RelayDropTests(unittest.TestCase):
+    """ViewRelay's drops driven step by step, on pipes (no pseudo terminal; a socket pair stands in for view.sh's
+    terminal) with a stand-in `hc put` that can wait or change the shown terminal while it runs: a pick meanwhile,
+    the tab bar told about a slow drop, a drop given up at DROP_TIMEOUT, a file that is never sent, and the smaller
+    copy removed when the relay ends during a send."""
+
+    def setUp(self):
+        import socket
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.win = self.tmp / "w-1"
+        self.win.mkdir()
+        mmini.write_atomic(self.win / "target", "mini/t7\n")
+        self.shot = self.tmp / "shot one.png"
+        self.shot.write_bytes(b"\x89PNG")
+        self.note = self.tmp / "note.txt"
+        self.note.write_text("x")
+        ours, self.peer = socket.socketpair()  # what the relay types for view.sh arrives at self.peer
+        self.peer.setblocking(False)
+        self.addCleanup(self.peer.close)
+        master = ours.detach()
+        os.set_blocking(master, False)
+        self.fds = dict(zip(("in_r", "in_w"), os.pipe()))
+        self.fds.update(zip(("out_r", "out_w"), os.pipe()))
+        self.during = lambda args: None  # runs inside each put
+        self.fail = False
+        self.puts = []
+        self.threads = set()
+        self.go = threading.Event()  # a put that waits, waits for this
+        self.relay = mmini.ViewRelay(master, 0, self.win, self.fds["in_r"], self.fds["out_w"], runner=self.put)
+        self.addCleanup(self.finish)
+
+    def finish(self):
+        self.relay.close()
+        self.go.set()
+        for thread in list(self.threads):
+            thread.join(5)
+        for fd in self.fds.values():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def put(self, *args, **kw):
+        self.threads.add(threading.current_thread())
+        self.puts.append(args[3])
+        self.during(args)
+        if self.fail:
+            raise subprocess.CalledProcessError(6, "hc", stderr=json.dumps(
+                {"error": {"kind": "invalid_params", "message": "at most 8 MB per put"}}))
+        return json.dumps({"bytes": 1, "path": "/remote/" + os.path.basename(args[3]).replace(" ", "_")})
+
+    def type(self, data):
+        os.write(self.fds["in_w"], data)
+        self.assertTrue(self.relay.from_outer())
+
+    def sent(self):
+        """The sending thread's answer, taken as the relay's loop takes it."""
+        import select
+        self.assertTrue(select.select([self.relay.done_r], [], [], 5)[0])
+        self.relay.drain(self.relay.done_r)
+        self.relay.drop_sent()
+
+    def got(self):
+        data = b""
+        while True:
+            try:
+                chunk = self.peer.recv(65536)
+            except BlockingIOError:
+                return data
+            if not chunk:
+                return data
+            data += chunk
+
+    def paste_of(self, *paths):
+        return OPEN + " ".join(mmini.shell_escape(str(p)) for p in paths).encode() + CLOSE
+
+    def test_a_pick_while_it_is_sent_pastes_nothing_into_the_terminal_shown_then(self):
+        paste = self.paste_of(self.shot)
+        for shown in ("mini/t8", "rig/t1", "t3"):  # the same machine, another one, this Mac
+            with self.subTest(shown=shown):
+                mmini.write_atomic(self.win / "target", "mini/t7\n")
+                self.during = lambda args, shown=shown: mmini.write_atomic(self.win / "target", shown + "\n")
+                self.type(paste)
+                self.assertTrue(self.relay.busy)
+                self.type(b"k")  # typed meanwhile: it waits
+                self.assertEqual(self.got(), b"")
+                self.sent()
+                self.assertFalse(self.relay.busy)
+                self.assertEqual(self.got(), b"k")  # no paste, neither the new one nor the original; the key goes on
+                self.assertEqual(mmini.take_ask(self.win), ["notice drop: not pasted: another terminal is shown now"])
+        mmini.write_atomic(self.win / "target", "mini/t7\n")
+        self.fail = True
+        self.during = lambda args: mmini.write_atomic(self.win / "target", "mini/t8\n")
+        self.type(paste)
+        self.sent()
+        self.assertEqual(self.got(), b"")
+        self.assertEqual(mmini.take_ask(self.win), ["notice drop: shot one.png not sent: at most 8 MB per put; "
+                                                    "not pasted: another terminal is shown now"])
+        mmini.write_atomic(self.win / "target", "mini/t7\n")
+        self.fail = False
+
+        def away_and_back(args):
+            mmini.write_atomic(self.win / "target", "mini/t8\n")
+            mmini.write_atomic(self.win / "target", "mini/t7\n")
+
+        self.during = away_and_back
+        self.type(paste)
+        self.sent()
+        self.assertEqual(self.got(), OPEN + b"/remote/shot_one.png" + CLOSE)  # the terminal it was dropped on
+        self.assertEqual(mmini.take_ask(self.win), [])
+
+    def test_a_slow_drop_says_so_and_then_that_it_was_sent(self):
+        self.during = lambda args: self.go.wait(5)
+        self.type(self.paste_of(self.shot, self.note))
+        start = self.relay.drop.started
+        self.assertEqual(self.relay.next_time(), start + mmini.DROP_TELL)
+        self.relay.on_time(start + mmini.DROP_TELL / 2)
+        self.assertFalse((self.win / "ask").exists())  # a quick drop says nothing
+        self.relay.on_time(start + mmini.DROP_TELL)
+        self.assertEqual(mmini.take_ask(self.win), ["info drop: sending 2 files to mini; keys wait"])
+        self.assertEqual(self.relay.next_time(), start + mmini.DROP_TELL + mmini.NOTICE_SECONDS - 1)  # said again
+        self.relay.on_time(start + mmini.DROP_TELL + mmini.NOTICE_SECONDS - 1)  # before the notice runs out
+        self.assertEqual(mmini.take_ask(self.win), ["info drop: sending 2 files to mini; keys wait"])
+        self.type(b"x\r")
+        self.assertEqual(self.got(), b"")
+        self.go.set()
+        self.sent()
+        self.assertEqual(self.got(), OPEN + b"/remote/shot_one.png /remote/note.txt" + CLOSE + b"x\r")
+        self.assertEqual(mmini.take_ask(self.win), ["info drop: 2 files sent to mini"])
+        self.assertIsNone(self.relay.next_time())
+
+    def test_a_drop_without_an_answer_goes_on_as_it_came_at_drop_timeout(self):
+        self.during = lambda args: self.go.wait(5)
+        paste = self.paste_of(self.shot, self.note)
+        self.type(paste)
+        drop = self.relay.drop
+        self.type(b"x\x1c\r")  # ctrl+\ and enter wait too
+        self.assertEqual(self.relay.next_time(), drop.started + mmini.DROP_TELL)
+        drop.tell_at = drop.started + mmini.DROP_TIMEOUT + 1  # (the "sending" notices are tested above)
+        self.assertEqual(self.relay.next_time(), drop.started + mmini.DROP_TIMEOUT)
+        self.relay.on_time(drop.started + mmini.DROP_TIMEOUT)
+        self.assertFalse(self.relay.busy)
+        self.assertEqual(self.got(), paste + b"x\x1c\r")  # the original, then the keys that waited, in order
+        self.assertEqual(mmini.take_ask(self.win), ["notice drop: 2 files not sent: no answer within 60 s"])
+        self.type(b"y")
+        self.assertEqual(self.got(), b"y")  # no longer held
+        self.go.set()
+        drop.thread.join(5)
+        self.sent()  # the answer comes too late: nothing more is pasted
+        self.assertEqual(self.got(), b"")
+        self.assertEqual(self.puts, [str(self.shot)])  # the second file is never sent
+        self.type(self.paste_of(self.note))  # the next drop is its own
+        self.sent()
+        self.assertEqual(self.got(), OPEN + b"/remote/note.txt" + CLOSE)
+
+    def test_a_hidden_file_is_never_sent(self):
+        folder = self.tmp / ".ssh"
+        folder.mkdir()
+        key = folder / "id_ed25519"
+        key.write_text("k")
+        paste = self.paste_of(key)
+        self.type(paste + b"z")
+        self.assertFalse(self.relay.busy)
+        self.assertEqual(self.got(), paste + b"z")  # as it came, at once
+        self.assertEqual(self.puts, [])
+        self.assertEqual(mmini.take_ask(self.win), ["notice drop: id_ed25519 not sent: in a hidden folder"])
+
+    def test_the_smaller_copy_goes_when_the_relay_ends_during_the_send(self):
+        temp = self.tmp / "T"
+        temp.mkdir()
+        patcher = mock.patch.object(tempfile, "tempdir", str(temp))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        big = self.tmp / "big.png"
+        big_file(big)
+        made, making = [], threading.Event()
+
+        def shrink(source, copy):  # sips, slow: the window is closed meanwhile
+            self.threads.add(threading.current_thread())
+            Path(copy).write_bytes(b"\xff\xd8\xff small")
+            made.append(Path(copy))
+            making.set()
+            self.go.wait(5)
+            return True
+
+        self.relay.shrink = shrink
+        child = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)  # view.sh: hang_up's SIGHUP ends it
+        self.addCleanup(lambda: (child.kill(), child.wait()))
+        self.relay.child = child.pid
+        os.write(self.fds["in_w"], self.paste_of(big))
+
+        def close_pane():
+            making.wait(5)
+            os.close(self.fds.pop("in_w"))  # end of file: the pane has gone
+
+        closer = threading.Thread(target=close_pane, daemon=True)
+        closer.start()
+        self.assertEqual(self.relay.run(), 0)
+        closer.join(5)
+        self.assertTrue(made)
+        self.assertFalse(made[0].exists())
+        self.assertEqual(list(temp.iterdir()), [])  # the copy and its folders are gone
+        self.assertEqual(child.wait(5), -signal.SIGHUP)
+
+
+class RelayViewTests(unittest.TestCase):
+    """The relay around the real view.sh (python3 mmini.py view) in a pseudo terminal, with the stand-in hc of the
+    view tests: picks and switches work as before, and closing the pane leaves nothing behind."""
+
+    def test_pick_switch_and_close(self):
+        import pty
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            win = tmp / "state"
+            log = tmp / "log"
+            log.write_text("")
+            hc = tmp / "hc"
+            hc.write_text(STUB_HC)
+            hc.chmod(0o755)
+            env = dict(os.environ, MMINI_HC=str(hc), MMINI_STATE=str(win), STUB_LOG=str(log),
+                       PYTHONDONTWRITEBYTECODE="1")
+            env.pop("MMINI_WINDOW", None)
+            pid, fd = pty.fork()
+            if pid == 0:
+                try:
+                    os.execve(sys.executable, [sys.executable, str(ROOT / "mmini.py"), "view"], env)
+                finally:
+                    os._exit(127)
+            stop = threading.Event()
+
+            def drain():  # never blocked in a read when the fd is closed: select first
+                import select
+                while not stop.is_set():
+                    if select.select([fd], [], [], 0.05)[0]:
+                        try:
+                            if not os.read(fd, 65536):
+                                return
+                        except OSError:
+                            return
+
+            drainer = threading.Thread(target=drain, daemon=True)
+            drainer.start()
+            try:
+                self.assertTrue(wait_for(lambda: (win / "view.loop").exists()))
+                self.assertEqual(mmini.proc_info(int(mmini.read_text(win / "view.loop")))[0], pid)
+                mmini.show("a", win)
+                self.assertTrue(wait_for(lambda: "start a" in log.read_text()))
+                self.assertTrue(wait_for(lambda: mmini.attach_pid(win) != 0))  # the attach is view.loop's child
+                mmini.show("b", win)
+                self.assertTrue(wait_for(lambda: "end a" in log.read_text() and "start b" in log.read_text()))
+                self.assertTrue(wait_for(lambda: mmini.attach_pid(win) != 0))
+                attach = mmini.attach_pid(win)
+                stop.set()
+                drainer.join()
+                os.close(fd)  # the pane is closed
+                fd = -1
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and os.waitpid(pid, os.WNOHANG) == (0, 0):
+                    time.sleep(0.02)
+                self.assertTrue(wait_for(lambda: mmini.proc_info(attach) in ((0, ""), None)))  # the attach ended
+                self.assertTrue(wait_for(lambda: not (win / "view.loop").exists()))
+                self.assertFalse((win / "view.pid").exists())
+            finally:
+                stop.set()
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    os.waitpid(pid, 0)
+                except (OSError, ChildProcessError):
+                    pass
+                if fd >= 0:
+                    os.close(fd)
+
+
+class StartDropTests(TmuxWindowCase):
+    """A drop through the whole window: tmux pastes into the view pane (as Ghostty's drop reaches it), the relay
+    sends the file to the terminal's machine and pastes the path there; a file that cannot be sent goes on as it
+    came, and the tab bar says why. The terminal is on the machine "rig" (the home machine here)."""
+
+    HC = """#!/bin/sh
+case "$1 $2" in
+  "ls --json") echo '{"terminals": [{"address": "rig/t1", "agent": "zsh", "cwd": "/tmp/work", "state": "live",
+                  "name": "one"}]}' ;;
+  "machine ls") echo '{"machines": [{"name": "rig", "target": "me@rig", "id": "x", "host": "rig",
+                  "version": "0.1.21", "state": "connected"}]}' ;;
+  "get rig/t1") echo "{}" ;;
+  "attach rig/t1") printf '\\033[?2004h'; stty raw -echo; : >"$DROP_LOG.ready"; exec cat >>"$DROP_LOG" ;;
+  "put --json")
+    printf '%s %s\\n' "$3" "$4" >>"$PUT_LOG"
+    printf '{"bytes": 3, "path": "/remote/%s"}\\n' "$(basename "$4" | tr ' ' '_')" ;;
+esac
+exit 0
+"""
+
+    def extra_env(self, tmp):
+        return {"MMINI_FIRST": "rig", "DROP_LOG": str(tmp / "drop.log"), "PUT_LOG": str(tmp / "put.log")}
+
+    def test_a_drop_lands_on_the_terminals_machine(self):
+        drop_log, put_log = self.tmp / "drop.log", self.tmp / "put.log"
+        self.assertTrue(wait_for(lambda: (self.tmp / "drop.log.ready").exists(), 15))
+        time.sleep(0.3)  # the attach's bracketed paste mode reaches tmux through the relay
+        view = mmini.read_panes(self.win)["view"]
+        tabs = mmini.read_panes(self.win)["tabs"]
+        shot = self.tmp / "shot one.png"
+        shot.write_bytes(b"png")
+        self.t("set-buffer", "-b", "drop", mmini.shell_escape(str(shot)))
+        self.t("paste-buffer", "-p", "-d", "-b", "drop", "-t", view)
+        want = OPEN + b"/remote/shot_one.png" + CLOSE
+        self.assertTrue(wait_for(lambda: drop_log.exists() and drop_log.read_bytes() == want, 10),
+                        drop_log.read_bytes() if drop_log.exists() else None)
+        self.assertEqual(put_log.read_text(), f"rig/t1 {shot}\n")
+        movie = self.tmp / "movie.mov"
+        big_file(movie)
+        self.t("set-buffer", "-b", "drop", str(movie))
+        self.t("paste-buffer", "-p", "-d", "-b", "drop", "-t", view)
+        want += OPEN + str(movie).encode() + CLOSE  # as it came
+        self.assertTrue(wait_for(lambda: drop_log.read_bytes() == want, 10), drop_log.read_bytes())
+        notice = "drop: movie.mov not sent: over 8 MB"
+        self.assertTrue(wait_for(lambda: notice in self.t("capture-pane", "-p", "-t", tabs), 10),
+                        self.t("capture-pane", "-p", "-t", tabs))
+        self.assertEqual(put_log.read_text(), f"rig/t1 {shot}\n")  # never put: over 8 MB and no image
 
 
 if __name__ == "__main__":

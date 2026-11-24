@@ -1,7 +1,8 @@
 #!/bin/sh
 # mmini window: a tmux server of its own (only this folder's mmini.tmux.conf is read) with three panes: the sidebar
-# (left, full height: mmini.py sidebar), the tab bar (top right: mmini.py tabs) and the view (below it: view.sh,
-# which shows the picked terminal through `hc attach`).
+# (left, full height: mmini.py sidebar), the tab bar (top right: mmini.py tabs) and the view (below it: mmini.py
+# view, a relay around view.sh, which shows the picked terminal through `hc attach`; the relay sends a file dropped
+# for a terminal of another machine there with `hc put`, see mmini.py's ViewRelay).
 #
 # mmini.app types `exec env MMINI_WINDOW=<folder> sh start.sh` into a new Ghostty window's login shell, so the
 # settings exported in ~/.zshrc apply. Any other terminal works too: `sh ~/.local/share/mmini/start.sh` (a window
@@ -72,8 +73,10 @@ pane() { case "$1" in %[0-9]*) return 0 ;; *) return 1 ;; esac; }
 
 # The view first (the window's whole size), then the sidebar split off at full height on the left, then the tab bar
 # above the view. Each pane sizes itself exactly afterwards (mmini.py: the sidebar's width, the tab bar's rows).
+# The view keeps tmux's terminal type (screen-256color): xterm-mmini is for mmini's own curses panes, and what the
+# view shows is hc attach's output, passed on unchanged.
 view=$(t -f "$here/mmini.tmux.conf" new-session -d -s mmini -x "$cols" -y "$rows" -P -F '#{pane_id}' \
-  "sh $(q "$here/view.sh")" 2>&1)
+  "exec python3 $(q "$here/mmini.py") view" 2>&1)
 pane "$view" || fail "tmux could not start: $view"
 side=$(t split-window -f -hb -d -l "$width" -t "$view" -P -F '#{pane_id}' "$py sidebar" 2>&1)
 pane "$side" || fail "tmux could not make the sidebar: $side"

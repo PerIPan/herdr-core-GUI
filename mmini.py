@@ -2,9 +2,12 @@
 """mmini: sidebar and tab bar for herdr-core (`hc`) terminals, in one Ghostty window.
 
 herdr-core draws nothing itself, so the window runs a tmux of its own (start.sh, mmini.tmux.conf) with three panes:
-this file draws two of them ("python3 mmini.py sidebar" on the left, "python3 mmini.py tabs" on top), view.sh is the
-third (it runs `hc attach` on the terminal the other two picked). tmux passes a click to the pane under the pointer
-at once, so no click is spent on moving the keyboard first; after a pick the keyboard goes to the view (focus_view).
+this file draws two of them ("python3 mmini.py sidebar" on the left, "python3 mmini.py tabs" on top), the third is
+the view: "python3 mmini.py view" (relay_view), a relay around view.sh, which runs `hc attach` on the terminal the
+other two picked. The relay passes every byte on unchanged, except a file dropped (a bracketed paste of paths of this
+Mac) while a terminal of another machine is shown: it sends the files there (`hc put`) and pastes their paths there
+(ViewRelay). tmux passes a click to the pane under the pointer at once, so no click is spent on moving the keyboard
+first; after a pick the keyboard goes to the view (focus_view).
 
 The sidebar lists, top to bottom, "needs you" (agents blocked or in error, and agents done that were not shown
 since; only while there is one), "spaces" (projects on the home machine), "servers" (every machine
@@ -14,9 +17,14 @@ the home machine, opened in this Mac's browser; only while there is one) and "ag
 the file "servers"); the agents (g) and the dev servers (w) are shown until hidden (the files "agents",
 "devservers"). While the home machine's login keychain is locked (checked through its core at the start, then every
 4 hours; MMINI_KEYCHAIN=0 turns the check off), a red line at the bottom says so; a click on it shows the terminal
-"unlock" there (or opens one). A Claude Code agent's name can carry a mark for the login it bills: its label
-"account" looked up in MMINI_MARKS ("personal=¹,work=²"; a value not in it gets ³; no setting, no marks), and with
-no label MMINI_SHARED_MARK (³) on a server whose ssh user is MMINI_SHARED_USER.
+"unlock" there (or opens one). Above it, in the open sidebar, one line per Claude subscription: how much of its
+5-hour window is used (no reset time), from the files usage.sh (Claude Code's status line command there) saves
+on the home machine, read through its core every 10 minutes (MMINI_USAGE=0 turns it off). They are shown until
+hidden (u, or "Hide usage" in their menu, a right click on one; "Show usage" in any row menu then; the file
+"usagelines", as "usage" is usage.sh's folder): hidden, they are not drawn and not checked. A Claude Code agent's
+name can carry a mark for the login it bills: its label "account" looked up in MMINI_MARKS ("personal=¹,work=²"; a
+value not in it gets ³; no setting, no marks), and with no label MMINI_SHARED_MARK (³) on a server whose ssh user
+is MMINI_SHARED_USER.
 The tab bar shows one tab per terminal of the current space or server. A terminal's space is its herdr-core label
 "space", else its parent's space, else the repo folder below ~/dev, else the last folder of its cwd. In the code a
 server is still a "rig" (Group.kind, names.json keys "rig:<machine>"); only what is drawn says "server".
@@ -28,14 +36,15 @@ window has no live sidebar the tab bar runs it itself, so its tabs stay fresh. T
 at full height with one tmux split (split_sidebar).
 
 The panes talk through files. Per window ($MMINI_WINDOW, set by the launcher app; without it the shared folder):
-target, gen, view.pid, view.loop, tabs.json, poke, poke.full (the engine asks every label again), ask (a right click
-in the view: the tab bar opens the shown terminal's menu), panes (tmux pane ids: side=, tabs=, view=), sidebar.pid,
+target, gen, view.pid, view.loop, tabs.json, poke, poke.full (the engine asks every label again), ask (requests to
+the tab bar, one per line: "menu", a right click in the view, opens the shown terminal's menu; "notice <text>", from
+the view relay, a drop it could not send), panes (tmux pane ids: side=, tabs=, view=), sidebar.pid,
 title (the window title of the shown terminal, for view.sh), terminfo (xterm-mmini, compiled by start.sh).
 Shared by all windows ($MMINI_STATE): group, last.json, names.json (display names: {"space:dev": "Main",
 "rig:guest": "Guest", "term:mini/t5": "web"}), sidebar ("open", "strip" or "hidden": how the next sidebar
 starts; while it does not exist, the old file "collapsed" is read instead, 1 = strip), servers ("shown" or
-"hidden", default hidden), agents and devservers (the same words, default shown), width (the open sidebar's width
-once its divider was dragged), split (where the separator above the agents was moved to; no file: the automatic
+"hidden", default hidden), agents, devservers and usage (the same words, default shown), width (the open sidebar's
+width once its divider was dragged), split (where the separator above the agents was moved to; no file: the automatic
 layout), seen.json (address -> hc's turn at which that terminal was last shown while done: "needs you" drops it). So
 a second mmini window never switches or signals the first one's view.
 
@@ -43,16 +52,20 @@ Rename, create, delete. A rename is a display name kept in names.json: the space
 hc name and every address stay as they are (herdr-core 0.1.21 has no way to rename a terminal, so terminals get a
 display name too). "+ new space" and "+ add server" are the last rows of their sections; adding a server runs
 `hc machine add` in a new terminal on this Mac, where its questions can be answered. Deleting a space ends and
-removes its terminals (end_steps), ending an agent does the same for one, forgetting a server is `hc machine rm`;
-each only after its name was typed.
+removes its terminals (end_steps), ending an agent does the same for one, each after the list of what ends and "y"
+(as the tab bar's Close; a y within DELETE_HOLD of the d is not taken, so a word typed into the sidebar ends
+nothing); forgetting a server is `hc machine rm`, only after its name was typed. A question asked from a right-click
+menu gives the keyboard back to the view once a key answered or cancelled it.
 
 Keys. Sidebar: up/down (j/k), enter, a the menu of the row (also a right click: Open, New terminal here, Rename,
 Move to space, Delete space / Forget server / End terminal, as the row allows, and Show / Hide servers, agents, dev
-servers), n new shell, e rename, d delete, s new space, m move an agent, v show or hide the servers, g the agents, w
-the dev servers, c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open the strip
+servers; Show usage while the usage lines are hidden), n new shell, e rename, d delete, s new space, m move an agent,
+v show or hide the servers, g the agents, w the dev servers, u the usage lines (also a right click on one: their
+menu, Hide usage), c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open the strip
 again (also a click on "›" on the line above), q hide (the same as hidden: the program ends), z zoom, [ ] (also
-- =) the separator up or down, r refresh (also the keychain and the dev servers), ? the list of keys, then the
-account marks (also a click on the "?" at the end of the last line; any key or click closes it). Tab bar:
+- =) the separator up or down, r refresh (also the keychain, the dev servers and the usage), ? the list of keys,
+then the account marks and what the status dots' colours mean (also a click on the "?" at the end of the last
+line; any key or click closes it). Tab bar:
 left/right (h/l), enter, z zoom, ? its keys, a right click on a tab (or in the view: the shown terminal) its menu
 (New terminal, Rename, Move to space, Close; Close asks for "y"), clicks only: keys typed then go on to the view;
 a paste (a dropped file) in the sidebar or the tab bar goes on to the view too; without a sidebar, c or o (also a click on "›" at its left edge) brings the sidebar
@@ -84,8 +97,8 @@ the pane between two attaches.
 Runs on Python 3.9, standard library only. Settings (environment): MMINI_HC, MMINI_STATE, MMINI_WINDOW,
 MMINI_FIRST (the home machine; unset: the only machine `hc machine ls` knows, else this Mac), MMINI_WIDTH (the open
 width until a divider is dragged), MMINI_NARROW (width of the folded strip, default 6), MMINI_MARKS, MMINI_SHARED_USER, MMINI_SHARED_MARK (account marks), MMINI_DEV_PROGRAM (default node),
-MMINI_KEYCHAIN=0, MMINI_BROWSER=0, MMINI_AUTOSIZE=0, MMINI_AUTOOPEN=0, MMINI_TMUX=0 (no tmux calls at all, for the
-tests).
+MMINI_KEYCHAIN=0, MMINI_USAGE=0, MMINI_BROWSER=0, MMINI_AUTOSIZE=0, MMINI_AUTOOPEN=0, MMINI_TMUX=0 (no tmux calls at
+all, for the tests).
 """
 
 from __future__ import annotations
@@ -94,22 +107,28 @@ import base64
 import concurrent.futures
 import curses
 import errno
+import fcntl
 import json
 import locale
+import math
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
 import struct
 import subprocess
 import sys
+import tempfile
+import termios
 import threading
 import time
+import tty
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Collection, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Collection, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 
 def env_int(name: str, default: int, low: int, high: int) -> int:
@@ -813,6 +832,146 @@ def keychain_text(room: int) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# The 5-hour usage (pure): how much of each Claude subscription's 5-hour window is used, one line per subscription
+# ---------------------------------------------------------------------------------------------------------------
+# usage.sh, Claude Code's status line command on the home machine (one `sh usage.sh <name>` per config folder),
+# saves the rate_limits.five_hour numbers Claude Code hands it after each answer to
+# ~/.local/state/mmini/usage/<name>.json there, one line of JSON. mmini only reads those files, through the home
+# core (`hc exec`, the default folder of the account that core runs as): no login, no token, no network of its own.
+# The number is the last one a session there saw: use elsewhere (claude.ai, the phone) shows up only with the next
+# answer on that machine. At most USAGE_FILES files, USAGE_BYTES each; the script always ends with 0, so only hc's
+# own failures fail.
+USAGE_FILES = 64
+USAGE_BYTES = 4096
+USAGE_SCRIPT = ('n=0; for f in "$HOME"/.local/state/mmini/usage/*.json; do [ "$n" -lt ' + str(USAGE_FILES) +
+                ' ] || break; if [ -f "$f" ]; then /usr/bin/head -c ' + str(USAGE_BYTES) +
+                ' "$f"; echo; n=$((n + 1)); fi; done; exit 0')
+USAGE_SECONDS = 600.0  # at the start, then every 10 minutes (r: at once); every minute was too much for the owner
+# the check could not run (the home machine asleep, not connected): nothing is drawn, and it runs again in 10
+# minutes (never sooner than a check that worked), then twice as long after each failure in a row, at most every
+# hour (as the keychain check, with a shorter ceiling: the number goes stale in minutes, a locked keychain does not)
+USAGE_FAILED_SECONDS = 600.0
+USAGE_FAILED_MAX = 3600.0
+USAGE_NAME = re.compile(r"[A-Za-z0-9._-]{1,32}")  # as usage.sh: it is the file's name too
+USAGE_MAX = 6  # subscriptions drawn at most
+USAGE_RESETS_MAX = 10 ** 10  # a resets_at after the year 2286 is junk (no reset time is drawn; it says only "passed")
+USAGE_LOW = 50  # under it the line is dim
+USAGE_HIGH = 80  # from it bold, in the keychain warning's colour
+# Lines the list keeps before usage lines are drawn: both parts of the separator (rule_limits: "spaces" and a row,
+# the line, "agents" and a row). Below that the usage lines go, all of them: never half the subscriptions.
+USAGE_LIST_MIN = 5
+
+
+@dataclass(frozen=True)
+class Usage:
+    """One subscription's 5-hour window, as usage.sh saved it: its name (the `sh usage.sh <name>` argument, the
+    account label), the share used (0-100, may be fractional) and when the window resets (Unix epoch seconds)."""
+
+    name: str
+    used: float
+    resets_at: int
+
+    def percent(self, now: float) -> int:
+        """The share to draw, a whole number (half up), 0-100. A window whose resets_at has passed: 0 (the next
+        window starts with the next message, and nothing was used in it yet)."""
+        if self.resets_at <= now:
+            return 0
+        return max(0, min(100, int(self.used + 0.5)))
+
+
+def usage_enabled() -> bool:
+    """Is the 5-hour usage on? Not with MMINI_USAGE=0 (read at each call): no check, no lines."""
+    return os.environ.get("MMINI_USAGE", "1") != "0"
+
+
+def parse_usage(out: str) -> List[Usage]:
+    """USAGE_SCRIPT's output (one JSON object per line, as usage.sh writes them) as at most USAGE_MAX subscriptions,
+    by name. A line is left out unless it is an object with a valid name (USAGE_NAME), a five_hour object whose
+    used_percentage is a finite number (not true/false) and whose resets_at is a whole number from 0 to
+    USAGE_RESETS_MAX. A name given twice keeps its first line.
+
+    Never raises on what a file holds: a line json reads but Python cannot use is left out too, as any junk (a
+    file in that folder may be hand-written or broken, not usage.sh's): a whole number too large for a float
+    (OverflowError; jq keeps such a literal as it is) and nesting deeper than the stack (RecursionError, Python
+    3.9's json). An exception here would leave the check before it counted (fetch_usage: a failure, backing off)."""
+    found: Dict[str, Usage] = {}
+    for line in out.splitlines():
+        try:
+            entry = usage_entry(json.loads(line))
+        except (ValueError, TypeError, OverflowError, RecursionError):
+            continue
+        if entry is not None:
+            found.setdefault(entry.name, entry)
+    return [found[n] for n in sorted(found, key=lambda n: (natural(n), n))][:USAGE_MAX]
+
+
+def usage_entry(data: object) -> Optional[Usage]:
+    """One parsed line of parse_usage as a Usage, or None when it is not one (parse_usage says what is kept).
+    float() of an int too large raises OverflowError, which parse_usage catches."""
+    if not isinstance(data, dict):
+        return None
+    name, five = data.get("name"), data.get("five_hour")
+    if not isinstance(name, str) or not USAGE_NAME.fullmatch(name) or not isinstance(five, dict):
+        return None
+    used, resets = five.get("used_percentage"), five.get("resets_at")
+    if not isinstance(used, (int, float)) or isinstance(used, bool) or not math.isfinite(float(used)):
+        return None
+    if not isinstance(resets, int) or isinstance(resets, bool) or not 0 <= resets <= USAGE_RESETS_MAX:
+        return None
+    return Usage(name, float(used), resets)
+
+
+def usage_due(last: Optional[float], now: float, fails: int = 0) -> bool:
+    """Is a usage check due? At the start (`last` None), then USAGE_SECONDS after the last one; after a failed check
+    (`fails` in a row) USAGE_FAILED_SECONDS, doubled for each further failure, at most USAGE_FAILED_MAX."""
+    if last is None:
+        return True
+    if fails > 0:
+        wait = min(USAGE_FAILED_SECONDS * 2 ** min(fails - 1, 16), USAGE_FAILED_MAX)
+    else:
+        wait = USAGE_SECONDS
+    return now - last >= wait
+
+
+def usage_texts(entries: Sequence[Usage], now: float, room: int,
+                marks: Optional[Mapping[str, str]] = None) -> List[str]:
+    """One line per subscription in `room` columns, every line in the same form: the widest that fits them all.
+
+        " claude ¹  42%"    the name, its account mark (MMINI_MARKS; none: the name alone), the share used
+        " claude ¹ 42%"
+        " ¹ 42%"            the mark alone (no mark: the name, cut to fit)
+
+    In the first form the names are padded to the longest one and the share takes 3 columns, so the shares line
+    up. No reset time (owner, 24 Nov: "no need for the 'resets xx:xx'"): the line is the name and the share only.
+    A window that has passed shows 0% (Usage.percent). A line nothing fits in is ""."""
+    marks = ACCOUNT_MARKS if marks is None else marks
+    if not entries:
+        return []
+    labels = [u.name + (" " + marks[u.name] if marks.get(u.name) else "") for u in entries]
+    pad = max(text_width(label) for label in labels)
+    shares = [u.percent(now) for u in entries]
+    forms = [[f" {lb}{' ' * (pad - text_width(lb))} {sh:>3}%" for lb, sh in zip(labels, shares)],
+             [f" {lb} {sh}%" for lb, sh in zip(labels, shares)]]
+    for lines in forms:
+        if all(text_width(line) <= room for line in lines):
+            return lines
+    out = []
+    for u, share in zip(entries, shares):
+        tail = f" {share}%"
+        mark = marks.get(u.name, "")
+        name = mark or clip(u.name, room - 1 - len(tail))
+        line = f" {name}{tail}"
+        out.append(line if name and text_width(line) <= room else (tail if len(tail) <= room else ""))
+    return out
+
+
+def usage_tone(percent: int) -> str:
+    """How a line with this share is drawn: "low" (under USAGE_LOW: dim), "" (normal) or "high" (USAGE_HIGH and
+    more: bold, in the keychain warning's colour)."""
+    return "low" if percent < USAGE_LOW else "high" if percent >= USAGE_HIGH else ""
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # Dev servers (pure): node programs (MMINI_DEV_PROGRAM) listening on the home machine, opened in this Mac's browser
 # ---------------------------------------------------------------------------------------------------------------
 # Only the listeners of one program name are listed (MMINI_DEV_PROGRAM, default node). lsof once for the listeners
@@ -1080,6 +1239,11 @@ RENAME = Entry("rename", "Rename", "e")
 SERVERS_KEY = "v"  # shows or hides the servers section
 AGENTS_KEY = "g"  # shows or hides the agents section ("a" is the menu)
 DEVS_KEY = "w"  # shows or hides the dev servers (web pages)
+USAGE_KEY = "u"  # shows or hides the 5-hour usage lines (free in the sidebar and the tab bar)
+# The usage lines are no rows (no cursor, a left click does nothing), but a right click on one opens a menu of its
+# own with this item: "Hide usage" first, then the section switches every menu ends with.
+USAGE_ITEM = Item("usage", "", "")
+USAGE_TITLE = "5-hour usage"
 
 
 def servers_entry(shown: bool) -> Entry:
@@ -1097,17 +1261,30 @@ def devs_entry(shown: bool) -> Entry:
     return Entry("devs", "Hide dev servers" if shown else "Show dev servers", DEVS_KEY)
 
 
+def usage_switch(shown: bool) -> Entry:
+    """The usage lines' switch, named for what it does now."""
+    return Entry("usage", "Hide usage" if shown else "Show usage", USAGE_KEY)
+
+
 def menu_entries(item: Item, group: Optional[Group], first: str = FIRST, servers: bool = False,
-                 agents: bool = True, devs: bool = True) -> List[Entry]:
+                 agents: bool = True, devs: bool = True, usage: bool = True) -> List[Entry]:
     """The menu of a row, ending with the three section switches: "Show servers" / "Hide servers", "Show agents" /
     "Hide agents", "Show dev servers" / "Hide dev servers" (`servers`, `agents`, `devs`: the section is shown now). A
     space can be deleted; a server (another machine) forgotten; this Mac and the home machine (`first`, its server
-    row) never. An agent can be moved only when it is in a space. A "+" row has only its own action."""
-    return menu_actions(item, group, first) + [servers_entry(servers), agents_entry(agents), devs_entry(devs)]
+    row) never. An agent can be moved only when it is in a space. A "+" row has only its own action.
+
+    The usage lines: their own menu (USAGE_ITEM, a right click on one) has "Hide usage" first. Once hidden
+    (`usage` False) there is no line left to right-click, so every row menu ends with "Show usage" instead; while
+    they are shown (or off: MMINI_USAGE=0, the caller passes True) a row's menu has no usage entry, so the menus
+    are the same as before the switch existed."""
+    switches = [servers_entry(servers), agents_entry(agents), devs_entry(devs)]
+    if item.kind == USAGE_ITEM.kind:
+        return [usage_switch(True)] + switches
+    return menu_actions(item, group, first) + switches + ([] if usage else [usage_switch(False)])
 
 
 def menu_actions(item: Item, group: Optional[Group], first: str = FIRST) -> List[Entry]:
-    """The entries of a row's menu that act on that row (see menu_entries)."""
+    """The entries of a row's menu that act on that row (see menu_entries; the usage lines' menu is built there)."""
     if item.kind == "needs":
         return [OPEN]
     if item.kind == "dev":
@@ -1292,7 +1469,7 @@ def ends_line(pairs: Sequence[Tuple[str, str]]) -> str:
 
 
 def confirm_matches(typed: str, accepted: Sequence[str]) -> bool:
-    """A delete goes ahead only on exactly one of the accepted names (spaces at the ends do not count)."""
+    """Forget server goes ahead only on exactly one of the accepted names (spaces at the ends do not count)."""
     typed = typed.strip()
     return bool(typed) and typed in accepted
 
@@ -1345,31 +1522,70 @@ HELP_KEY = "?"  # the list of keys (KEY_HELP), drawn over the sidebar until the 
 KEY_HELP = (("↑↓ j k", "move"), ("enter", "show it"), (MENU_KEY, "menu (right click)"), ("e", "rename"),
             ("d", "delete, forget, end"), ("n", "new terminal here"), ("s", "new space"), ("m", "move to a space"),
             (SERVERS_KEY, "show/hide servers"), (AGENTS_KEY, "show/hide agents"), (DEVS_KEY, "dev servers on/off"),
+            (USAGE_KEY, "show/hide usage"), ("", "(or right click it)"),
             ("c", "fold, then hide"), ("o", "open the strip"), ("q", "hide"),
             ("z", "zoom the view"), ("‹ back", "click: zoom ends"), ("[ ] - =", "separator up/down"), ("r", "refresh"),
             (HELP_KEY, "this list"))
 HELP_TITLE = "keys · any key closes"
+HELP_TEXT_X = 9  # the column a "?" line's text starts at: a space, the 7-column key, a space
+# The status dots, last in the "?" list, as dot_attr draws them (STATUS_COLOR; summary_status for a space or server
+# row): (a status of that colour, the dot, its colour word, what it means). Cut to the 20 columns of text a
+# 30-column sidebar has; README's "Status dots" says the same in full. "" is no status: the hollow dot, dim (grey).
+DOT_HELP = (("blocked", "●", "red", "blocked, error"), ("working", "●", "yellow", "working"),
+            ("done", "●", "green", "done, to read"), ("idle", "●", "blue", "idle, no news"),
+            ("", "○", "grey", "no status"))
+DOT_TITLE = "status dots"
+DOT_NOTE = "spaces, servers: most urgent"
+
+
+@dataclass(frozen=True)
+class HelpLine:
+    """One line of the "?" list as draw_help puts it: the text, dim or not, and on a status dot's line the status
+    whose colour (dot_attr) its dot and colour word take, at `spans` ((column, columns), cut to the text drawn).
+    `status` None: no colour."""
+
+    text: str
+    dim: bool = False
+    status: Optional[str] = None
+    spans: Tuple[Tuple[int, int], ...] = ()
 
 
 def help_entries() -> List[Tuple[str, str]]:
-    """The "?" list's lines: KEY_HELP, then the account marks (mark_legend; none while no mark is set)."""
+    """The "?" list's key lines: KEY_HELP, then the account marks (mark_legend; none while no mark is set)."""
     return list(KEY_HELP) + mark_legend()
 
 
-def help_lines(width: int, height: int) -> List[str]:
+def help_rows(width: int, height: int) -> List[HelpLine]:
     """The "?" list in `width` columns and `height` lines: a title, then one key per line, the key in a column of
-    its own. When the lines do not all fit, the last one that does says "…" (any key closes the list, so it never
-    scrolls; the sidebar is full height, so this only happens on a very short window)."""
+    its own, then the status dots (DOT_HELP under DOT_TITLE, then DOT_NOTE). When the lines do not all fit, the last
+    one that does says "…" (any key closes the list, so it never scrolls; the sidebar is full height, so this only
+    happens on a short window, and the dots, last, go first)."""
     if width <= 0 or height <= 0:
         return []
     # the key column is 7 wide; an ASCII stand-in that is longer ("cmd+shift+enter") pushes its text along
     # then the account marks after an agent's name (mark_legend): not keys, but this is where they are explained
-    lines = [" " + glyph(HELP_TITLE)] + [f" {glyph(k).ljust(7)} {text}" for k, text in help_entries()]
-    lines = [clip(line, width) for line in lines]
-    if len(lines) > height:
-        lines = lines[:height - 1] + [" …"]
-    return lines
-PROMPT_TITLE_MAX = 8  # lines a prompt's question may take (a delete lists what ends); the list keeps the rest
+    rows = [HelpLine(" " + glyph(HELP_TITLE), dim=True)]
+    rows += [HelpLine(f" {glyph(k).ljust(7)} {text}") for k, text in help_entries()]
+    rows.append(HelpLine(" " + DOT_TITLE, dim=True))
+    rows += [HelpLine(f" {glyph(dot).ljust(7)} {word}: {meaning}", status=status,
+                      spans=((1, 1), (HELP_TEXT_X, len(word)))) for status, dot, word, meaning in DOT_HELP]
+    rows.append(HelpLine(" " + DOT_NOTE, dim=True))
+    out = []
+    for row in rows:
+        text = clip(row.text, width)
+        kept = len(text) - (1 if text != row.text else 0)  # a cut line ends with "…": that stays plain
+        out.append(replace(row, text=text, spans=tuple((x, min(n, kept - x)) for x, n in row.spans if x < kept)))
+    if len(out) > height:
+        out = out[:height - 1] + [HelpLine(" …")]
+    return out
+
+
+def help_lines(width: int, height: int) -> List[str]:
+    """The text of the "?" list's lines (help_rows)."""
+    return [row.text for row in help_rows(width, height)]
+
+
+PROMPT_TITLE_MAX = 8  # lines a typed prompt's question may take; the list keeps the rest (a delete: yes_height)
 
 
 def next_sidebar_state(current: str) -> str:
@@ -1379,13 +1595,16 @@ def next_sidebar_state(current: str) -> str:
 
 
 def sidebar_frame(height: int, message: bool, prompt: bool, strip: bool = False, title_lines: int = 1,
-                  keychain: bool = False, message_lines: int = 1) -> Tuple[int, int, int, int]:
+                  keychain: bool = False, message_lines: int = 1, usage: int = 0) -> Tuple[int, int, int, int]:
     """(lines for the list, line of "‹" or -1, line of "›" or -1, lines for the prompt or message just above them).
     "‹" (fold; in the strip: hide) always takes the last line, except on a one-line screen, where that line is the
     cursor's. In the strip "›" (open) takes the line above it from three lines on: the cursor's line wins, then "‹",
     then "›". Then the keychain warning (`keychain`) takes the line above those (keychain_line), and a message
     (notice, hc error; up to `message_lines` lines) or the prompt gets a line above that, the prompt its question too
-    (up to `title_lines` lines) when there is room; the list keeps at least two lines then, one for the cursor."""
+    (up to `title_lines` lines) when there is room; the list keeps at least two lines then, one for the cursor.
+    Last, the `usage` lines (one per subscription; the caller passes 0 for the strip) sit between the prompt or
+    message and the keychain warning (usage_rows), all of them or none: only while the list keeps USAGE_LIST_MIN
+    lines."""
     height = max(0, height)
     arrow = 1 if height >= 2 else 0
     opener = 1 if strip and height >= 3 else 0
@@ -1397,7 +1616,19 @@ def sidebar_frame(height: int, message: bool, prompt: bool, strip: bool = False,
         extra = max(1, min(message_lines, left - 2))
     else:
         extra = 0
-    return left - extra, height - 1 if arrow else -1, height - 2 if opener else -1, extra
+    shown = usage if usage > 0 and left - extra - usage >= USAGE_LIST_MIN else 0
+    return left - extra - shown, height - 1 if arrow else -1, height - 2 if opener else -1, extra
+
+
+def usage_rows(height: int, strip: bool, keychain: bool, body: int, extra: int) -> List[int]:
+    """The lines of the usage lines in sidebar_frame's layout (`body` and `extra` as it gave them): from below the
+    list and the prompt or message down to just above the keychain warning (or "›", or "‹"). Empty when it gave
+    them none."""
+    end = keychain_line(height, strip, keychain)
+    if end < 0:
+        height = max(0, height)
+        end = height - (1 if height >= 2 else 0) - (1 if strip and height >= 3 else 0)
+    return list(range(body + extra, end))
 
 
 def keychain_line(height: int, strip: bool, keychain: bool) -> int:
@@ -1442,6 +1673,23 @@ def prompt_lines(title: str, ask: str, width: int, room: int) -> List[str]:
     return head[:keep - 1] + [clip(head[keep - 1] + " …", width) if keep < len(head) else head[keep - 1]] + tail
 
 
+def yes_height(title: str, ask: str, width: int) -> int:
+    """The lines a one-key question of the sidebar needs to be on screen whole: its title (what ends) and `ask` (its
+    keys), wrapped. Unlike a typed question it has no PROMPT_TITLE_MAX: sidebar_frame gives it all of them, up to
+    the last two lines of the list."""
+    return len(wrap_words(title, width)) + len(wrap_words(ask, width))
+
+
+def yes_lines(title: str, ask: str, width: int, room: int) -> Tuple[List[str], bool]:
+    """A one-key question of the sidebar (d on a space or an agent) in `room` lines of `width` columns: (its title
+    wrapped then `ask`, False). When that does not all fit: (prompt_lines' cut title, marked "…", with DELETE_CUT in
+    place of `ask`, True). A cut question does not take CLOSE_YES, as the tab bar's Close: nothing ends that was not
+    on screen."""
+    if yes_height(title, ask, width) <= room:
+        return prompt_lines(title, ask, width, room), False
+    return prompt_lines(title, DELETE_CUT, width, room), True
+
+
 def line_label(arrow: str, word: str, room: int) -> str:
     """One of the sidebar's arrow lines: " ‹ fold", " ‹ hide" or " › open", the word only when it fits."""
     whole = f" {arrow} {word}"
@@ -1466,14 +1714,18 @@ def help_column(label: str, width: int) -> int:
 
 
 def sidebar_hit(y: int, arrow_y: int, open_y: int, rows: Mapping[int, Item], x: int = -1,
-                help_x: int = -1, rule_y: int = -1, keychain_y: int = -1) -> Tuple[str, Optional[Item]]:
+                help_x: int = -1, rule_y: int = -1, keychain_y: int = -1,
+                usage_ys: Sequence[int] = ()) -> Tuple[str, Optional[Item]]:
     """What a click at column x of line y of the sidebar hits: ("help", None) on the "?" at the end of the "‹" line
     (help_x), ("step", None) anywhere else on the "‹" line (what c does), ("open", None) anywhere on the "›" line,
     ("rule", None) anywhere on the separator's line (rule_y: a drag starts there; never a row, never a menu),
-    ("keychain", None) anywhere on the keychain warning (keychain_y), ("item", the item drawn on that line) or
+    ("keychain", None) anywhere on the keychain warning (keychain_y), ("usage", None) anywhere on a usage line
+    (usage_ys: a right click opens their menu, a left click does nothing), ("item", the item drawn on that line) or
     ("", None)."""
     if keychain_y >= 0 and y == keychain_y:
         return ("keychain", None)
+    if y in usage_ys:
+        return ("usage", None)
     if arrow_y >= 0 and y == arrow_y:
         return ("help", None) if help_x >= 0 and x == help_x else ("step", None)
     if open_y >= 0 and y == open_y:
@@ -1512,7 +1764,7 @@ def pick_agent_rows(entries: Sequence[Row], cap: int, cursor: int) -> List[Row]:
 
 # The separator (the rule between the upper part and the agents) can be moved: dragged with the mouse, or [ ] (also
 # - =). Each part keeps at least its heading and one row: above it "spaces" and a row, from it down the line itself,
-# "agents  grouped" and a row.
+# "agents" and a row.
 RULE_TOP_MIN = 2
 RULE_LOW_MIN = 3
 SPLIT_MAX = 1000  # lines: a "split" file naming a taller pane is junk
@@ -1826,12 +2078,30 @@ def tab_info(tab: Mapping[str, object], room: int = 200) -> str:
 # ---------------------------------------------------------------------------------------------------------------
 # The tab menu (pure): a right click on a tab
 # ---------------------------------------------------------------------------------------------------------------
-CLOSE_YES = "y"  # the one key that closes a tab after its question; any other key or a click cancels
+# the one key that closes a tab after its question, and deletes a space or ends an agent after the sidebar's d (is_yes);
+# any other key or a click cancels
+CLOSE_YES = "y"
 TAB_MENU_HINT = "a click picks · a key closes"
 CLOSE_ROWS = 10  # the most rows the tab bar takes while Close's question shows what ends
-CLOSE_AGAIN = 1.0  # seconds a y is not taken after Close asked again (what ends had changed)
+CLOSE_AGAIN = 1.0  # seconds a y is not taken after Close or d asked again (what ends had changed: changed_question)
 TAB_ASK = {"rename": "enter saves · empty: own name · esc cancels", "move": "enter moves · esc cancels",
            "close": f"{CLOSE_YES} closes · any other key cancels"}
+# in place of TAB_ASK["close"] while Close's list is cut: CLOSE_YES does nothing then, every other key cancels
+CLOSE_CUT = "the list is cut: widen the window, or end it in the sidebar · any other key cancels"
+# The sidebar's d on a space or an agent asks as Close does (owner, 24 Nov: y is enough, no name typed again): the
+# list of what ends, then CLOSE_YES (Sidebar.answer_delete). Forget server still asks for the server's typed name: the
+# one-key request was for spaces, and forgetting ends nothing.
+DELETE_ASK = {"space": f"{CLOSE_YES} deletes · any other key cancels",
+              "end": f"{CLOSE_YES} ends · any other key cancels"}
+# in place of DELETE_ASK while d's list is cut: CLOSE_YES does nothing then, every other key cancels
+DELETE_CUT = "the list is cut: widen the sidebar · any other key cancels"
+# Seconds a y is not taken after the sidebar's d asked (yes_waits). The sidebar can keep the keyboard unnoticed (after
+# j/k, or a click on a heading), and a word typed there brings its y right after its d: "tidy", "dynamic", or "lady"
+# (a opens the menu, d is its Delete space). Each key is handled on its own, so without this that y ended the space
+# (review of 24 Nov). Typed keys come a few tenths of a second apart; a y pressed after reading the list comes later.
+# The tab bar's Close needs no hold: only a click reaches it, and a key typed after its right click goes to the view.
+DELETE_HOLD = 0.5
+DELETE_NO = "cancelled: nothing ended"  # d's question went unanswered (any other key, a click, a paste)
 
 
 def tab_menu_entries(kind: str) -> List[Entry]:
@@ -1908,6 +2178,27 @@ def close_question(tab: Mapping[str, object]) -> Prompt:
     return Prompt("close", question, address=address, data=(address,) + tuple(a for a, _, _ in ends))
 
 
+def is_yes(key: int) -> bool:
+    """CLOSE_YES in either case: the one key that answers a one-key question (the tab's Close, the sidebar's d on a
+    space or an agent). Any other key cancels it."""
+    return key in (ord(CLOSE_YES), ord(CLOSE_YES.upper()))
+
+
+def yes_waits(cut: bool, asked_at: float, now: float, hold: float = CLOSE_AGAIN) -> bool:
+    """CLOSE_YES is not taken yet: the question is cut (what ends is not all on screen), or it was asked less than
+    `hold` ago. After a question was asked again (changed_question): CLOSE_AGAIN, so a y meant for the old list never
+    ends the new one. After the sidebar's d first asked: DELETE_HOLD, so a d and a y typed in one go end nothing."""
+    return cut or now - asked_at < hold
+
+
+def changed_question(asked: Prompt, again: Prompt) -> Optional[Prompt]:
+    """A one-key question built again at CLOSE_YES from what is listed now: None when the same terminals end (the y
+    goes ahead), else `again` titled "changed: …", to be asked instead."""
+    if set(again.data) == set(asked.data):
+        return None
+    return replace(again, title="changed: " + again.title, by_mouse=asked.by_mouse)
+
+
 def tab_after_close(order: Sequence[str], gone: Collection[str], shown: str) -> str:
     """The tab to show once the shown one closed: the next one after it that stays, else the nearest before it,
     else "" (nothing). `shown` still open: it stays."""
@@ -1923,11 +2214,19 @@ def tab_after_close(order: Sequence[str], gone: Collection[str], shown: str) -> 
 # State folders
 # ---------------------------------------------------------------------------------------------------------------
 def write_atomic(path: Path, text: str, encoding: Optional[str] = None) -> None:
-    """Write via a temp file and os.replace, so readers never see half a file."""
+    """Write via a temp file and os.replace, so readers never see half a file. A write or replace that fails (a
+    folder at `path`, a full disk) removes the temp file, then raises: no stray .<name>.<pid>.<tid>.tmp is left."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    tmp.write_text(text, encoding=encoding)
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(text, encoding=encoding)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def read_text(path: Path) -> str:
@@ -2061,6 +2360,22 @@ def read_devs_shown(state: Path = STATE) -> bool:
 
 def write_devs_shown(shown: bool, state: Path = STATE) -> None:
     write_atomic(state / "devservers", ("shown" if shown else "hidden") + "\n")
+
+
+# The usage lines' switch (u, Hide usage). Not "usage": that is the folder usage.sh saves its numbers in
+# (${MMINI_STATE:-~/.local/state/mmini}/usage/<name>.json), this very state folder where the sidebar runs on the home
+# machine itself. A file there made usage.sh's mkdir fail (nothing saved, ever); a folder there made every hide fail.
+USAGE_SWITCH = "usagelines"
+
+
+def read_usage_shown(state: Path = STATE) -> bool:
+    """Are the 5-hour usage lines shown (and checked)? The shared file "usagelines" (USAGE_SWITCH) says "hidden";
+    anything else (no file: the default) is shown."""
+    return read_text(state / USAGE_SWITCH) != "hidden"
+
+
+def write_usage_shown(shown: bool, state: Path = STATE) -> None:
+    write_atomic(state / USAGE_SWITCH, ("shown" if shown else "hidden") + "\n")
 
 
 def read_seen(state: Path = STATE) -> Dict[str, int]:
@@ -2434,6 +2749,20 @@ def check_keychain(machine: str, runner: Runner = None) -> str:
         return parse_keychain((runner or run_hc)(*exec_args(machine, KEYCHAIN_SCRIPT), timeout=EXEC_TIMEOUT + 10.0))
     except Exception:  # noqa: BLE001 - not known: nothing is drawn
         return "failed"
+
+
+def fetch_usage(machine: str, runner: Runner = None) -> Optional[List[Usage]]:
+    """The 5-hour usage saved on `machine` (parse_usage), from one `hc exec`, read-only; None when it could not be
+    asked or its answer not read (nothing is drawn then, and the next check waits longer: usage_due). No files
+    there (usage.sh not set up): []. parse_usage is inside the try too: an exception it was not meant to raise
+    counts as a failed check, never as a check that left Engine.refresh_extras before it was counted (and so ran
+    again every second, the old lines still drawn)."""
+    try:
+        code, out, _, timed_out = exec_result(
+            (runner or run_hc)(*exec_args(machine, USAGE_SCRIPT), timeout=EXEC_TIMEOUT + 10.0))
+        return parse_usage(out) if code == 0 and not timed_out else None
+    except Exception:  # noqa: BLE001 - not known: nothing is drawn
+        return None
 
 
 def fetch_dev_servers(machine: str, runner: Runner = None) -> Optional[List[DevServer]]:
@@ -2927,6 +3256,12 @@ def dot_attr(status: str) -> int:
     return curses.color_pair(pair) if pair else curses.A_DIM
 
 
+def usage_attr(percent: int) -> int:
+    """A usage line's look (usage_tone): dim, normal, or bold in the keychain warning's colour."""
+    tone = usage_tone(percent)
+    return curses.A_DIM if tone == "low" else curses.color_pair(1) | curses.A_BOLD if tone == "high" else 0
+
+
 def read_click() -> Optional[Tuple[int, int]]:
     """(x, y) of a left press, else None (a release, or nothing)."""
     mouse = read_mouse()
@@ -3004,9 +3339,10 @@ class Notice:
 class Prompt:
     """A question above the sidebar's last line. kind: "space" (new space), "move" (an agent to a space), "rename"
     (`key` in names.json, `own` the name that removes the rename), "rig_target" and "rig_name" (add a server; `data`
-    holds the target), "delete" (`data`: the group key or terminal address, then the addresses that end; `accept`:
-    what may be typed to confirm), "forget" (`data`: the server's key and machine). `ask` is the question's last part,
-    which stays on screen when the rest is cut."""
+    holds the target), "delete" (a space, `key` its group key, or a terminal, `address`; `data`: that key or address,
+    then the addresses that end; answered with one key, CLOSE_YES), "forget" (`data`: the server's key and machine;
+    `accept`: what may be typed to confirm). `ask` is the question's last part (what to type, or the keys), which
+    stays on screen when the rest is cut."""
 
     kind: str
     title: str
@@ -3074,25 +3410,30 @@ class Engine:
         self.written: Tuple[object, ...] = ()  # what the last snapshot was written for (sync)
         self.written_at = 0.0
         self.seen: Tuple[str, str] = ("", "")  # (shown address, key of its group) at the last sync
+        self.unlisted = ""  # the shown address when the last sync found it in no listing ("": listed, or none shown)
         self.names: Dict[str, str] = {}  # names.json as groups() last read it
         self.title = NO_TITLE  # the window title for the shown terminal, at the last sync
         self.title_written: Tuple[str, str] = ("", "")  # (address, title) last written to the file "title"
         self.rigs_all: List[Group] = []  # every server, also while the section is hidden ("needs you" lists them)
         self.seen_turns: Dict[str, int] = {}  # seen.json (needs_you), read again when the file changed
         self.seen_stamp = -1
-        # The extras (the sidebar only, extras_forever): the keychain check and the dev servers, with when they were
-        # last asked (None: not yet), and r asking for both at once.
-        # They belong to one home machine (extras_home): when another machine becomes home, both start over. Not run
+        # The extras (the sidebar only, extras_forever): the keychain check, the dev servers and the 5-hour usage,
+        # with when they were last asked (None: not yet), and r asking for all of them at once.
+        # They belong to one home machine (extras_home): when another machine becomes home, all start over. Not run
         # before a listing came back (listed): a failed first `hc ls` says nothing about which machine is home.
         self.keychain = "unknown"
         self.keychain_at: Optional[float] = None
         self.keychain_fails = 0  # failed checks in a row (keychain_due waits longer after each)
         self.devs: List[DevServer] = []
         self.devs_at: Optional[float] = None
+        self.usage: List[Usage] = []  # empty: nothing drawn (not set up, not asked yet, or the check failed)
+        self.usage_at: Optional[float] = None
+        self.usage_fails = 0  # failed checks in a row (usage_due waits longer after each)
         self.extras_home: Optional[str] = None
         self.listed = False
         self.keychain_asked = False  # r
         self.devs_asked = False  # r, or the dev servers shown again
+        self.usage_asked = False  # r
         self.extras_wake = threading.Event()
 
     def refresh_once(self, full: bool = False, also: Sequence[str] = ()) -> None:
@@ -3215,9 +3556,27 @@ class Engine:
             self.cur = key
             write_atomic(self.state / "group", key + "\n")
 
+    def holds(self, key: str, address: str) -> bool:
+        """Does the group `key` (as drawn now) hold the terminal at `address`?"""
+        group = self.find_group(key)
+        return group is not None and any(t.address == address for t in group.terms)
+
+    def listed_now(self, address: str) -> bool:
+        """Is `address` in the listing groups() last built from (every terminal is in its machine's server row,
+        also while the servers section is hidden)?"""
+        return any(t.address == address for g in self.rigs_all for t in g.terms)
+
     def sync(self) -> None:
         """Keep the current group, last.json and the tab snapshot in step with the data and the shown target (the
-        tab bar changes the target too)."""
+        tab bar changes the target too).
+
+        The current group is judged only against a listing: until `hc ls` has answered once, the one saved stays
+        (with no terminal listed every space looks gone, and the fall-back took the first server, whose tabs then
+        stayed above the shown terminal). A shown terminal that a listing left out (no answer yet, its machine away
+        for a moment) takes the tabs back to its group once, when it is listed again; one that has ended never
+        comes back, and the fall-back stands."""
+        with self.lock:
+            listed = self.listed  # before groups(): a listing that comes in meanwhile waits for the next sync
         spaces, rigs = self.groups()
         everything = spaces + rigs
         shown = current_target(self.win)
@@ -3225,6 +3584,8 @@ class Engine:
         if holder:
             if self.seen == (shown, self.cur) and holder.key != self.cur:
                 self.set_current(holder.key)  # the shown terminal changed space (label, folder): the tabs follow it
+            elif self.unlisted == shown and holder.key != self.cur and not self.holds(self.cur, shown):
+                self.set_current(holder.key)  # listed again after a listing without it: the tabs come back to it
             if self.last.get(holder.key) != shown:
                 self.last = remember(holder.key, shown, self.state)
             # a home machine's terminal is in its space and in the home server's row: that row remembers it too
@@ -3233,8 +3594,9 @@ class Engine:
                     t.address == shown for t in current.terms):
                 self.last = remember(current.key, shown, self.state)
         self.seen = (shown, holder.key if holder else "")
+        self.unlisted = shown if shown and not self.listed_now(shown) else ""
         self.look(shown)
-        if everything and self.cur not in [g.key for g in everything]:
+        if listed and everything and self.cur not in [g.key for g in everything]:
             self.set_current(fallback_group(spaces, rigs, holder.key if holder else ""))
         self.title = self.title_for(shown)
         if (shown, self.title) != self.title_written:  # only on a change: view.sh reads it before each attach
@@ -3291,22 +3653,30 @@ class Engine:
             return home_machine(self.terms, first_machine(self.machines))
 
     def refresh_extras(self, now: float, runner: Runner = None) -> None:
-        """The keychain check and the dev servers, each when due (keychain_due, dev_due) or asked for (r; the dev
-        servers also when shown again), on the home machine (its core: `hc exec`). Not before a listing came back:
-        only that says which machine is home. When another machine has become home (a server listed after a start
-        without it), both are dropped and asked again at once: an answer of this Mac is never kept for a server.
-        The dev servers only while their section is not hidden."""
+        """The keychain check, the dev servers and the 5-hour usage, each when due (keychain_due, dev_due,
+        usage_due) or asked for (r; the dev servers also when shown again), on the home machine (its core: `hc
+        exec`). Not before a listing came back: only that says which machine is home. When another machine has
+        become home (a server listed after a start without it), all are dropped and asked again at once: an answer
+        of this Mac is never kept for a server. The dev servers only while their section is not hidden; the usage
+        not with MMINI_USAGE=0, and a failed usage check drops the lines (nothing drawn) until one works. Nor while
+        the usage lines are hidden (u, the shared file "usagelines"): then no `hc exec` runs and the last lines are
+        dropped, so lines shown again (in any window) are asked at once and nothing old is drawn meanwhile."""
+        usage_on = usage_enabled() and read_usage_shown(self.state)
         with self.lock:
             if not self.listed:
                 return
             home = home_machine(self.terms, first_machine(self.machines))
+            if home != self.extras_home or not usage_on:
+                self.usage, self.usage_at, self.usage_fails = [], None, 0
             if home != self.extras_home:
                 self.extras_home = home
                 self.keychain, self.keychain_at, self.keychain_fails = "unknown", None, 0
                 self.devs, self.devs_at = [], None
             keychain_asked, self.keychain_asked = self.keychain_asked, False
             devs_asked, self.devs_asked = self.devs_asked, False
+            usage_asked, self.usage_asked = self.usage_asked, False
             keychain, keychain_at, fails, devs_at = self.keychain, self.keychain_at, self.keychain_fails, self.devs_at
+            usage_at, usage_fails = self.usage_at, self.usage_fails
         if keychain_enabled() and (keychain_asked or keychain_due(keychain_at, keychain, now, fails)):
             state = check_keychain(home, runner)
             with self.lock:  # home changed meanwhile: the next call drops this answer
@@ -3318,6 +3688,11 @@ class Engine:
                 self.devs_at = now
                 if devs is not None:
                     self.devs = devs
+        if usage_on and (usage_asked or usage_due(usage_at, now, usage_fails)):
+            usage = fetch_usage(home, runner)
+            with self.lock:
+                self.usage, self.usage_at = usage or [], now
+                self.usage_fails = usage_fails + 1 if usage is None else 0
 
     def extras_forever(self) -> None:
         """The sidebar's thread for refresh_extras: apart from the listing, so a slow machine never holds it up."""
@@ -3347,24 +3722,27 @@ class Engine:
     def begin(self, autoopen: bool) -> None:
         """A start, once the first listing is in (at most 8 s): pick the current group and show its terminal. A view
         that already shows a terminal (the sidebar came back, the tab bar took over) keeps it, and that terminal's
-        group becomes the current one. With MMINI_AUTOOPEN=0 nothing is shown, and a target an earlier run left
-        behind (not on screen) is cleared, so nothing carries the marker."""
+        group becomes the current one; also when the listing left it out (`hc ls` failed, its machine away for a
+        moment): sync gives the tabs its group once it is listed. The saved group is given up only for a listing
+        (sync). With MMINI_AUTOOPEN=0 nothing is shown, and a target an earlier run left behind (not on screen) is
+        cleared, so nothing carries the marker."""
         self.loaded.wait(timeout=8.0)
         if self.stopped.is_set():
             return
         attached = bool(current_target(self.win)) and bool(attach_pid(self.win))
         if not autoopen and current_target(self.win) and not attached:
             write_atomic(self.win / "target", "\n")
+        with self.lock:
+            listed = self.listed
         spaces, rigs = self.groups()
         shown = current_target(self.win)
         holder = self.group_of(shown) if shown else None
-        keep = attached and holder is not None
-        if holder is not None and keep:
+        if attached and holder is not None:
             self.set_current(holder.key)
-        elif (spaces or rigs) and self.cur not in [g.key for g in spaces + rigs]:  # no saved group, or it has gone
+        elif listed and (spaces or rigs) and self.cur not in [g.key for g in spaces + rigs]:  # none saved, or gone
             self.set_current(fallback_group(spaces, rigs, holder.key if holder else ""))
         self.sync()
-        if autoopen and self.cur and not keep:
+        if autoopen and self.cur and not attached:
             self.show_group(self.cur)  # show only: the keyboard stays where it is
 
     def drive(self, autoopen: bool, beat: float = ENGINE_BEAT) -> None:
@@ -3420,6 +3798,11 @@ class Sidebar(Engine):
         self.rows: Dict[int, Item] = {}  # screen line -> the item drawn there, for clicks
         self.pane_title = PaneTitle()  # this pane's window title (the engine's self.title)
         self.prompt: Optional[Prompt] = None
+        self.yes_cut = False  # d's question did not all fit when last drawn: CLOSE_YES does nothing then
+        # when d's question was last asked (by d, or again at y: changed_question), and how long CLOSE_YES is not
+        # taken from then (yes_waits: DELETE_HOLD, CLOSE_AGAIN); -inf, not 0: time.monotonic() may start near 0
+        self.asked_at = float("-inf")
+        self.yes_hold = CLOSE_AGAIN
         self.notice = Notice()
         self.sized_at = -1  # the width the pane had after its last sizing (refit); -1: not sized yet
         self.window_width = -1  # the window's width at refit's last look (-1: none yet)
@@ -3456,6 +3839,9 @@ class Sidebar(Engine):
         self.rule_pressed: Optional[float] = None
         self.rule_at = 0  # the separator's line for [ and ], also where the automatic layout dropped it (rule_line)
         self.keychain_y = -1  # the line of the keychain warning, for clicks (-1: not drawn)
+        # the lines of the 5-hour usage (none: not drawn); a right click on one opens their menu (USAGE_ITEM), a left
+        # click does nothing
+        self.usage_ys: List[int] = []
 
     # cursor ----------------------------------------------------------------------------------------------------
     def sections(self) -> Sections:
@@ -3693,9 +4079,22 @@ class Sidebar(Engine):
 
     # delete ----------------------------------------------------------------------------------------------------
     def ask_delete(self, item: Optional[Item]) -> None:
-        """d: delete the space, forget the server, or end the agent under the cursor, each after its name was
-        typed. The terminals listed in the question are the ones that end, nothing else."""
+        """d: delete the space, end the agent (each: y after the list of what ends), or forget the server (its name
+        typed) under the cursor (delete_question). The terminals listed in the question are the ones that end,
+        nothing else."""
         self.expand()
+        question = self.delete_question(item)
+        if isinstance(question, str):
+            self.notice.say(question)
+            return
+        self.prompt = question
+        self.asked_at, self.yes_hold = time.monotonic(), DELETE_HOLD  # a y typed with the d is not taken
+
+    def delete_question(self, item: Optional[Item]) -> Union[Prompt, str]:
+        """d's question for `item` from what is listed now, or why there is none. A space or an agent: what ends (it,
+        then the children that end with it: ending), answered with CLOSE_YES (answer_delete builds it again then,
+        to see whether that changed); the owner's choice of 24 Nov, as the tab bar's Close. A server: forgotten
+        after its name was typed (accept: its shown name, its alias, its hc name)."""
         group = self.find_group(item.group) if item else None
         with self.lock:
             infos = dict(self.infos)
@@ -3703,33 +4102,64 @@ class Sidebar(Engine):
         if item is not None and item.kind in ("agent", "needs"):
             term = self.term_of(item.address)
             if term is None:
-                self.notice.say("that terminal has ended")
-                return
+                return "that terminal has ended"
             ends = ending([term], everything, infos)
-            asked = term.title or term.name or term.address
-            self.prompt = Prompt("delete", f"end {term.shown}? {ends_text(ends)}.", ask=f"type {asked} to confirm:",
-                                 accept=tuple(dict.fromkeys(a for a in (asked, term.name, term.address) if a)),
-                                 data=(term.address,) + tuple(t.address for t in ends))
-        elif item is not None and item.kind == "group" and group is not None and group.kind == "space":
+            return Prompt("delete", f"end {term.shown}? {ends_text(ends)}.", ask=DELETE_ASK["end"],
+                          address=term.address, data=(term.address,) + tuple(t.address for t in ends))
+        if item is not None and item.kind == "group" and group is not None and group.kind == "space":
             ends = ending(group.terms, everything, infos)
-            self.prompt = Prompt("delete", f"delete space {group.shown}? {ends_text(ends)}.",
-                                 ask=f"type {group.shown} to confirm:",
-                                 accept=tuple(dict.fromkeys((group.shown, group.name))),
-                                 data=(group.key,) + tuple(t.address for t in ends))
-        elif item is not None and item.kind == "group" and group is not None:
+            return Prompt("delete", f"delete space {group.shown}? {ends_text(ends)}.", ask=DELETE_ASK["space"],
+                          key=group.key, data=(group.key,) + tuple(t.address for t in ends))
+        if item is not None and item.kind == "group" and group is not None:
             if group.machine in (LOCAL, self.first()) or group.home:
-                self.notice.say(f"d: {group.shown} cannot be removed")
-                return
-            self.prompt = Prompt("forget", f"forget server {group.shown}? its terminals keep running there.",
-                                 ask=f"type {group.shown} to confirm:",
-                                 accept=tuple(dict.fromkeys(a for a in (group.shown, group.alias, group.name) if a)),
-                                 data=(group.key, group.machine))
-        else:
-            self.notice.say("d: cursor on a space, server or agent first")
+                return f"d: {group.shown} cannot be removed"
+            return Prompt("forget", f"forget server {group.shown}? its terminals keep running there.",
+                          ask=f"type {group.shown} to confirm:",
+                          accept=tuple(dict.fromkeys(a for a in (group.shown, group.alias, group.name) if a)),
+                          data=(group.key, group.machine))
+        if item is not None and item.kind == "group" and item.group.startswith("space:"):
+            return "that space has gone"  # its terminals all ended meanwhile (y at its question)
+        return "d: cursor on a space, server or agent first"
+
+    def answer_delete(self, prompt: Prompt, key: int) -> None:
+        """A key while d's question on a space or an agent is open, as at the tab bar's Close (TabBar.handle_prompt):
+        CLOSE_YES deletes, any other key cancels (DELETE_NO). A press cancels in on_key already; one that reaches
+        this is the second press of the double click that opened the question, and is dropped. CLOSE_YES does
+        nothing while the question is cut (yes_lines), within DELETE_HOLD of d asking (a y typed with the d, in a
+        word), or within CLOSE_AGAIN of being asked again. Else what ends is looked up again: gone, nothing ends;
+        changed (a terminal started or ended meanwhile, a child that now ends with it), the new list is asked
+        ("changed: …"); the same, it ends (confirmed)."""
+        if key == curses.KEY_MOUSE:
+            return
+        if not is_yes(key):
+            self.cancel_prompt()
+            return
+        if yes_waits(self.yes_cut, self.asked_at, time.monotonic(), self.yes_hold):
+            return  # the list is not all on screen, or it was asked a moment ago: y does nothing yet
+        current = self.delete_question(Item("group", prompt.key, "") if prompt.key else
+                                       Item("agent", "", prompt.address))
+        if isinstance(current, str):  # gone meanwhile
+            self.prompt = None
+            self.notice.say(current)
+            return
+        again = changed_question(prompt, current)
+        if again is not None:  # what ends changed since the question: ask again
+            self.prompt = again
+            self.asked_at, self.yes_hold = time.monotonic(), CLOSE_AGAIN
+            return
+        self.prompt = None
+        self.confirmed(prompt)
+
+    def cancel_prompt(self) -> None:
+        """The open question goes unanswered (another key at d's question, a press elsewhere, the keyboard in another
+        pane, a paste into d's question): it says so, d's question that nothing ended."""
+        if self.prompt is not None:
+            self.notice.say(DELETE_NO if self.prompt.kind == "delete" else "cancelled", bad=False)
+            self.prompt = None
 
     def confirmed(self, prompt: Prompt) -> None:
-        """The typed name matched: do it, then move the cursor (and, when what was shown has gone, the view) to a
-        neighbour (after_delete)."""
+        """y at an unchanged list (delete), or the typed name matched (forget): do it, then move the cursor (and, when
+        what was shown has gone, the view) to a neighbour (after_delete)."""
         before = self.items()
         index = self.cursor_index(before)
         shown = current_target(self.win)
@@ -3848,7 +4278,7 @@ class Sidebar(Engine):
             self.rig_target_given(prompt.text)
         elif prompt.kind == "rig_name":
             self.add_rig(prompt.data[0], prompt.text)
-        elif prompt.kind in ("delete", "forget"):
+        elif prompt.kind == "forget":
             if confirm_matches(prompt.text, prompt.accept):
                 self.confirmed(prompt)
             else:
@@ -3857,10 +4287,16 @@ class Sidebar(Engine):
     # the action menu -------------------------------------------------------------------------------------------
     def open_menu(self, item: Optional[Item], by_mouse: bool = False) -> None:
         """a, or a right click on a row (`by_mouse`): the menu of that row. The strip opens first (the menu needs the
-        room)."""
+        room). A right click on a usage line (USAGE_ITEM): their menu, "Hide usage" first; the cursor stays where it
+        is (a usage line is no row)."""
         if item is None:
             return
         self.expand()
+        if item == USAGE_ITEM:
+            entries = menu_entries(item, None, self.first(), self.servers_shown(), read_agents_shown(self.state),
+                                   read_devs_shown(self.state))
+            self.menu = Menu(item, USAGE_TITLE, entries, by_mouse=by_mouse)
+            return
         group = self.find_group(item.group) if item.group else None
         if item.kind in ("agent", "needs"):
             term = self.term_of(item.address)
@@ -3872,14 +4308,17 @@ class Sidebar(Engine):
         else:
             title = group.shown if group else item.group
         self.cursor = item
+        # "Show usage" only while they are hidden (menu_entries); with MMINI_USAGE=0 there is nothing to show
+        usage = read_usage_shown(self.state) or not usage_enabled()
         self.menu = Menu(item, title, menu_entries(item, group, self.first(), self.servers_shown(),
-                                                   read_agents_shown(self.state), read_devs_shown(self.state)),
+                                                   read_agents_shown(self.state), read_devs_shown(self.state), usage),
                          by_mouse=by_mouse)
 
     def run_entry(self, entry: Entry, item: Item) -> None:
         """What a menu entry does: the same as its direct key."""
         self.menu = None
-        self.cursor = item
+        if item != USAGE_ITEM:  # a usage line is no row: the cursor stays
+            self.cursor = item
         if entry.action == "open":
             self.activate(item)
         elif entry.action == "new":
@@ -3900,6 +4339,8 @@ class Sidebar(Engine):
             self.toggle_agents()
         elif entry.action == "devs":
             self.toggle_devs()
+        elif entry.action == "usage":
+            self.toggle_usage()
         elif entry.action == "browse":
             self.activate(item)
 
@@ -3971,6 +4412,27 @@ class Sidebar(Engine):
         if self.cursor is not None and self.cursor.kind == "dev":
             self.cursor = None
         self.notice.say(f"dev servers hidden ({DEVS_KEY} shows them)", bad=False)
+
+    def toggle_usage(self) -> None:
+        """u, "Hide usage" in the usage lines' menu (a right click on one) or "Show usage" in any row's menu: the
+        5-hour usage lines come or go, for every window (the shared file "usagelines", USAGE_SWITCH). Hidden, they
+        are not drawn and the check does not run (refresh_extras drops them); shown, they are asked for at once. With
+        MMINI_USAGE=0 there is nothing to show: the file stays as it is."""
+        if not usage_enabled():
+            self.notice.say("usage is off (MMINI_USAGE=0)", bad=False)
+            return
+        shown = not read_usage_shown(self.state)
+        try:
+            write_usage_shown(shown, self.state)
+        except OSError as exc:
+            self.notice.say("usage: " + describe_error(exc))
+            return
+        if shown:
+            with self.lock:
+                self.usage_asked = True  # only the usage: the keychain and the dev servers keep their schedules
+            self.extras_wake.set()
+        self.notice.say(f"usage {'shown' if shown else 'hidden'} ({USAGE_KEY} {'hides' if shown else 'shows'} it)",
+                        bad=False)
 
     def handle_menu(self, key: int, click: Optional[Tuple[int, int, int]] = None) -> None:
         """Keys and presses while the menu is open: up/down (k/j), enter, a direct key shown in it, esc or a to
@@ -4064,17 +4526,29 @@ class Sidebar(Engine):
             self.drag_y = None  # hidden meanwhile (in another window too): no separator to hold
         with self.lock:
             error, loaded, locked, machines = self.error, self.loaded.is_set(), self.keychain == "locked", self.machines
+            usage = list(self.usage)
         notice = self.notice.current()
         compact = self.mode == "strip"
+        # the open sidebar only, and not while hidden (u; read each time: another window may switch it)
+        usage = usage if usage_enabled() and not compact and read_usage_shown(self.state) else []
         message = bool(notice or error)
         said = prompt_lines(notice, "", max(1, width - 1), self.notice.lines) if notice and self.notice.lines > 1 \
             else [notice]
-        asked: List[str] = []
-        if self.prompt is not None:  # the whole question, wrapped; the frame then says how much of it fits
-            asked = prompt_lines(self.prompt.title, self.prompt.ask, max(1, width - 1), PROMPT_TITLE_MAX)
+        # the whole question, wrapped; the frame then says how much of it fits. A typed one gets up to
+        # PROMPT_TITLE_MAX lines and the typed line under them; d's question (one key) every line it needs, no typed
+        # line: what ends is all on screen before y (yes_lines)
+        yes = self.prompt is not None and self.prompt.kind == "delete"
+        if self.prompt is None:
+            title_lines = 1
+        elif yes:
+            title_lines = yes_height(self.prompt.title, self.prompt.ask, max(1, width - 1)) - 1
+        else:
+            title_lines = max(1, len(prompt_lines(self.prompt.title, self.prompt.ask, max(1, width - 1),
+                                                  PROMPT_TITLE_MAX)))
         self.body_height, self.arrow_y, self.open_y, reserved = sidebar_frame(
-            height, message, self.prompt is not None, compact, max(1, len(asked)), locked, max(1, len(said)))
+            height, message, self.prompt is not None, compact, title_lines, locked, max(1, len(said)), len(usage))
         self.keychain_y = keychain_line(height, compact, locked)
+        self.usage_ys = usage_rows(height, compact, locked, self.body_height, reserved)
         items = sections.items()
         cursor = self.cursor_index(items)
         # held but not moved yet: drawn where it was (an automatic line below the limit would jump up a row)
@@ -4122,13 +4596,10 @@ class Sidebar(Engine):
                 s.put(y, 1, "+", attr | curses.A_BOLD)
                 s.put(y, 3, clip(PLUS_TEXT[row.text], width - 5), attr | curses.A_DIM)
                 self.rows[y] = items[row.item]
-            elif row.kind == "header":
+            elif row.kind in ("header", "agents"):
                 s.put(y, 1, row.text, curses.A_DIM)
             elif row.kind == "rule":
                 s.put(y, 0, "─" * (width - 1), self.rule_attr())
-            elif row.kind == "agents":
-                s.put(y, 1, "agents", curses.A_DIM)
-                s.put(y, max(8, width - 9), "grouped", curses.A_DIM)
             elif row.kind == "more":
                 s.put(y, 2, row.text, curses.A_DIM)
             elif row.kind == "agent_group" and row.group:
@@ -4154,11 +4625,23 @@ class Sidebar(Engine):
                       attr | (curses.A_BOLD if mark else 0))
                 s.put(y, max(5, width - 1 - len(t.status)), t.status, attr | curses.A_DIM)
                 self.rows[y] = items[row.item]
-        # the keychain warning just above the arrow lines, the prompt or message just above that
+        # the keychain warning just above the arrow lines, the usage lines just above it, the prompt or message just
+        # above those
         if self.keychain_y >= 0:
             s.put(self.keychain_y, 0, keychain_text(width - 1), curses.color_pair(1) | curses.A_BOLD)
-        last = next((y for y in (self.keychain_y, self.open_y, self.arrow_y) if y >= 0), height)
-        if self.prompt and reserved:
+        if self.usage_ys:
+            now = time.time()
+            for y, u, text in zip(self.usage_ys, usage, usage_texts(usage, now, width - 1)):
+                s.put(y, 0, text, usage_attr(u.percent(now)))
+        last = next((y for y in (self.usage_ys[0] if self.usage_ys else -1, self.keychain_y, self.open_y,
+                                 self.arrow_y) if y >= 0), height)
+        self.yes_cut = False
+        if self.prompt is not None and yes:  # the title dim, then the keys bold (where a typed answer would be)
+            lines, self.yes_cut = yes_lines(self.prompt.title, self.prompt.ask, max(1, width - 1), reserved)
+            keys = len(wrap_words(DELETE_CUT if self.yes_cut else self.prompt.ask, max(1, width - 1)))
+            for i, line in enumerate(lines):
+                s.put(last - len(lines) + i, 0, line, curses.A_BOLD if i >= len(lines) - keys else curses.A_DIM)
+        elif self.prompt and reserved:
             question = prompt_lines(self.prompt.title, self.prompt.ask, max(1, width - 1), reserved - 1)
             for i, line in enumerate(question):
                 s.put(last - reserved + i, 0, line, curses.A_DIM)
@@ -4189,25 +4672,37 @@ class Sidebar(Engine):
         s.scr.refresh()
 
     def draw_help(self, height: int, width: int) -> None:
-        """The list of keys ("?") over the whole pane; nothing under it can be clicked until it closes."""
+        """The list of keys ("?") over the whole pane; nothing under it can be clicked until it closes. The status
+        dots' lines draw their dot and colour word in that colour (help_rows' spans)."""
         self.s.scr.erase()
         self.rows, self.menu_at, self.help_x = {}, None, -1
-        for y, line in enumerate(help_lines(width - 1, height)):
-            self.s.put(y, 0, line, curses.A_DIM if y == 0 else 0)
+        for y, row in enumerate(help_rows(width - 1, height)):
+            self.s.put(y, 0, row.text, curses.A_DIM if row.dim else 0)
+            if row.status is not None:
+                for x, n in row.spans:
+                    self.s.put(y, x, row.text[x:x + n], dot_attr(row.status))
 
     def draw_menu(self, height: int, width: int, items: Sequence[Item]) -> None:
         """The open menu, over everything else, next to its row (menu_box). A menu whose row has gone (ended, deleted
-        in another window) closes."""
+        in another window) closes. The usage lines' menu goes above the first of them, so it covers none; it closes
+        once they are not drawn (hidden, a failed check, a short pane)."""
         self.menu_at = None
         menu = self.menu
         if menu is None:
             return
-        if menu.item not in items:
+        if menu.item == USAGE_ITEM:
+            if not self.usage_ys:
+                self.menu = None
+                return
+            row_y = room = self.usage_ys[0]
+        elif menu.item not in items:
             self.menu = None
             return
-        row_y = next((y for y, item in self.rows.items() if item == menu.item), 0)
-        # the arrow lines and the keychain warning stay readable
-        room = next((y for y in (self.keychain_y, self.open_y, self.arrow_y) if y > row_y), height)
+        else:
+            row_y = next((y for y, item in self.rows.items() if item == menu.item), 0)
+            # the arrow lines, the keychain warning and the usage lines stay readable
+            room = next((y for y in (*self.usage_ys[:1], self.keychain_y, self.open_y, self.arrow_y) if y > row_y),
+                        height)
         # a menu opened with a right click takes clicks only: no keys shown, nothing selected
         entries = [replace(e, key="") for e in menu.entries] if menu.by_mouse else menu.entries
         selected = -1 if menu.by_mouse else menu.selected
@@ -4410,16 +4905,23 @@ class Sidebar(Engine):
         pane = own_pane()
         if (mouse_menu or self.prompt is not None) and pane and pane_active(pane) is False:
             self.menu = None  # a question too: with the keyboard elsewhere it can no longer be answered
-            if self.prompt is not None:
-                self.prompt = None
-                self.notice.say("cancelled", bad=False)
+            self.cancel_prompt()
 
     # loop ------------------------------------------------------------------------------------------------------
     def handle_prompt(self, key: int) -> None:
+        """Keys while a question is open. d's question on a space or an agent takes one key (answer_delete); the others
+        take typed text (plain ASCII), backspace, ctrl+U clears, enter does it, esc cancels. A question asked from a
+        right-click menu (by_mouse), once a key answered or cancelled it, gives the keyboard back to the view, as the
+        tab bar's questions do: the right click gave the sidebar the keyboard (mmini.tmux.conf), and typing on would
+        act on the sidebar, not on the terminal it looks like. Not when it is asked again ("changed: …"), nor for a
+        question asked with a key (d, e, s, m: the sidebar had the keyboard on purpose); a press that cancels acts
+        itself (on_key), and so does a paste (it goes to the view)."""
         prompt = self.prompt
         if prompt is None:
             return
-        if key in (curses.KEY_ENTER, 10, 13):
+        if prompt.kind == "delete":
+            self.answer_delete(prompt, key)
+        elif key in (curses.KEY_ENTER, 10, 13):
             self.prompt = None
             self.submit(prompt)
         elif key == 27:
@@ -4430,6 +4932,8 @@ class Sidebar(Engine):
             prompt.text = ""
         elif 32 <= key < 127 and len(prompt.text) < 200:
             prompt.text += chr(key)
+        if prompt.by_mouse and self.prompt is None:
+            focus_view(self.win)
 
     def handle_key(self, key: int, click: Optional[Tuple[int, int, int]] = None) -> bool:
         """One key or press (`click`: the press on_key read already); False to quit (the sidebar was hidden: see
@@ -4465,7 +4969,7 @@ class Sidebar(Engine):
             self.zoom()
         elif key in (ord("r"), ord("R")):
             with self.lock:
-                self.full_due = self.keychain_asked = self.devs_asked = True
+                self.full_due = self.keychain_asked = self.devs_asked = self.usage_asked = True
             self.wake.set()
             self.extras_wake.set()
         elif key in (ord(SERVERS_KEY), ord(SERVERS_KEY.upper())):
@@ -4474,6 +4978,8 @@ class Sidebar(Engine):
             self.toggle_agents()
         elif key in (ord(DEVS_KEY), ord(DEVS_KEY.upper())):
             self.toggle_devs()
+        elif key in (ord(USAGE_KEY), ord(USAGE_KEY.upper())):
+            self.toggle_usage()
         elif key == ord(HELP_KEY):
             self.open_help()
         elif key in RULE_KEYS:
@@ -4484,12 +4990,15 @@ class Sidebar(Engine):
                 return True
             # the item that was drawn on that line, not a new lookup
             what, item = sidebar_hit(click[1], self.arrow_y, self.open_y, self.rows, click[0], self.help_x,
-                                     self.rule_y, self.keychain_y)
+                                     self.rule_y, self.keychain_y, self.usage_ys)
             if click[2] == 3:  # the right button: the row's menu (none on the separator: it is no row)
+                item = USAGE_ITEM if what == "usage" else item  # a usage line: their menu ("Hide usage")
                 if item:
                     self.mouse_quiet = time.monotonic() + MOUSE_QUIET
                     self.open_menu(item, by_mouse=True)
                 return True
+            if what == "usage":
+                return True  # a left click on a usage line does nothing
             if what == "keychain":
                 self.mouse_quiet = time.monotonic() + MOUSE_QUIET  # a double click opens one terminal
                 self.show_unlock()
@@ -4572,8 +5081,7 @@ class Sidebar(Engine):
             self.close_help(key, click)
             return True
         if self.prompt is not None and click is not None and time.monotonic() >= self.mouse_quiet:
-            self.prompt = None  # a press elsewhere: the question goes, the press acts (not a double click's second)
-            self.notice.say("cancelled", bad=False)
+            self.cancel_prompt()  # a press elsewhere: the question goes, the press acts (not a double click's second)
         if self.prompt is not None:
             self.handle_prompt(key)
             return True
@@ -4583,11 +5091,13 @@ class Sidebar(Engine):
         return self.handle_key(key, click)
 
     def pasted(self, text: str) -> None:
-        """A paste reached the sidebar (a file dropped while it had the keyboard): into the open question, else to
-        the terminal in the view."""
-        if self.prompt is not None:
+        """A paste reached the sidebar (a file dropped while it had the keyboard): into the open question that takes
+        text, else to the terminal in the view. d's question takes one key, never text: a paste is no y, so it
+        cancels that question and goes on to the view (as at the tab bar's Close)."""
+        if self.prompt is not None and self.prompt.kind != "delete":
             self.prompt.text = (self.prompt.text + prompt_text(text))[:200]
             return
+        self.cancel_prompt()
         self.menu = None
         if not paste_to_view(text, self.win):
             self.notice.say("the paste could not be passed on to the terminal")
@@ -4644,7 +5154,7 @@ class TabBar:
         self.close_cut = False  # Close's question did not fit when last drawn: y does nothing then
         self.forward_until = 0.0  # until then keys go on to the view (FORWARD_GRACE after a key closed a menu)
         self.mouse_quiet = 0.0  # presses until then are a double click's second, dropped while a question opens
-        self.asked_again = 0.0  # when Close last asked again (CLOSE_AGAIN)
+        self.asked_again = float("-inf")  # when Close last asked again (CLOSE_AGAIN); not 0: see last_plus
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -4730,7 +5240,7 @@ class TabBar:
                                                        text_width(f"{hint} · {p.title}") > room)
                 if self.close_cut:
                     lines = lines[:max(1, rows)]
-                    hint = "the list is cut: widen the window, or end it in the sidebar · any key cancels"
+                    hint = CLOSE_CUT
                 for i, line in enumerate(lines if hint_row > y else [f"{hint} · {p.title}"]):
                     s.fill(y + i, 0)
                     s.put(y + i, x0, clip(line, room), curses.A_BOLD)
@@ -4820,7 +5330,7 @@ class TabBar:
         if prompt is None:
             return
         if prompt.kind == "close":
-            if key not in (ord(CLOSE_YES), ord(CLOSE_YES.upper())) or snap is None:
+            if not is_yes(key) or snap is None:
                 self.notice.say("not closed", bad=False)
                 self.close_menu()
                 return
@@ -4829,11 +5339,10 @@ class TabBar:
                 self.notice.say("that terminal has ended")
                 self.close_menu()
                 return
-            if self.close_cut or time.monotonic() - self.asked_again < CLOSE_AGAIN:
+            if yes_waits(self.close_cut, self.asked_again, time.monotonic()):
                 return  # the list is not all on screen, or it changed a moment ago: y does nothing yet
-            again = close_question(tab)
-            if set(again.data) != set(prompt.data):  # what ends changed since the question: ask again
-                again.title = "changed: " + again.title
+            again = changed_question(prompt, close_question(tab))
+            if again is not None:  # what ends changed since the question: ask again
                 self.prompt = again
                 self.asked_again = time.monotonic()
                 return
@@ -4913,24 +5422,25 @@ class TabBar:
         focus_view(self.win)
 
     def check_ask(self, snap: Optional[dict], shown: str) -> None:
-        """A right click in the view (mmini.tmux.conf writes the file "ask"): the shown terminal's tab menu, here,
-        with the keyboard, as a right click on its tab."""
-        ask = self.win / "ask"
-        if not ask.exists():
+        """The window's request file "ask", read once (take_ask). A line "menu", a right click in the view
+        (mmini.tmux.conf writes it): the shown terminal's tab menu, here, with the keyboard, as a right click on its
+        tab. A line "notice <text>" (the view relay, ask_notice: a drop that was not sent) or "info <text>" (a drop
+        being sent, or sent after the tab bar said so): the last of them as a notice, an error or not, after the
+        menu, so the menu does not clear it."""
+        if not (self.win / "ask").exists():
             return
-        word = read_text(ask)
-        try:
-            ask.unlink()
-        except OSError:
-            pass
-        if word != "menu":
-            return
-        if snap is None or tab_of(snap, shown) is None:
-            self.notice.say("nothing shown", bad=False)
-            return
-        self.notice.clear()
-        self.open_tab_menu(snap, shown)
-        focus_pane("tabs", self.win)
+        lines = take_ask(self.win)
+        if "menu" in lines:
+            if snap is None or tab_of(snap, shown) is None:
+                self.notice.say("nothing shown", bad=False)
+            else:
+                self.notice.clear()
+                self.open_tab_menu(snap, shown)
+                focus_pane("tabs", self.win)
+        notices = [(line.startswith(ASK_NOTICE), line.split(" ", 1)[1].strip()) for line in lines
+                   if line.startswith((ASK_NOTICE, ASK_INFO))]
+        if notices and notices[-1][1]:
+            self.notice.say(notice_line(notices[-1][1]), bad=notices[-1][0])
 
     def rows_goal(self) -> int:
         """TAB_ROWS; while Close's question is open, as many rows as it needs (up to CLOSE_ROWS), so the whole list
@@ -5202,9 +5712,806 @@ def claim_pane(fd: int = 1) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# The view relay: a drop reaches a terminal on another machine
+# ---------------------------------------------------------------------------------------------------------------
+# A file dropped on the window arrives as a paste of its path on this Mac: Ghostty pastes the path (a backslash
+# before spaces and other shell signs, several files joined by spaces), bracketed (ESC[200~ ... ESC[201~) when the
+# program asked for it, and tmux passes it on to the pane with the keyboard, usually the view (a drop on the sidebar
+# or the tab bar is passed on there too: paste_to_view). A terminal on another machine cannot open that path. tmux
+# cannot filter what a pane reads, so the view pane runs `mmini.py view` (relay_view): view.sh in a pseudo terminal
+# of the relay's own, every byte passed on unchanged both ways, except such a paste while a terminal of another
+# machine is shown: each file is sent there with `hc put`, and the paths there are pasted instead. One relay per
+# window, around view.sh, never one per attach: view.sh's switch path (18 ms from a pick to the new attach's first
+# byte) gains no process.
+PASTE_OPEN = b"\x1b[200~"
+PASTE_CLOSE = b"\x1b[201~"
+PASTE_CAP = 1 << 20  # bytes of one paste held at most; a longer one passes through unchanged, as it comes
+MARKER_HOLD = 0.02  # seconds a possible start of PASTE_OPEN at the end of a read is held (a lone esc key, at most)
+PASTE_IDLE = 1.0  # seconds a paste may go without a byte before its end marker; then it passes through unchanged
+DROP_FILES = 20  # files one drop may name
+DROP_TEXT = DROP_FILES * 2 * 1024  # the longest such paste: 20 paths of PATH_MAX (1024) bytes, each byte escaped
+PUT_MAX = 8_000_000  # bytes one `hc put` takes (herdr-core 0.1.21: "at most 8 MB per put", exit 6)
+PUT_TIMEOUT = 60.0  # seconds for one `hc put`, and for one copy made smaller
+# Seconds a whole drop may take (keys typed meanwhile wait): then it goes on as it came, keys and all, and what is
+# still being sent is given up. Without it a drop of 20 files on a stalled connection held the keyboard 20 minutes.
+DROP_TIMEOUT = PUT_TIMEOUT
+DROP_TELL = 0.5  # seconds a drop may take before the tab bar says it is being sent (a quick one says nothing)
+# Folders of the account's Library folder (~/Library) that hold the owner's own documents, sent as any other file:
+# iCloud Drive, and the folders of cloud storage apps (Dropbox, Google Drive, OneDrive). Compared without case.
+LIBRARY_OPEN = frozenset(("mobile documents", "cloudstorage"))
+SIPS = "/usr/bin/sips"  # part of macOS
+SHRINK_ARGS = ("-s", "format", "jpeg", "-s", "formatOptions", "85")  # a JPEG of quality 85
+SHRINK_SIDE = 2576  # pixels a side at most (sips -Z); a smaller image keeps its size: -Z would enlarge it
+IMAGE_SUFFIXES = frozenset((".png", ".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff", ".gif", ".bmp", ".webp"))
+# The characters Ghostty puts a backslash before in a dropped path (Ghostty.Shell.escape, macOS); a landed path is
+# pasted the same way, so the program there reads it as it reads a drop.
+SHELL_SPECIALS = frozenset("\\ ()[]{}<>\"'`!#$&;|*?\t")
+RELAY_CHUNK = 65536  # bytes per read, either way
+RELAY_QUEUE = 1 << 20  # typed bytes waiting for the inner terminal (or for a drop) beyond which stdin is not read
+ASK_NOTICE = "notice "  # a line of the request file "ask": the tab bar shows the rest of the line as a notice
+ASK_INFO = "info "  # the same, as a notice that is no error ("drop: sending shot.png to mini")
+ASK_LINES = 8  # lines kept in "ask" while the tab bar has not read it
+
+
+def held_tail(buf: bytes) -> int:
+    """How many bytes at the end of `buf` could be the start of PASTE_OPEN (an esc, "esc [", ... up to one byte
+    short of it): those are held until the next read shows what they are."""
+    for n in range(min(len(PASTE_OPEN) - 1, len(buf)), 0, -1):
+        if buf.endswith(PASTE_OPEN[:n]):
+            return n
+    return 0
+
+
+class PasteParser:
+    """Splits what is typed into the view into plain bytes and bracketed pastes, read by read: a marker may come
+    split over several reads. Plain bytes go on at once, except a possible start of PASTE_OPEN at the very end of a
+    read, held until the next read or MARKER_HOLD (the relay calls due()). A paste is held until its end marker;
+    one over `cap` bytes, or one without a byte for PASTE_IDLE, is given back as plain bytes, unchanged, and not
+    treated as a paste any more (its end marker then passes as plain bytes too).
+
+    feed() returns events in order: ("data", bytes) to pass on, ("paste", text) a whole paste without its markers.
+    """
+
+    def __init__(self, cap: int = PASTE_CAP) -> None:
+        self.cap = cap
+        self.partial = b""  # outside a paste: the possible start of PASTE_OPEN that ended the last read
+        self.body: Optional[bytearray] = None  # inside a paste: what came after PASTE_OPEN so far
+        self.held_since = 0.0  # when `partial` began to be held
+        self.last_byte = 0.0  # inside a paste: when its last byte came
+
+    def feed(self, data: bytes, now: float = 0.0) -> List[Tuple[str, bytes]]:
+        out: List[Tuple[str, bytes]] = []
+        old = self.partial
+        buf = old + data
+        self.partial = b""
+        while buf:
+            if self.body is None:
+                start = buf.find(PASTE_OPEN)
+                if start < 0:
+                    keep = held_tail(buf)
+                    if len(buf) > keep:
+                        out.append(("data", buf[:len(buf) - keep]))
+                    self.partial = buf[len(buf) - keep:]
+                    break
+                if start:
+                    out.append(("data", buf[:start]))
+                self.body = bytearray()
+                buf = buf[start + len(PASTE_OPEN):]
+                self.last_byte = now
+                continue
+            seen = len(self.body)
+            self.body += buf
+            self.last_byte = now
+            end = self.body.find(PASTE_CLOSE, max(0, seen - len(PASTE_CLOSE) + 1))  # the marker may straddle reads
+            if end < 0:
+                if len(self.body) > self.cap:
+                    out.append(("data", PASTE_OPEN + bytes(self.body)))
+                    self.body = None
+                break
+            whole = bytes(self.body[:end])
+            out.append(("paste", whole) if len(whole) <= self.cap else ("data", PASTE_OPEN + whole + PASTE_CLOSE))
+            buf = bytes(self.body[end + len(PASTE_CLOSE):])
+            self.body = None
+        if self.partial and not (old and self.partial == old + data):  # a new hold, not the old one grown
+            self.held_since = now
+        return out
+
+    def deadline(self) -> Optional[float]:
+        """When due() has something to give back: the held start of a marker, or a paste gone quiet."""
+        if self.body is not None:
+            return self.last_byte + PASTE_IDLE
+        return self.held_since + MARKER_HOLD if self.partial else None
+
+    def due(self, now: float) -> bytes:
+        """What may wait no longer at `now`, as plain bytes: a held possible marker start after MARKER_HOLD, a paste
+        without its end marker after PASTE_IDLE (with its start marker, unchanged)."""
+        when = self.deadline()
+        return self.take() if when is not None and now >= when else b""
+
+    def take(self) -> bytes:
+        """Everything held, as it was typed (the relay keeps it while a drop is sent), and start afresh."""
+        held = self.partial if self.body is None else PASTE_OPEN + bytes(self.body)
+        self.partial, self.body = b"", None
+        return held
+
+
+def raw_event(event: Tuple[str, bytes]) -> bytes:
+    """An event of PasteParser.feed as it was typed."""
+    kind, payload = event
+    return PASTE_OPEN + payload + PASTE_CLOSE if kind == "paste" else payload
+
+
+def drop_files(text: str, target: str, is_file: Callable[[str], bool] = os.path.isfile) -> Optional[List[str]]:
+    """The files of this Mac that a paste (`text`, without its markers) names, when it is a drop to send to the
+    shown terminal `target`: that terminal is on another machine, and the paste, without the white space at either
+    end, is 1 to DROP_FILES shell words (as Ghostty writes a drop: a backslash before spaces and other signs), each
+    the absolute path of an existing regular file here. Anything else (None) is pasted as it came."""
+    if not target or machine_of(target) == LOCAL or len(text.strip()) > DROP_TEXT:  # shlex is slow on a long text
+        return None
+    try:
+        words = shlex.split(text.strip())
+    except ValueError:  # an open quote: not a drop
+        return None
+    if not 1 <= len(words) <= DROP_FILES:
+        return None
+    return words if all(os.path.isabs(w) and is_file(w) for w in words) else None
+
+
+def name_key(name: str) -> str:
+    """A file name as macOS's file system compares it: without case, and the same however its accents are encoded
+    (one character or a letter and a combining mark)."""
+    return unicodedata.normalize("NFD", name).casefold()
+
+
+def refused_why(path: str, home: str) -> str:
+    """Why the file `path` is never sent with a drop, or "": a hidden file (a name starting with a dot), a file in a
+    hidden folder (~/.ssh, ~/.aws, ~/.gnupg, ~/.config, "..": the parts as written, no link followed), or a file in
+    the account's Library folder (`home`/Library: Keychains, Cookies, Mail, Messages, the data of apps), except in
+    LIBRARY_OPEN. Names are compared as the file system compares them (name_key), and "//" counts as "/", so a
+    path spelled otherwise ("/users/ME//library/...") is caught too."""
+    parts = [p for p in path.split("/") if p]
+    if parts and parts[-1].startswith("."):
+        return "a hidden file"
+    if any(p.startswith(".") for p in parts):
+        return "in a hidden folder"
+    library = [name_key(p) for p in home.split("/") if p] + ["library"]
+    keys = [name_key(p) for p in parts]
+    inside = len(keys) > len(library) and keys[:len(library)] == library
+    if inside and not (len(keys) > len(library) + 1 and keys[len(library)] in LIBRARY_OPEN):
+        return "in the Library folder"
+    return ""
+
+
+def drop_refusal(files: Sequence[str], home: Optional[str] = None) -> str:
+    """The notice for a drop that is never sent (refused_why of its first such file), or "" to send it. Why: a
+    program on another machine can put text on this Mac's clipboard (OSC 52: tmux's set-clipboard and Ghostty let
+    it through, and hc attach passes it on), so a paste of paths is no proof that the owner dropped those files: it
+    could name ~/.ssh/id_ed25519. Such a drop is pasted as it came, and the notice says why."""
+    home = home if home is not None else os.path.expanduser("~")
+    for path in files:
+        why = refused_why(path, home)
+        if why:
+            return f"drop: {os.path.basename(path)} not sent: {why}"
+    return ""
+
+
+def shell_escape(path: str) -> str:
+    """A path the way Ghostty pastes a dropped file: a backslash before each of SHELL_SPECIALS."""
+    return "".join("\\" + c if c in SHELL_SPECIALS else c for c in path)
+
+
+def drop_paste(text: str, landed: Sequence[str]) -> bytes:
+    """The paste that replaces a drop: the landed paths, shell-escaped, joined by single spaces, with the white
+    space the original had at either end, inside the paste markers."""
+    lead = text[:len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()):]
+    body = lead + " ".join(shell_escape(p) for p in landed) + trail
+    return PASTE_OPEN + body.encode("utf-8", "surrogateescape") + PASTE_CLOSE
+
+
+class DropError(Exception):
+    """Why a file of a drop was not sent: the last part of the notice ("drop: x.png not sent: over 8 MB")."""
+
+
+def landed_path(raw: str) -> str:
+    """Where `hc put --json` says the file landed ({"bytes": N, "path": "..."}); "" for any other answer. A path
+    with a control character is no answer either: pasted, an esc in it could end the paste early."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return ""
+    path = data.get("path") if isinstance(data, dict) else None
+    if not isinstance(path, str) or not path or any(ord(c) < 32 or ord(c) == 127 for c in path):
+        return ""
+    try:
+        path.encode("utf-8")  # a lone surrogate ("\ud800" in the JSON) could not be pasted
+    except UnicodeEncodeError:
+        return ""
+    return path
+
+
+def put_one(path: str, address: str, runner: Callable[..., str]) -> str:
+    """`hc put --json <address> <path>`: the path where the file landed on the terminal's machine."""
+    try:
+        raw = runner("put", "--json", address, path, timeout=PUT_TIMEOUT)
+    except subprocess.CalledProcessError as exc:  # hc --json writes its error on stderr; also read stdout
+        raise DropError(describe_error(subprocess.CalledProcessError(
+            exc.returncode, exc.cmd, output=exc.output, stderr=exc.stderr or exc.output))) from exc
+    except Exception as exc:  # noqa: BLE001 - a timeout, hc missing: the notice says it
+        raise DropError(describe_error(exc)) from exc
+    landed = landed_path(raw)
+    if not landed:
+        raise DropError("hc's answer was not understood")
+    return landed
+
+
+def image_side(path: str) -> int:
+    """The longer side of an image in pixels, as sips reads it; 0 when it cannot tell."""
+    try:
+        out = subprocess.run([SIPS, "-g", "pixelWidth", "-g", "pixelHeight", path], capture_output=True, text=True,
+                             check=False, timeout=PUT_TIMEOUT, stdin=subprocess.DEVNULL).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    sides = [int(n) for n in re.findall(r"pixel(?:Width|Height): *([0-9]+)", out)]
+    return max(sides) if sides else 0
+
+
+def shrink_image(source: str, copy: str) -> bool:
+    """A smaller JPEG copy of an image, made by macOS's sips at `copy`: SHRINK_ARGS, and at most SHRINK_SIDE pixels
+    a side (sips -Z, only for a larger image: it would enlarge a smaller one). False when it failed."""
+    side = image_side(source)
+    fit = ("-Z", str(SHRINK_SIDE)) if side == 0 or side > SHRINK_SIDE else ()
+    try:
+        done = subprocess.run([SIPS, *SHRINK_ARGS, *fit, source, "--out", copy], capture_output=True, check=False,
+                              timeout=PUT_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def needs_copy(path: str) -> bool:
+    """Is `path` an image over PUT_MAX, sent as a smaller copy (put_file)?"""
+    try:
+        return os.path.getsize(path) > PUT_MAX and os.path.splitext(path)[1].lower() in IMAGE_SUFFIXES
+    except OSError:
+        return False
+
+
+def put_file(path: str, address: str, runner: Callable[..., str],
+             shrink: Callable[[str, str], bool] = shrink_image, tmp_dir: Optional[str] = None) -> str:
+    """Send one file beside the terminal `address`; where it landed. Up to PUT_MAX bytes as it is. A larger image
+    (IMAGE_SUFFIXES) goes as a smaller JPEG copy with the same stem, made in a private temp folder (only this user
+    may read it; inside `tmp_dir` when given, which the view relay removes when it ends, also while a copy is being
+    made or sent) and deleted right after; a larger file of another kind is not sent. Raises DropError."""
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        raise DropError("could not be read") from exc
+    if size <= PUT_MAX:
+        return put_one(path, address, runner)
+    if os.path.splitext(path)[1].lower() not in IMAGE_SUFFIXES:
+        raise DropError("over 8 MB")
+    try:
+        folder = tempfile.mkdtemp(prefix="mmini-drop-", dir=tmp_dir)  # mode 0700
+    except OSError as exc:  # tmp_dir gone: the relay is ending
+        raise DropError("over 8 MB, could not be made smaller") from exc
+    try:
+        small = os.path.join(folder, Path(path).stem + ".jpg")
+        if not shrink(path, small) or not os.path.isfile(small):
+            raise DropError("over 8 MB, could not be made smaller")
+        if os.path.getsize(small) > PUT_MAX:
+            raise DropError("over 8 MB, also when made smaller")
+        return put_one(small, address, runner)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def send_drop(files: Sequence[str], address: str, runner: Runner = None,
+              shrink: Optional[Callable[[str, str], bool]] = None, tmp_dir: Optional[str] = None,
+              cancelled: Callable[[], bool] = lambda: False) -> Tuple[Optional[List[str]], str]:
+    """Send each file of a drop beside the terminal `address`, in order: (the landed paths, ""), or (None, the
+    notice) at the first file that could not be sent; the drop is then pasted as it came. Files sent before stay
+    there. `cancelled` is asked before each file: the relay gave the drop up (DROP_TIMEOUT), send no more."""
+    landed: List[str] = []
+    for path in files:
+        if cancelled():
+            return None, f"drop: {os.path.basename(path)} not sent: given up"
+        try:
+            landed.append(put_file(path, address, runner or run_hc, shrink or shrink_image, tmp_dir))
+        except Exception as exc:  # noqa: BLE001 - DropError, or anything else: the original paste goes on
+            why = str(exc) if isinstance(exc, DropError) else describe_error(exc)
+            return None, f"drop: {os.path.basename(path)} not sent: {why}"
+    return landed, ""
+
+
+def notice_line(text: str) -> str:
+    """One line for the request file "ask": no control characters, no character the file cannot hold (a file name
+    read with surrogateescape), at most 200 characters."""
+    text = text.encode("utf-8", "replace").decode("utf-8")
+    return "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in text)[:200]
+
+
+def ask_notice(text: str, win: Path = WINDOW, bad: bool = True) -> None:
+    """Have the tab bar show `text` as a notice: a line "notice <text>" (an error) or "info <text>" (`bad` False)
+    in the window's request file "ask", which the tab bar watches (pick_stamp) and reads once (take_ask). Lines
+    already waiting there stay, a "menu" (a right click in the view) too. Written atomically (temp file and
+    rename)."""
+    old = [line for line in read_text(win / "ask").splitlines() if line.strip()]
+    line = (ASK_NOTICE if bad else ASK_INFO) + notice_line(text)
+    write_atomic(win / "ask", "\n".join(old[-(ASK_LINES - 1):] + [line]) + "\n")
+
+
+def take_ask(win: Path = WINDOW) -> List[str]:
+    """The lines of the request file "ask", read once: it is renamed away first, so a request written meanwhile
+    is never removed unread. [] when there is none."""
+    ask = win / "ask"
+    taken = ask.with_name(f".ask.{os.getpid()}.taken")
+    try:
+        os.replace(ask, taken)
+    except OSError:
+        return []
+    try:
+        return [line.strip() for line in read_text(taken).splitlines() if line.strip()]
+    finally:
+        try:
+            taken.unlink()
+        except OSError:
+            pass
+
+
+def exit_code(status: int) -> int:
+    """A wait status as a shell gives it: the exit code, or 128 + the signal that ended the program."""
+    code = os.waitstatus_to_exitcode(status)
+    return code if code >= 0 else 128 - code
+
+
+@dataclass
+class Drop:
+    """A drop the view relay is sending (ViewRelay.start_drop)."""
+
+    number: int  # the relay's count: a result of a drop given up (DROP_TIMEOUT) comes back with an old number
+    text: str  # the paste without its markers, decoded
+    body: bytes  # the paste without its markers, as it came
+    target: str  # the terminal shown when it was dropped: the only one it is pasted into
+    files: List[str]
+    started: float  # time.monotonic()
+    tell_at: float  # when the tab bar is told (again) that it is being sent
+    told: bool = False  # the tab bar said it is being sent: it then says when it was sent
+    cancel: threading.Event = field(default_factory=threading.Event)  # given up: the thread sends no more files
+    thread: Optional[threading.Thread] = None
+
+    @property
+    def what(self) -> str:
+        """The file's name, or how many files: for the notices."""
+        return os.path.basename(self.files[0]) if len(self.files) == 1 else f"{len(self.files)} files"
+
+
+class ViewRelay:
+    """The view pane's program, around view.sh (relay_view starts both). Every byte goes on unchanged both ways:
+    what view.sh and its `hc attach` write goes to the pane as it is read, what is typed goes to view.sh's terminal
+    at once. Only a bracketed paste is looked at, when its end marker comes (PasteParser): a drop for a terminal of
+    another machine (drop_files; never a hidden file or one in ~/Library: drop_refusal) is sent there in a thread
+    (send_drop) while output keeps flowing; keys typed meanwhile wait and follow the new paste, in order, and after
+    DROP_TELL the tab bar says the drop is being sent. When a file cannot be sent, or after DROP_TIMEOUT, the paste
+    goes on as it came, and the tab bar says why (ask_notice). The paste goes only into the terminal it was dropped
+    on: when another one is shown by then (a pick meanwhile), nothing is pasted, and the tab bar says so.
+
+    Never changed: view.sh, its traps, files and title escapes; view.pid stays a child of view.loop (mmini.py checks
+    that before it ends an attach). The relay holds a key back only when it may start a paste marker, for at most
+    MARKER_HOLD."""
+
+    def __init__(self, master: int, child: int, win: Path = WINDOW, fd_in: int = 0, fd_out: int = 1,
+                 runner: Runner = None, shrink: Optional[Callable[[str, str], bool]] = None) -> None:
+        self.master, self.child, self.win = master, child, win
+        self.fd_in, self.fd_out = fd_in, fd_out
+        self.runner, self.shrink = runner, shrink
+        self.parser = PasteParser()
+        self.to_child = bytearray()  # typed bytes view.sh's terminal has not taken yet
+        self.held = bytearray()  # typed while a drop is being sent: they follow it, in order
+        self.drop: Optional[Drop] = None  # the drop being sent
+        self.drops = 0  # drops started: their numbers
+        self.lock = threading.Lock()  # `finished` and `closed`, shared with the sending threads
+        self.finished: List[Tuple[int, Optional[bytes], str]] = []  # from the threads: (number, new paste, notice)
+        self.closed = False  # the relay's pipes are closed: a thread that ends later must not write to their numbers
+        self.scratch: Optional[str] = None  # the relay's temp folder for smaller copies, removed when it ends
+        self.stopping = 0  # the signal that ends the relay (SIGHUP, SIGTERM)
+        self.resized = False
+        self.child_signal = False  # SIGCHLD came: view.sh may have ended
+        self.wake_r, self.wake_w = os.pipe()  # signals (set_wakeup_fd): select returns at once
+        self.done_r, self.done_w = os.pipe()  # the sending thread is done
+        for fd in (self.wake_r, self.wake_w, self.done_r, self.done_w):
+            os.set_blocking(fd, False)
+
+    def run(self, attrs: Optional[list] = None) -> int:
+        """Relay until view.sh ends (its exit code) or the pane goes (SIGHUP to view.sh's processes). `attrs`: the
+        pane's terminal settings before the relay made it raw, set again at the end."""
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGWINCH,
+                                                           signal.SIGCHLD, signal.SIGINT, signal.SIGQUIT,
+                                                           signal.SIGTSTP)}
+        wakeup = -1
+        try:
+            for sig in (signal.SIGHUP, signal.SIGTERM):
+                signal.signal(sig, self.on_stop)
+            signal.signal(signal.SIGWINCH, self.on_resize)
+            signal.signal(signal.SIGCHLD, self.on_child)
+            for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP):  # as view.sh: a stray one never ends the view
+                signal.signal(sig, signal.SIG_IGN)
+            wakeup = signal.set_wakeup_fd(self.wake_w, warn_on_full_buffer=False)  # a warning would land in the pane
+            if attrs is not None:
+                try:
+                    tty.setraw(self.fd_in, termios.TCSANOW)  # every byte as typed; view.sh's terminal does the rest
+                except termios.error:
+                    pass
+            self.copy_size()  # a resize between the start and the handler above
+            return self.loop()
+        finally:
+            if attrs is not None:
+                try:
+                    termios.tcsetattr(self.fd_in, termios.TCSANOW, attrs)
+                except (termios.error, OSError):
+                    pass
+            try:
+                signal.set_wakeup_fd(wakeup)
+            except (ValueError, OSError):
+                pass
+            for sig, handler in handlers.items():
+                if handler is not None:
+                    signal.signal(sig, handler)
+            self.close()
+
+    def close(self) -> None:
+        """The end: view.sh's terminal and the relay's pipes closed, the drop being sent given up, and the temp
+        folder removed with any smaller copy still in it. The sending thread is not waited for (the process ends
+        now and the thread with it; a sips it started then finds no folder to write to). Once only: a second call
+        would close numbers the process may have given to other files since."""
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            for fd in (self.master, self.wake_r, self.wake_w, self.done_r, self.done_w):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if self.drop is not None:
+            self.drop.cancel.set()
+        if self.scratch:
+            shutil.rmtree(self.scratch, ignore_errors=True)
+
+    @property
+    def busy(self) -> bool:
+        """A drop is being sent: what is typed waits (held)."""
+        return self.drop is not None
+
+    def on_stop(self, signum: int, frame: object) -> None:
+        self.stopping = signum
+
+    def on_resize(self, signum: int, frame: object) -> None:
+        self.resized = True
+
+    def on_child(self, signum: int, frame: object) -> None:
+        self.child_signal = True
+
+    def loop(self) -> int:
+        while True:
+            if self.stopping:
+                return self.hang_up(128 + self.stopping)
+            if self.resized:
+                self.resized = False
+                self.copy_size()
+            if self.child_signal:
+                self.child_signal = False
+                code = self.child_ended(block=False)
+                if code is not None:
+                    return code
+            now = time.monotonic()
+            self.on_time(now)
+            when = self.next_time()
+            reads = [self.master, self.wake_r, self.done_r]
+            if len(self.to_child) + len(self.held) < RELAY_QUEUE:
+                reads.append(self.fd_in)
+            try:
+                ready, writable, _ = select.select(reads, [self.master] if self.to_child else [], [],
+                                                   None if when is None else max(0.0, when - now))
+            except InterruptedError:
+                continue
+            if self.wake_r in ready:
+                self.drain(self.wake_r)
+            if self.done_r in ready:
+                self.drain(self.done_r)
+                self.drop_sent()
+            if self.master in ready and not self.from_child():
+                code = self.child_ended(block=True)
+                return 0 if code is None else code
+            if self.fd_in in ready and not self.from_outer():
+                return self.hang_up(0)
+            if writable or self.to_child:
+                self.flush_child()
+
+    def on_time(self, now: float) -> None:
+        """What is due at `now`: while a drop is sent, the tab bar told so (after DROP_TELL, then again before the
+        notice runs out), or the drop given up (DROP_TIMEOUT: it goes on as it came, and the keys that waited
+        follow); else what the parser may hold no longer."""
+        drop = self.drop
+        if drop is not None:
+            if now >= drop.started + DROP_TIMEOUT:
+                drop.cancel.set()
+                self.end_drop(None, f"drop: {drop.what} not sent: no answer within {DROP_TIMEOUT:g} s", now)
+            elif now >= drop.tell_at:
+                drop.told = True
+                drop.tell_at = now + NOTICE_SECONDS - 1.0
+                self.tell(f"drop: sending {drop.what} to {machine_of(drop.target)}; keys wait", bad=False)
+        if self.drop is None:
+            late = self.parser.due(now)
+            if late:
+                self.to_child += late
+                self.flush_child()
+
+    def next_time(self) -> Optional[float]:
+        """When on_time has something to do; None: nothing until a byte comes."""
+        if self.drop is not None:
+            return min(self.drop.started + DROP_TIMEOUT, self.drop.tell_at)
+        return self.parser.deadline()
+
+    def tell(self, text: str, bad: bool = True) -> None:
+        """A notice in the tab bar (ask_notice); a window folder that cannot be written is no reason to stop."""
+        try:
+            ask_notice(text, self.win, bad)
+        except Exception:  # noqa: BLE001 - the relay goes on without the notice
+            pass
+
+    @staticmethod
+    def drain(fd: int) -> None:
+        try:
+            while os.read(fd, 512):
+                pass
+        except OSError:
+            pass
+
+    def copy_size(self) -> None:
+        """The pane's size to view.sh's terminal (its programs get SIGWINCH from the kernel when it changed)."""
+        try:
+            fcntl.ioctl(self.master, termios.TIOCSWINSZ, fcntl.ioctl(self.fd_in, termios.TIOCGWINSZ, b"\0" * 8))
+        except OSError:
+            pass
+
+    def write_out(self, data: bytes) -> bool:
+        """`data` to the pane, all of it. False when the pane has gone."""
+        view = memoryview(data)
+        while view:
+            try:
+                n = os.write(self.fd_out, view)
+            except BlockingIOError:
+                select.select([], [self.fd_out], [], 1.0)
+                continue
+            except OSError:
+                return False
+            view = view[n:]
+        return True
+
+    def from_child(self) -> bool:
+        """What view.sh's terminal wrote, on to the pane. False when that terminal has closed (view.sh ended)."""
+        try:
+            data = os.read(self.master, RELAY_CHUNK)
+        except BlockingIOError:
+            return True
+        except OSError:
+            return False
+        if not data:
+            return False
+        if not self.write_out(data):
+            self.stopping = self.stopping or signal.SIGHUP
+        return True
+
+    def from_outer(self) -> bool:
+        """What was typed, on to view.sh's terminal (or held while a drop is sent). False when the pane has gone
+        (end of file, or an error: a closed pane reads so)."""
+        try:
+            data = os.read(self.fd_in, RELAY_CHUNK)
+        except BlockingIOError:
+            return True
+        except OSError:
+            return False
+        if not data:
+            return False
+        if self.busy:
+            self.held += data
+        else:
+            self.take(self.parser.feed(data, time.monotonic()))
+            self.flush_child()
+        return True
+
+    def take(self, events: Sequence[Tuple[str, bytes]]) -> None:
+        """Events of the parser: plain bytes go on; a paste goes on as it came, unless it is a drop to send. Then
+        everything after it waits until it was sent."""
+        for i, event in enumerate(events):
+            kind, payload = event
+            if kind == "paste" and self.start_drop(payload):
+                self.held = bytearray(b"".join(raw_event(e) for e in events[i + 1:]) + self.parser.take())
+                return
+            self.to_child += raw_event(event)
+
+    def start_drop(self, body: bytes) -> bool:
+        """A paste ended: is it a drop to send (drop_files, with the shown terminal read now)? Then a thread sends
+        it, and True. A drop naming a file that is never sent (drop_refusal) goes on as it came, with a notice."""
+        try:
+            text = body.decode("utf-8", "surrogateescape")
+            target = current_target(self.win)
+            files = drop_files(text, target)
+            refusal = drop_refusal(files) if files else ""
+        except Exception:  # noqa: BLE001 - never a lost paste: it goes on as it came
+            return False
+        if not files:
+            return False
+        if refusal:
+            self.tell(refusal)
+            return False
+        if self.scratch is None and any(needs_copy(f) for f in files):
+            try:
+                self.scratch = tempfile.mkdtemp(prefix="mmini-view-")  # mode 0700; removed by close
+            except OSError:
+                pass  # put_file makes its folder in the usual temp folder
+        now = time.monotonic()
+        self.drops += 1
+        drop = Drop(self.drops, text, body, target, list(files), now, now + DROP_TELL)
+        drop.thread = threading.Thread(target=self.send, args=(drop,), daemon=True)
+        try:
+            drop.thread.start()
+        except RuntimeError:  # no thread to be had: the paste goes on as it came
+            return False
+        self.drop = drop
+        return True
+
+    def send(self, drop: Drop) -> None:
+        """The sending thread: (the new paste, "") or (None, the notice) for the main loop (drop_sent), which
+        decides what is pasted: the terminal shown may have changed meanwhile."""
+        paste: Optional[bytes] = None
+        why = f"drop: {drop.what} not sent"
+        try:
+            landed, why = send_drop(drop.files, drop.target, self.runner, self.shrink, self.scratch,
+                                    drop.cancel.is_set)
+            if landed is not None:
+                paste = drop_paste(drop.text, landed)
+        except Exception as exc:  # noqa: BLE001 - the original paste goes on, and the notice says why
+            paste, why = None, f"drop: {drop.what} not sent: {describe_error(exc)}"
+        finally:
+            with self.lock:
+                self.finished.append((drop.number, paste, why))
+                if not self.closed:
+                    try:
+                        os.write(self.done_w, b"x")
+                    except OSError:
+                        pass
+
+    def drop_sent(self) -> None:
+        """Back from a sending thread: the drop being sent ends (end_drop). A result of a drop given up at
+        DROP_TIMEOUT comes too late: its paste went on as it came then."""
+        with self.lock:
+            finished, self.finished = self.finished, []
+        for number, paste, why in finished:
+            if self.drop is not None and number == self.drop.number:
+                self.end_drop(paste, why, time.monotonic())
+
+    def end_drop(self, paste: Optional[bytes], why: str, now: float) -> None:
+        """The drop being sent ends: the new paste (`paste`), or the original one (None, the notice `why`), goes on,
+        then what was typed meanwhile (it may hold another drop). Only into the terminal it was dropped on: when
+        another one is shown now (a pick meanwhile, on this machine or another), nothing is pasted and the notice
+        says so (before the relay, a paste reached the terminal shown when it was dropped). A drop the tab bar said
+        was being sent says when it was sent."""
+        drop, self.drop = self.drop, None
+        if drop is None:
+            return
+        if current_target(self.win) != drop.target:
+            out = b""
+            why = (why + "; " if why else "drop: ") + "not pasted: another terminal is shown now"
+        else:
+            out = paste if paste is not None else PASTE_OPEN + drop.body + PASTE_CLOSE
+        if why:
+            self.tell(why)
+        elif drop.told:
+            self.tell(f"drop: {drop.what} sent to {machine_of(drop.target)}", bad=False)
+        self.to_child += out
+        typed, self.held = bytes(self.held), bytearray()
+        if typed:
+            self.take(self.parser.feed(typed, now))
+        self.flush_child()
+
+    def flush_child(self) -> None:
+        """As much of the typed bytes as view.sh's terminal takes now; the rest when select says it can take more."""
+        while self.to_child:
+            try:
+                n = os.write(self.master, self.to_child)
+            except BlockingIOError:
+                return
+            except OSError:  # that terminal has closed: from_child sees it
+                self.to_child.clear()
+                return
+            if n <= 0:
+                return
+            del self.to_child[:n]
+
+    def child_ended(self, block: bool) -> Optional[int]:
+        """view.sh's exit code once it has ended (what it wrote last still goes to the pane); None while it runs."""
+        try:
+            pid, status = os.waitpid(self.child, 0 if block else os.WNOHANG)
+        except ChildProcessError:
+            return 0
+        if pid == 0:
+            return None
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:  # its last words; a program it left behind may hold the terminal open
+            try:
+                data = os.read(self.master, RELAY_CHUNK)
+            except OSError:
+                break
+            if not data or not self.write_out(data):
+                break
+        return exit_code(status)
+
+    def hang_up(self, code: int) -> int:
+        """The pane has gone (or the relay was told to end): SIGHUP to view.sh and everything it started (its process
+        group: view.sh runs it all in its own), as closing the pane did before the relay; then the relay ends (run
+        closes view.sh's terminal)."""
+        try:
+            os.killpg(self.child, signal.SIGHUP)
+        except OSError:
+            pass
+        return code
+
+
+def start_child(argv: Sequence[str], attrs: Optional[list], size: Optional[bytes]) -> None:
+    """In the new process of os.forkpty: the terminal settings and size of the pane (as view.sh had them when it
+    ran in the pane itself), the signals back to their defaults (the relay's, and Python's own SIG_IGN for SIGPIPE
+    and SIGXFSZ, would carry over to view.sh and hc), then `argv`. Never returns."""
+    try:
+        if attrs is not None:
+            termios.tcsetattr(0, termios.TCSANOW, attrs)
+        if size is not None:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, size)
+        for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP, signal.SIGPIPE, signal.SIGXFSZ, signal.SIGHUP,
+                    signal.SIGTERM, signal.SIGWINCH, signal.SIGCHLD):
+            signal.signal(sig, signal.SIG_DFL)
+        os.execv(argv[0], list(argv))
+    except BaseException as exc:  # noqa: BLE001 - the pane says why, and this process ends
+        try:
+            os.write(2, f"mmini view: cannot start {argv[0]}: {exc}\r\n".encode("utf-8", "replace"))
+        except OSError:
+            pass
+    os._exit(127)
+
+
+def relay_view(child: Optional[Sequence[str]] = None, win: Path = WINDOW) -> int:
+    """`mmini.py view`, the view pane's program: `child` (view.sh) in a pseudo terminal of its own behind a
+    ViewRelay, which ends with view.sh's exit code. Not in a terminal (nothing to relay), or no pseudo terminal to
+    be had: view.sh runs in this process's place, as before the relay (a drop then reaches it unchanged)."""
+    argv = list(child) if child else ["/bin/sh", str(BASE / "view.sh")]
+    if not os.isatty(0):
+        os.execv(argv[0], argv)
+    try:
+        attrs: Optional[list] = termios.tcgetattr(0)
+    except termios.error:
+        attrs = None
+    try:
+        size: Optional[bytes] = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8)
+    except OSError:
+        size = None
+    try:
+        pid, master = os.forkpty()
+    except OSError:
+        os.execv(argv[0], argv)
+    if pid == 0:
+        start_child(argv, attrs, size)
+    os.set_inheritable(master, False)
+    os.set_blocking(master, False)
+    return ViewRelay(master, pid, win).run(attrs)
+
+
 def main(argv: Sequence[str]) -> int:
+    if len(argv) == 2 and argv[1] == "view":
+        return relay_view()
     if len(argv) != 2 or argv[1] not in ("sidebar", "tabs"):
-        print("usage: mmini.py sidebar|tabs", file=sys.stderr)
+        print("usage: mmini.py sidebar|tabs|view", file=sys.stderr)
         return 2
     if argv[1] == "sidebar" and read_sidebar_state() == "hidden":
         return start_hidden()
