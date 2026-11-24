@@ -1,34 +1,58 @@
 # herdr-core-ghostty-UI
 
-![An mmini window in Ghostty: sidebar, tab bar and an agent's terminal, with made-up data](docs/screenshot.png)
+<p>
+  <img src="docs/screenshot-dark.png" width="49%" alt="An mmini window in Ghostty, dark theme: sidebar, tab bar and an agent's terminal, with made-up data">
+  <img src="docs/screenshot-light.png" width="49%" alt="The same window in a light theme">
+</p>
 
 A sidebar and a tab bar for herdr-core terminals and coding agents, in one Ghostty window on macOS.
 
-The app is named **mmini**. Python 3 standard library and shell only: no packages, no daemon, no network port of
-its own, no admin rights asked.
+The app is named **mmini**. Python 3 standard library, shell and tmux: no Python packages, no daemon, no network
+port of its own, no admin rights asked.
 
 ## Examples
 
-Drawn from the real program's output; machines, projects and agents are made up.
+Drawn from the real program's output, in a dark and a light theme (these follow GitHub's); machines, projects
+and agents are made up.
 
-<img src="docs/sidebar.png" width="276" alt="The sidebar: needs you, spaces, servers, dev servers and agents">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/sidebar-dark.png">
+  <img src="docs/sidebar-light.png" width="258" alt="The sidebar: needs you, spaces, servers, dev servers and agents">
+</picture>
 
 Spaces, servers as `user@host`, a dev server and agents with their status; marks ¹ ² ³ name the Claude login each
 session bills.
 
-<img src="docs/needs-you.png" width="356" alt="Needs you with a blocked and a done agent, and the red keychain line">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/needs-you-dark.png">
+  <img src="docs/needs-you-light.png" width="258" alt="Needs you with a blocked and a done agent, and the red keychain line">
+</picture>
 
 Needs you: an agent blocked on another server and one done but not shown since. The red line: the home machine's
 login keychain is locked.
 
-<img src="docs/tabbar.png" width="692" alt="The tab bar with three tabs and the line about the shown terminal">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/tabbar-dark.png">
+  <img src="docs/tabbar-light.png" width="714" alt="The tab bar with three tabs and the line about the shown terminal">
+</picture>
 
 Tab bar: one tab per terminal of the space, the mark on the agent's tab, then the shown terminal's address, folder,
 program and status.
 
-<img src="docs/menu.png" width="276" alt="The menu of an agent row">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/menu-dark.png">
+  <img src="docs/menu-light.png" width="258" alt="The menu of an agent row">
+</picture>
 
-The menu of an agent row, opened with a right click or `a`.
+The menu of an agent row, opened with a right click (as here: clicks only, no keys shown) or with `a`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/tabmenu-dark.png">
+  <img src="docs/tabmenu-light.png" width="714" alt="The menu of the tab server, on the line below the tabs">
+</picture>
+
+The menu of a tab, opened with a right click on the tab or in the shown terminal: New terminal, Rename, Move to
+space, Close.
 
 ## What it is, and what it is not
 
@@ -37,7 +61,8 @@ The menu of an agent row, opened with a right click or `a`.
   `hc attach`.
 - **Not herdr-core.** herdr-core is a separate project: [herdrdev/herdr-core](https://github.com/herdrdev/herdr-core).
   mmini is not made by its authors.
-- **Not a terminal.** Ghostty draws every pane. mmini runs inside three of them.
+- **Not a terminal.** Ghostty draws the window and a tmux of the window's own splits it into three panes. mmini
+  runs in all three.
 - **No connection of its own.** Every machine is reached through `hc`. The only other thing mmini opens is a dev
   server's page, in the default browser, on a click.
 
@@ -59,8 +84,17 @@ The menu of an agent row, opened with a right click or `a`.
   `MMINI_KEYCHAIN=0`.
 - **Dev servers.** Web pages served by `node` (or `MMINI_DEV_PROGRAM`) on the home machine, one row per port, asked
   every 60 seconds. A click opens `http://<host>:<port>/` in the default browser.
+- **One click.** A click acts in any pane at once: tmux passes it to the pane under the pointer. After a pick the
+  keyboard goes to the shown terminal.
 - **Rename, create, delete.** Display names for spaces, servers and terminals; new spaces and shells; servers
   added with `hc machine add`. A delete asks for the name to be typed first.
+- **Tab menu.** A right click on a tab, or in the shown terminal, opens its menu: New terminal, Rename, Move to
+  space, Close. Close lists everything that ends with the tab (the tab bar grows until the whole list shows) and
+  closes on `y`; any other key cancels. When the list changed meanwhile, it is shown again and `y` is asked again.
+  A menu opened with a right click is picked from with the mouse only: keys typed then go on to the terminal, so
+  keys typed after an accidental right click never act on the menu.
+- **Drops land in the terminal.** A file dropped on the window reaches the shown terminal as its path, also when
+  the sidebar or the tab bar had the keyboard.
 - **Resizable.** The sidebar's divider and the line above the agents can be dragged with the mouse. Both are kept
   for the next window.
 - **Hide sections.** Servers, agents and dev servers, each with one key.
@@ -76,6 +110,7 @@ The menu of an agent row, opened with a right click or `a`.
 | macOS | AppleScript, `osacompile`, `lsof`, `perl`, `open` and `security` are used, all part of macOS |
 | git | To install and update. Part of the Xcode Command Line Tools (`xcode-select --install`) |
 | Ghostty | 1.3.0 or newer (its AppleScript control came with 1.3.0) |
+| tmux | 3.5 or newer: `brew install tmux`. Tested with 3.8. Only mmini's own settings are read (`mmini.tmux.conf`), never `~/.tmux.conf` |
 | herdr-core | `hc` at `~/.local/bin/hc` (where its installer puts it), with the machines added (`hc machine add me@my-server`). Tested with 0.1.21 |
 | Python | `python3` with `curses`, 3.9 or newer. The one from the Xcode Command Line Tools is enough |
 
@@ -85,7 +120,8 @@ The menu of an agent row, opened with a right click or `a`.
 git clone https://github.com/PerIPan/herdr-core-ghostty-UI ~/.local/share/mmini && sh ~/.local/share/mmini/build.sh
 ```
 
-`build.sh` checks for `python3` with `curses`, `~/.local/bin/hc`, Ghostty and its version, then builds `mmini.app`
+`build.sh` checks for `python3` with `curses`, tmux and its version, `~/.local/bin/hc`, Ghostty and its version,
+then builds `mmini.app`
 in `/Applications` (in `~/Applications` when `/Applications` is not writable without admin rights). The new app is
 compiled beside the old one and replaces it only when the compile worked. The app starts the files in
 `~/.local/share/mmini`, so the clone stays there. Each start of `mmini.app` opens one new Ghostty window.
@@ -101,22 +137,6 @@ Remove:
 ```sh
 rm -rf /Applications/mmini.app ~/Applications/mmini.app ~/.local/share/mmini ~/.local/state/mmini
 ```
-
-## Two Ghostty settings
-
-Ghostty 1.3 has these only for all of its windows, so `build.sh` checks the config and prints the missing lines. It
-never edits the config.
-
-```
-focus-follows-mouse = true
-macos-titlebar-proxy-icon = hidden
-```
-
-- `focus-follows-mouse = true`: one click on a tab or a row is enough. Without it, the first click on a pane only
-  gives it the keyboard. With it, the keyboard follows the pointer: move the pointer into the terminal before typing.
-- `macos-titlebar-proxy-icon = hidden`: no folder icon next to the window title.
-
-Reload the config in Ghostty afterwards: cmd+shift+, (comma).
 
 ## Keys
 
@@ -134,18 +154,27 @@ Sidebar (`?` shows the full list):
 | v / g / w | Show or hide servers / agents / dev servers |
 | c / o / q | Fold to a strip, then hide / open again / hide |
 | [ ] (also - =) | Line above the agents one row up or down |
-| z | The shown terminal gets the whole window; cmd+shift+enter brings the panes back |
+| z | The shown terminal gets the whole window; a click on the line on top (`‹ back`) brings the panes back |
 | r | Refresh now |
 
-Tab bar: left/right or h/l between tabs, enter or down to the terminal, `z` as above, `c` or `o` brings a hidden
-sidebar back, `?` shows its keys.
+Tab bar: left/right or h/l between tabs, enter or down to the terminal, a right click on a tab for its menu, `z` as
+above, `c` or `o` brings a hidden sidebar back, `?` shows its keys.
+
+In the shown terminal: a right click opens the tab menu of that terminal (not while zoomed: then the program gets
+it); option+right click reaches a program that uses the mouse as option+right click. Keys typed after a right click
+reach the terminal unchanged (ctrl+C, esc sequences and `;` included).
+
+No tmux keys: tmux has no prefix here, so ctrl+b and every other key reach the shown terminal. Text in the shown
+terminal: a drag selects it with tmux and copies it to the clipboard; shift+drag is Ghostty's own selection. The
+mouse wheel scrolls back through tmux; while scrolled back, keys go to tmux (`q` or esc, or scrolling to the bottom,
+ends it; a pick of another terminal ends it too).
 
 In the shown terminal, ctrl+\ detaches (`hc attach`'s own key).
 
 ## Settings
 
-Environment variables, read at start. Each pane's command is typed into Ghostty's own shell, so an `export` in that
-shell's startup file (`~/.zshrc` for zsh, the macOS default) applies.
+Environment variables, read at start. `start.sh` is typed into Ghostty's own shell, so an `export` in that shell's
+startup file (`~/.zshrc` for zsh, the macOS default) applies.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
@@ -157,7 +186,6 @@ shell's startup file (`~/.zshrc` for zsh, the macOS default) applies.
 | `MMINI_AUTOSIZE=0` | on | The sidebar and the tab bar never resize their panes |
 | `MMINI_AUTOOPEN=0` | on | Nothing is shown until a terminal is picked |
 | `MMINI_BROWSER=0` | on | A dev server is never opened in the browser |
-| `MMINI_GHOSTTY=0` | on | No Ghostty calls at all (also no browser) |
 | `MMINI_MARKS` | none: no marks | Account marks: `label=mark` pairs, for example `personal=¹,work=²`. A mark is one character. An `account` label not in the list gets `³` |
 | `MMINI_SHARED_USER` | none | An ssh user: a Claude Code session without an `account` label on a server reached as this user gets `MMINI_SHARED_MARK` |
 | `MMINI_SHARED_MARK` | `³` | The mark for `MMINI_SHARED_USER` |
@@ -175,12 +203,18 @@ Then `hc label my-server/t3 account=work` gives that terminal's agent the mark `
 
 ## How it works
 
-One Ghostty window, three panes, made with Ghostty's AppleScript splits:
+One Ghostty window runs `start.sh`: a tmux server of the window's own, with `mmini.tmux.conf` only, and three panes:
 
 - **Sidebar** (left): `python3 mmini.py sidebar`, drawn with curses. It lists the terminals (`hc ls`), reads labels
   and parents (`hc get`, every 30 seconds) and runs the keychain and dev server checks (`hc exec`).
 - **Tab bar** (top right): `python3 mmini.py tabs`, one tab per terminal of the chosen space or server.
 - **View** (below the tab bar): `view.sh`, which runs `hc attach` on the picked terminal.
+
+tmux passes each click to the pane under the pointer, with no click spent on moving the keyboard first. Its own
+keys, menus and status line are switched off; a line on top shows only while the view is zoomed. The sidebar and
+the tab bar set their sizes exactly (30 columns, 3 rows) and again after the window changes size. Closing the
+window ends its tmux and the three panes; the terminals in herdr-core keep running (only the view's `hc attach`
+ends).
 
 The panes talk through files in `~/.local/state/mmini`: what is shown last, display names (`names.json`), section
 choices, the sidebar width. Each window has its own folder there (`w-XXXXXX`), so two windows never switch each
@@ -191,7 +225,7 @@ else the project folder below `~/dev`, else the last folder of its working direc
 
 ## Limits
 
-- macOS only. Ghostty 1.3.0 or newer only.
+- macOS only. Ghostty 1.3.0 or newer and tmux 3.5 or newer only.
 - The keychain check and the dev server list expect the home machine to be a Mac (`/usr/bin/security`,
   `/usr/sbin/lsof`). A check that cannot run draws nothing.
 - `build.sh` looks for `hc` only at `~/.local/bin/hc`, also when `MMINI_HC` is set.
@@ -203,13 +237,14 @@ else the project folder below `~/dev`, else the last folder of its working direc
   admin rights sees no others), only ports reachable from other machines. The page opens at the host part of the
   home machine's SSH target (`localhost` when home is this Mac); a `~/.ssh/config` alias that is not a real host
   name does not reach it.
-- No Ghostty split is narrower than a tenth of the window, so the folded strip is about 12 columns on a 120-column
-  window.
-- A right click may open Ghostty's own menu instead of mmini's. The key `a` always works.
+- tmux sits between Ghostty and the shown terminal: Ghostty's own scrollback and search see what tmux draws, and
+  shift+enter and other modified keys reach the terminal as CSI u codes (tmux's extended keys), tried in a pseudo
+  terminal, not yet in Ghostty.
 - The keychain warning was never seen with a locked keychain: the answer of `security` when locked is taken from
   macOS's error codes.
-- The automated tests run without Ghostty and without a real `hc`. Not covered by them: the app and its window, the
-  pane sizes, dragging in Ghostty, mouse clicks in Ghostty, adding or forgetting a real machine, switch time over
+- The automated tests run without Ghostty and without a real `hc`; one starts the real tmux in a pseudo terminal
+  (layout, sizes, a click, hiding and bringing back the sidebar). Not covered: the app and its window in Ghostty,
+  the folder icon, mouse clicks and drags in Ghostty itself, adding or forgetting a real machine, switch time over
   the network, and opening a page in the browser.
 
 ## Tests
@@ -218,7 +253,8 @@ else the project folder below `~/dev`, else the last folder of its working direc
 /usr/bin/python3 -m unittest discover -s tests
 ```
 
-Standard library only, about 35 seconds. The tests never call the real `hc` and never call Ghostty.
+Standard library only, about 35 seconds. The tests never call the real `hc` and never call Ghostty. One test
+starts the real tmux; it is skipped when tmux is not installed.
 
 ## Licence
 

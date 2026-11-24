@@ -24,6 +24,8 @@ mkdir -p "$state"
 
 if [ ! -x "$hc" ]; then
   printf 'mmini view: hc not found at %s (set MMINI_HC, or install herdr-core).\n' "$hc"
+  # On screen the message stays: in tmux the pane would close with this script.
+  if [ -t 1 ]; then while :; do sleep 3600; done; fi
   exit 1
 fi
 

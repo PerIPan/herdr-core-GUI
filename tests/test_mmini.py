@@ -24,7 +24,10 @@ sys.dont_write_bytecode = True
 # home machine is "mmini"; the account marks and the shared account are fixtures too.
 for _name in [k for k in os.environ if k.startswith("MMINI_")]:
     del os.environ[_name]
-os.environ["MMINI_GHOSTTY"] = "0"
+os.environ["MMINI_TMUX"] = "0"  # no tmux calls (also when the tests run inside tmux)
+os.environ["MMINI_BROWSER"] = "0"
+os.environ.pop("TMUX", None)
+os.environ.pop("TMUX_PANE", None)
 os.environ["MMINI_FIRST"] = "mmini"
 os.environ["MMINI_MARKS"] = "claude=¹,main=¹,work=²"
 os.environ["MMINI_SHARED_USER"] = "guest"
@@ -469,16 +472,16 @@ class SidebarPlanTests(unittest.TestCase):
                      " d       delete, forget, end", " n       new terminal here", " s       new space",
                      " m       move to a space", " v       show/hide servers", " c       fold, then hide",
                      " o       open the strip", " q       hide", " z       zoom the view",
-                     " ⌘⇧↵     back from the zoom", " [ ] - = separator up/down",
+                     " ‹ back  click: zoom ends", " [ ] - = separator up/down",
                      " r       refresh", " ?       this list"):
             self.assertIn(line, lines)
         self.assertNotIn("quit", text)  # q hides the sidebar: its pane closes
         self.assertIsNone(re.search(r"\brigs?\b", text))
         self.assertTrue(all(mmini.text_width(line) <= 29 for line in lines))
-        with mock.patch.object(mmini, "utf8_screen", return_value=False):  # cmd+shift+enter is longer: cut, not wrapped
-            ascii_lines = [mmini.glyph(line) for line in mmini.help_lines(29, 40)]  # as Screen.put draws them
+        with mock.patch.object(mmini, "utf8_screen", return_value=False):  # as Screen.put draws them
+            ascii_lines = [mmini.glyph(line) for line in mmini.help_lines(29, 40)]
             self.assertTrue(all(len(line) <= 29 and line.isascii() for line in ascii_lines))
-            self.assertIn(" cmd+shift+enter back from t~", ascii_lines)
+            self.assertIn(" < back  click: zoom ends", ascii_lines)
 
     def test_the_list_of_keys_on_a_short_or_narrow_pane(self):
         self.assertEqual(mmini.help_lines(29, 0), [])
@@ -767,16 +770,14 @@ class TabLayoutTests(unittest.TestCase):
                 self.assertIsInstance(lay.segs, list)
                 self.assertLessEqual(lay.rows, rows)
 
-    def test_tab_hint_keeps_the_way_back_from_a_zoom_longest(self):
-        self.assertEqual(mmini.tab_hint(200), mmini.TAB_HINTS[0])
-        self.assertEqual(mmini.tab_hint(len(mmini.TAB_HINTS[0]) - 1), mmini.TAB_HINTS[1])
-        self.assertEqual(mmini.tab_hint(len(mmini.TAB_HINTS[2])), "z zoom  ⌘⇧↵ back")
-        self.assertEqual(mmini.tab_hint(len(mmini.TAB_HINTS[2]) - 1), "")
+    def test_tab_hint_shortens_step_by_step(self):
+        hints = mmini.TAB_HINTS
+        self.assertEqual(mmini.tab_hint(200), hints[0])
+        for i in range(len(hints) - 1):
+            self.assertEqual(mmini.tab_hint(len(hints[i]) - 1), hints[i + 1])
+        self.assertEqual(mmini.tab_hint(len(hints[-1]) - 1), "")
         self.assertEqual(mmini.tab_hint(-5), "")
-        self.assertTrue(all("⌘⇧↵ back" in h for h in mmini.TAB_HINTS))
-        with mock.patch.object(mmini, "utf8_screen", return_value=False):  # measured as drawn
-            self.assertEqual(mmini.tab_hint(len(mmini.TAB_HINTS[2])), "")
-            self.assertEqual(mmini.tab_hint(len("z zoom  cmd+shift+enter back")), mmini.TAB_HINTS[2])
+        self.assertTrue(all("z zoom" in h and "⌘" not in h for h in hints))
 
     def test_tab_hint_without_a_sidebar_names_its_key(self):
         alone = mmini.TAB_HINTS_ALONE
@@ -815,239 +816,6 @@ class TabLayoutTests(unittest.TestCase):
         self.assertLessEqual(len(mmini.tab_info(long, 44)), 44)
         self.assertEqual(mmini.tab_info(long, 30), "mmini/t5 · claude-code · idle")  # no room for a folder
         self.assertEqual(mmini.short_folder("/home/u"), "~")
-
-
-class GhosttyModel:
-    """Ghostty's split as its source describes it: the divider moves `gain` times the cells asked for (the amount
-    is in points, the reported size in device pixels) and the pane stays between 10% and 90% of the window."""
-
-    def __init__(self, window, size, gain=2.0, shrink="left", late=0):
-        self.window, self.size, self.gain, self.shrink, self.late = window, float(size), gain, shrink, late
-        self.sent = []
-
-    def apply(self, action):
-        direction, cells = action
-        self.sent.append(action)
-        if self.late:  # this step never arrives in time
-            self.late -= 1
-            return
-        delta = cells * self.gain * (-1 if direction == self.shrink else 1)
-        self.size = max(0.1 * self.window, min(0.9 * self.window, self.size + delta))
-
-    def run(self, target, dirs, tolerance=1):
-        state = mmini.ResizeState()
-        while True:
-            action, state = mmini.next_resize(int(self.size), target, state, dirs, tolerance)
-            if action is None:
-                return int(self.size)
-            self.apply(action)
-
-
-class ResizeTests(unittest.TestCase):
-    D = ("left", "right")
-
-    def test_done_within_tolerance(self):
-        for size in (29, 30, 31):
-            self.assertIsNone(mmini.next_resize(size, 30, mmini.ResizeState(), self.D)[0])
-        self.assertIsNotNone(mmini.next_resize(3, 2, mmini.ResizeState(), ("up", "down"), 0)[0])
-        self.assertIsNone(mmini.next_resize(2, 2, mmini.ResizeState(), ("up", "down"), 0)[0])
-
-    def test_first_step_uses_the_layouts_direction_and_the_first_gain(self):
-        action, state = mmini.next_resize(60, 30, mmini.ResizeState(), self.D)
-        self.assertEqual(action, ("left", 30 / mmini.FIRST_GAIN))
-        self.assertEqual((state.steps, state.before, state.grow), (1, 60, False))
-        action, _ = mmini.next_resize(10, 30, mmini.ResizeState(), self.D)
-        self.assertEqual(action, ("right", 20 / mmini.FIRST_GAIN))
-        action, _ = mmini.next_resize(20, 2, mmini.ResizeState(), ("up", "down"), 0)
-        self.assertEqual(action[0], "up")
-
-    def test_a_move_the_other_way_stops_and_teaches_nothing(self):
-        # asked to shrink by 4 at the 10% limit, the pane grew from 12 to 14: the window grew meanwhile
-        sent = mmini.ResizeState(steps=2, gain=1.5, before=12, asked=4.0, grow=False)
-        action, state = mmini.next_resize(14, 6, sent, self.D)
-        self.assertIsNone(action)  # no step "right" (the old swap of directions), no gain of 2/4
-        self.assertTrue(state.stray)
-        self.assertEqual((state.gain, state.steps), (1.5, 2))
-        sent = mmini.ResizeState(steps=1, gain=2.0, before=12, asked=9.0, grow=True)  # meant to grow, it shrank
-        self.assertTrue(mmini.next_resize(10, 30, sent, self.D)[1].stray)
-        self.assertFalse(mmini.next_resize(30, 30, sent, self.D)[1].stray)  # moved the way asked: no stray
-
-    def test_gain_is_learnt_from_the_last_step(self):
-        sent = mmini.ResizeState(steps=1, gain=1.0, before=100, asked=20.0)  # asked for 20, moved 40: a 2x display
-        action, state = mmini.next_resize(60, 30, sent, self.D)
-        self.assertEqual(state.gain, 2.0)
-        self.assertEqual(action, ("left", 15.0))
-
-    def test_overshoot_comes_back_with_the_corrected_amount(self):
-        sent = mmini.ResizeState(steps=1, gain=1.0, before=60, asked=30.0)  # asked for 30, moved 48 (past the goal)
-        action, state = mmini.next_resize(12, 30, sent, self.D)
-        self.assertEqual(action[0], "right")
-        self.assertAlmostEqual(action[1], 18 / 1.6)
-        self.assertFalse(state.stray)  # an overshoot moved the way asked
-
-    def test_gain_stays_within_limits(self):
-        sent = mmini.ResizeState(steps=1, gain=1.0, before=100, asked=2.0)
-        self.assertEqual(mmini.next_resize(40, 30, sent, self.D)[1].gain, mmini.GAIN_LIMITS[1])
-        sent = mmini.ResizeState(steps=1, gain=1.0, before=100, asked=50.0)
-        self.assertEqual(mmini.next_resize(99, 30, sent, self.D)[1].gain, mmini.GAIN_LIMITS[0])
-
-    def test_no_movement_stops_instead_of_sending_again(self):
-        sent = mmini.ResizeState(steps=1, gain=2.0, before=60, asked=15.0)
-        action, state = mmini.next_resize(60, 30, sent, self.D)
-        self.assertIsNone(action)
-        self.assertEqual(state.steps, 1)
-        self.assertFalse(state.stray)
-
-    def test_step_limit(self):
-        self.assertIsNone(mmini.next_resize(90, 30, mmini.ResizeState(mmini.MAX_RESIZE_STEPS), self.D)[0])
-        self.assertIsNotNone(mmini.next_resize(90, 30, mmini.ResizeState(mmini.MAX_RESIZE_STEPS - 1), self.D)[0])
-
-    def test_sidebar_converges_on_retina_and_plain_displays(self):
-        for window in (100, 120, 160, 200, 250, 300):
-            for gain in (1.0, 2.0, 3.0):
-                model = GhosttyModel(window, window // 2, gain)
-                end = model.run(30, self.D)
-                self.assertLessEqual(abs(end - 30), 1, (window, gain, model.sent))
-                self.assertLessEqual(len(model.sent), mmini.MAX_RESIZE_STEPS, (window, gain))
-        self.assertEqual(len(GhosttyModel(200, 100, 2.0).sent), 0)
-        model = GhosttyModel(160, 80, 2.0)  # a MacBook: the first amount already allows for 2x
-        model.run(30, self.D)
-        self.assertEqual(len(model.sent), 1)
-
-    def test_a_window_resize_during_the_step_at_the_limit_sends_nothing_the_other_way(self):
-        """Folded: the step at the 10% limit moves nothing, so the loop waits its full time; the window changes size
-        meanwhile and the strip (a share of the window) with it. That change is not the step's: no step the other way,
-        no jump past the strip's width, and the loop ends on it with 0 (no limit found), so the sidebar's refit looks
-        again once the size is quiet."""
-        for window, new, gain in ((120, 140, 2.0), (160, 200, 2.0), (120, 200, 1.0), (320, 360, 2.0),
-                                  (200, 120, 2.0)):
-            model = GhosttyModel(window, max(30, int(0.1 * window) + 8), gain)  # open, above the 10% limit
-            seen = []
-
-            def wait(before, moved_on):
-                if int(model.size) == before and model.window == window:  # the step at the limit: the window changes
-                    model.size, model.window = model.size * new / window, new
-                seen.append(int(model.size))
-                return int(model.size)
-
-            size, aimed = mmini.resize_loop(lambda: (int(model.size), 1.0),
-                                            lambda d, amount: model.apply((d, float(amount))),
-                                            lambda: mmini.NARROW, wait, self.D, 1)
-            case = (window, new, gain, model.sent, seen)
-            self.assertEqual({d for d, _ in model.sent}, {"left"}, case)
-            self.assertLessEqual(max(seen), max(int(0.1 * window), int(0.1 * new)) + 1, case)
-            self.assertEqual(aimed, mmini.NARROW, case)
-            if new > window:
-                self.assertEqual(size, 0, case)  # stopped by the outside change: not taken as the limit
-
-    def test_sidebar_stops_at_the_ten_percent_limit_of_a_very_wide_window(self):
-        model = GhosttyModel(400, 200, 2.0)  # 10% of 400 columns is 40: 30 cannot be reached
-        self.assertEqual(model.run(30, self.D), 40)
-        self.assertLessEqual(len(model.sent), 3)
-
-    def test_tab_bar_stops_cleanly_at_the_ten_percent_limit(self):
-        for rows, gain in ((50, 1.0), (50, 2.0), (70, 2.0), (45, 1.0)):
-            model = GhosttyModel(rows, rows // 2, gain, shrink="up")
-            end = model.run(2, ("up", "down"), 0)
-            self.assertEqual(end, int(0.1 * rows), (rows, gain))
-            self.assertLessEqual(len(model.sent), 3, (rows, gain, model.sent))  # the last one shows the limit
-        model = GhosttyModel(20, 10, 2.0, shrink="up")  # a small window: 10% is 2 rows
-        self.assertEqual(model.run(2, ("up", "down"), 0), 2)
-
-    def test_a_step_that_never_arrives_is_not_sent_twice(self):
-        model = GhosttyModel(120, 60, 2.0, late=1)
-        self.assertEqual(model.run(30, self.D), 60)
-        self.assertEqual(len(model.sent), 1)
-
-    def test_folding_ends_at_the_ten_percent_limit(self):
-        for window, gain in ((120, 2.0), (200, 2.0), (300, 1.0), (60, 2.0)):
-            model = GhosttyModel(window, 30, gain)  # open at MMINI_WIDTH, then folded toward 6 columns
-            self.assertEqual(model.run(mmini.NARROW, self.D), max(mmini.NARROW, int(0.1 * window)), (window, gain))
-            self.assertLessEqual(len(model.sent), 3, (window, gain, model.sent))  # the last step shows the limit
-            back = len(model.sent)
-            self.assertLessEqual(abs(model.run(mmini.WIDTH, self.D) - mmini.WIDTH), 1, (window, gain))
-            self.assertLessEqual(len(model.sent) - back, mmini.MAX_RESIZE_STEPS)
-
-    def loop(self, model, goal):
-        """resize_loop against the model: 1 pixel per cell, every step's effect seen at once (or never)."""
-        return mmini.resize_loop(lambda: (int(model.size), 1.0), lambda d, amount: model.apply((d, float(amount))),
-                                 goal, lambda before, moved_on: int(model.size), self.D, 1)
-
-    def test_resize_loop_ends_where_next_resize_does(self):
-        model = GhosttyModel(160, 80, 2.0)
-        self.assertEqual(self.loop(model, lambda: 30), (30, 30))
-        self.assertEqual(self.loop(GhosttyModel(120, 30, 2.0), lambda: 6), (12, 6))  # at the limit
-
-    def test_resize_loop_turns_to_a_new_goal_even_at_the_limit(self):
-        for window, gain in ((120, 2.0), (160, 2.0), (120, 1.0), (160, 1.0)):
-            model = GhosttyModel(window, 30, gain)
-            stuck = []  # the step that ran into the 10% limit: c is pressed again during its wait
-            seen = []
-
-            def wait(before, moved_on):
-                if int(model.size) == before:
-                    stuck.append(len(model.sent))
-                seen.append((bool(stuck), int(model.size)))
-                return int(model.size)
-
-            size, aimed = mmini.resize_loop(lambda: (int(model.size), 1.0),
-                                            lambda d, amount: model.apply((d, float(amount))),
-                                            lambda: mmini.WIDTH if stuck else mmini.NARROW, wait, self.D, 1)
-            case = (window, gain, model.sent, seen)
-            self.assertEqual(aimed, mmini.WIDTH, case)
-            self.assertLessEqual(abs(size - mmini.WIDTH), 1, case)
-            self.assertEqual(model.sent[stuck[0] - 1][0], "left", case)  # the step at the limit, which moved nothing
-            self.assertEqual(model.sent[stuck[0]][0], "right", case)  # not taken as the end: on to the new goal
-            # the gain of the step cut short by the limit is not kept: no jump past MMINI_WIDTH on the way back
-            self.assertLessEqual(max(n for after, n in seen if after), mmini.WIDTH + 1, case)
-
-    def test_resize_loop_stops_at_once_for_a_zoom(self):
-        model = GhosttyModel(160, 80, 2.0)
-        size, aimed = self.loop(model, lambda: None if model.sent else 30)
-        self.assertIsNone(aimed)
-        self.assertEqual(len(model.sent), 1)  # nothing more after the zoom
-        self.assertEqual(size, int(model.size))
-        model = GhosttyModel(160, 80, 2.0)
-        self.assertEqual(self.loop(model, lambda: None), (80, None))
-        self.assertEqual(model.sent, [])
-
-    def test_resize_loop_without_a_size(self):
-        sent = []
-        self.assertEqual(mmini.resize_loop(lambda: (0, 0.0), lambda *a: sent.append(a), lambda: 30,
-                                           lambda b, m: 0), (0, 30))
-        self.assertEqual(sent, [])
-
-    def test_refit_after_the_window_changed_size(self):
-        due = mmini.refit_due
-        quiet = mmini.REFIT_QUIET
-        self.assertTrue(due(75, 30, quiet, False, 30))        # maximised: the sidebar grew with the window
-        self.assertTrue(due(12, 30, quiet, False, 30))        # window made narrow
-        self.assertFalse(due(75, 30, quiet - 0.1, False, 30))  # still changing
-        self.assertFalse(due(75, 30, quiet, True, 30))         # a resize loop is running
-        for width in (29, 30, 31):
-            self.assertFalse(due(width, 30, quiet, False, 0))  # on target
-        self.assertFalse(due(40, 30, quiet, False, 40))        # where the last loop ended (10% limit): not again
-        self.assertTrue(due(41, 30, quiet, False, 40))
-
-    def test_wait_for_change(self):
-        values = iter([60, 60, 45, 30, 30, 30])
-        self.assertEqual(mmini.wait_for_change(lambda: next(values), 60, 2.0, settle=0.0), 30)
-        started = time.monotonic()
-        self.assertEqual(mmini.wait_for_change(lambda: 60, 60, 0.25), 60)
-        self.assertLess(time.monotonic() - started, 1.0)
-
-    def test_wait_for_change_gives_up_early_only_when_the_goal_moved_on(self):
-        started = time.monotonic()
-        self.assertEqual(mmini.wait_for_change(lambda: 60, 60, 5.0, stop=lambda: True, grace=0.3), 60)
-        took = time.monotonic() - started
-        self.assertGreaterEqual(took, 0.3)  # a step still on its way gets its grace
-        self.assertLess(took, 1.5)
-        started = time.monotonic()
-        self.assertEqual(mmini.wait_for_change(lambda: 60, 60, 0.6, stop=lambda: False, grace=0.1), 60)
-        self.assertGreaterEqual(time.monotonic() - started, 0.6)  # same goal: the full wait
-        values = iter([45, 45])
-        self.assertEqual(mmini.wait_for_change(lambda: next(values), 60, 5.0, settle=0.0, stop=lambda: True,
-                                               grace=0.0), 45)  # a change is looked at first
 
 
 class StateTests(unittest.TestCase):
@@ -1129,23 +897,12 @@ class StateTests(unittest.TestCase):
         self.assertTrue(w(False, 0.0, True))  # hidden on purpose: at once
         self.assertEqual(mmini.ENGINE_GRACE, 3.0)
 
-    def test_opening_verdict(self):
-        v = mmini.opening_verdict
-        self.assertEqual(v("T-1", "T-1", 1.0), "wait")
-        self.assertEqual(v("T-1", "", 1.0), "wait")  # a panes file that went missing names no new tab bar
-        self.assertEqual(v("T-1", "T-2", 1.0), "done")
-        self.assertEqual(v("", "T-2", 0.0), "done")
-        self.assertEqual(v("T-1", "T-1", mmini.OPEN_TIMEOUT - 0.01), "wait")
-        self.assertEqual(v("T-1", "T-1", mmini.OPEN_TIMEOUT), "failed")
-        self.assertEqual(v("T-1", "T-2", 99.0), "done")  # the new ids count even when they come late
-        self.assertEqual(mmini.OPEN_TIMEOUT, 10.0)
-
     def test_snapshot_format_and_round_trip(self):
         spaces, _ = mmini.build_groups(mmini.parse(SAMPLE), "mmini")
         mmini.write_snapshot(spaces[2], self.state, now=1000.0)
         snap = mmini.read_snapshot(self.state, now=1001.0)
-        self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "server", "shown", "shown_title",
-                                        "tabs", "title", "ts"])
+        self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "names", "server", "shown",
+                                        "shown_title", "tabs", "title", "ts"])
         self.assertEqual((snap["server"], snap["shown"], snap["shown_title"]), ("mmini", "", "mmini"))
         self.assertEqual(snap["group"], "space:atlas")
         self.assertEqual((snap["name"], snap["title"]), ("atlas", "atlas"))  # no display name: the name
@@ -1154,7 +911,8 @@ class StateTests(unittest.TestCase):
         self.assertEqual(snap["cwd"], "/Users/x/dev/atlas")
         self.assertEqual(snap["tabs"][0], {"address": "mmini/t5", "label": "atlas", "status": "idle",
                                            "agent": "claude-code", "cwd": "/Users/x/dev/atlas", "server": "mmini",
-                                           "mark": ""})
+                                           "mark": "", "own": "atlas", "ends": []})
+        self.assertEqual(snap["names"], {})  # no terminal list given
         self.assertEqual([t["label"] for t in snap["tabs"]], ["atlas", "zz"])
 
     def test_snapshot_stale_missing_broken(self):
@@ -1285,74 +1043,6 @@ def wait_for(condition, timeout=6.0):
 
 
 class MiscTests(unittest.TestCase):
-    def test_ghostty_disabled_never_runs(self):
-        os.environ["MMINI_GHOSTTY"] = "0"
-        with mock.patch.object(mmini.subprocess, "Popen") as popen:
-            mmini.ghostty('tell application "Ghostty" to quit')
-            mmini.focus_view(True)
-            mmini.autosize("sidebar")
-            mmini.autosize("tabs")
-        popen.assert_not_called()
-
-    def test_ghostty_helper_never_raises(self):
-        with mock.patch.dict(os.environ, {"MMINI_GHOSTTY": "1"}), \
-                mock.patch.object(mmini.subprocess, "Popen", side_effect=OSError("no osascript")):
-            mmini.ghostty("anything")
-
-    def test_safe_id(self):
-        self.assertEqual(mmini.safe_id('A-1"; do shell script "x'), "A-1doshellscriptx")
-
-    def test_action_script_uses_panes_with_fallback(self):
-        with tempfile.TemporaryDirectory() as d:
-            state = Path(d)
-            self.assertNotIn("whose id", mmini.action_script("goto_split:right", "view", state))
-            mmini.write_atomic(state / "panes", "view=ID-9\n")
-            script = mmini.action_script('resize_split:left,40"; quit', "view", state)
-            self.assertIn('whose id is "ID-9"', script)
-            self.assertIn("focused terminal", script)
-            self.assertIn('"resize_split:left,40quit"', script)
-
-    def test_focus_script(self):
-        with tempfile.TemporaryDirectory() as d:
-            state = Path(d)
-            side = mmini.focus_script(True, state)
-            self.assertLess(side.index("goto_split:right"), side.index("goto_split:down"))  # tab bar, then view
-            tabs = mmini.focus_script(False, state)
-            self.assertIn("goto_split:down", tabs)
-            self.assertNotIn("goto_split:right", tabs)
-            mmini.write_atomic(state / "panes", "view=V-1\n")
-            script = mmini.focus_script(True, state)
-            self.assertIn('focus (first terminal whose id is "V-1")', script)
-            self.assertIn("on error", script)
-            self.assertIn("goto_split:right", script)
-
-    def test_zoom_script_focuses_the_view_then_zooms_it(self):
-        with tempfile.TemporaryDirectory() as d:
-            state = Path(d)
-            mmini.write_atomic(state / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
-            for from_side in (True, False):
-                script = mmini.zoom_script(from_side, state)
-                focus = script.index('focus (first terminal whose id is "V-1")')
-                zoom = script.index('perform action "toggle_split_zoom" on (first terminal whose id is "V-1")')
-                self.assertLess(focus, zoom)
-                self.assertNotIn("S-1", script)
-                self.assertNotIn("T-1", script)
-                self.assertEqual(script.count("toggle_split_zoom"), 2)  # by id, else on the focused terminal
-                self.assertEqual(script.count('tell application "Ghostty"'), script.count("end tell"))
-            (state / "panes").unlink()
-            script = mmini.zoom_script(True, state)  # no ids: by direction, then the focused terminal
-            self.assertLess(script.index("goto_split:down"), script.index("toggle_split_zoom"))
-            self.assertIn("delay 0.1", script)
-
-    def test_zoom_without_ghostty_runs_nothing(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(mmini.subprocess, "Popen") as popen, \
-                mock.patch.object(mmini, "attach_pid", return_value=4242):
-            state = Path(d)
-            mmini.write_atomic(state / "target", "t5\n")
-            self.assertEqual(mmini.zoom_view(True, state), "")
-            self.assertTrue((state / "zoom").exists())
-        popen.assert_not_called()
-
     def test_wide_characters_count_two_columns(self):
         self.assertEqual([mmini.cell_width(c) for c in "a日🚀é́…●"], [1, 2, 2, 1, 0, 1, 1])
         self.assertEqual(mmini.text_width("日本語ab"), 8)
@@ -1415,9 +1105,22 @@ class FakeScr:
     def __init__(self, height, width):
         self.height, self.width = height, width
         self.cells = {}
+        self.typed = []  # keys typed ahead, read by getch in nodelay mode (drain_keys, read_paste)
 
     def getmaxyx(self):
         return (self.height, self.width)
+
+    def nodelay(self, flag):
+        pass
+
+    def timeout(self, ms):
+        pass
+
+    def getch(self):
+        return self.typed.pop(0) if self.typed else -1
+
+    def unget(self, key):
+        self.typed.insert(0, key)
 
     def erase(self):
         self.cells = {}
@@ -1563,6 +1266,115 @@ class FakeHc:
                 del self.finished[address]
             return "{}"
         raise AssertionError(args)
+
+
+class FakeTmux:
+    """Stands in for mmini.tmux in an mmini window: records each tmux run (its arguments) and answers as tmux 3.8
+    did in the spike. `scr`: the fake screen of the pane that sizes itself; a resize-pane changes it, as tmux would.
+    `zoomed`, `width`, `height`: the window's zoom flag and size; `active`: this pane has the keyboard."""
+
+    def __init__(self, scr=None, pane="%1", zoomed=False, width=120, height=40, lag=False):
+        self.scr, self.pane, self.zoomed, self.width, self.height = scr, pane, zoomed, width, height
+        self.pane_w, self.pane_h = (scr.width, scr.height) if scr is not None else (30, 3)
+        self.lag = lag  # curses learns a resize later (tmux holds the size signal): scr changes only at settle()
+        self.active = True
+        self.calls = []
+        self.inputs = []  # what tmux read on stdin (load-buffer -)
+        self.split_id = "%7"
+
+    def settle(self):
+        """The held size signal arrives: curses sees tmux's size."""
+        self.scr.width, self.scr.height = self.pane_w, self.pane_h
+
+    def drag(self, width):
+        """The divider dragged: tmux and (after its signal) curses see the new width; the window keeps its own."""
+        self.pane_w = self.scr.width = width
+
+    def resize(self, width, window):
+        """The window resized: tmux spread it over the panes."""
+        self.pane_w = self.scr.width = width
+        self.width = window
+
+    def install(self, test):
+        """mmini.tmux is this, resizing is on, and this program's pane is `pane`, until the test ends."""
+        for patcher in (mock.patch.multiple(mmini, tmux=self, autosize_enabled=lambda: True),
+                        mock.patch.dict(os.environ, {"TMUX_PANE": self.pane})):
+            patcher.start()
+            test.addCleanup(patcher.stop)
+        return self
+
+    def __call__(self, *args, input=None):
+        self.calls.append(args)
+        if input is not None:
+            self.inputs.append(input)
+        out = ""
+        cmd = []
+        for word in list(args) + [";"]:
+            if word != ";":
+                cmd.append(word)
+                continue
+            if cmd[0] == "display":
+                fmt = cmd[-1]
+                if "window_zoomed_flag" in fmt:
+                    out = f"{int(self.zoomed)} {self.width} {self.height} {self.pane_w} {self.pane_h}\n"
+                elif fmt == "#{pane_active}":
+                    out = f"{int(self.active)}\n"
+                elif fmt == "#{pane_width}":
+                    out = f"{self.scr.width}\n"
+                elif fmt == "#{pane_height}":
+                    out = f"{self.scr.height}\n"
+            elif cmd[0] == "resize-pane":
+                if "-Z" in cmd:
+                    self.zoomed = not self.zoomed
+                elif "-x" in cmd:
+                    self.pane_w = int(cmd[cmd.index("-x") + 1])
+                elif "-y" in cmd:
+                    self.pane_h = int(cmd[cmd.index("-y") + 1])
+                if self.scr is not None and not self.lag:
+                    self.settle()
+            elif cmd[0] == "split-window":
+                out = self.split_id + "\n" if self.split_id else ""
+            cmd = []
+        return out if self.split_id or "split-window" not in args else None
+
+    def sizes(self, flag="-x"):
+        """The sizes asked for, in order (-x: widths, -y: heights)."""
+        return [int(c[c.index(flag) + 1]) for c in self.calls if c[0] == "resize-pane" and flag in c]
+
+    def commands(self):
+        """Every tmux command run, one list each (a call may hold several, joined by ";")."""
+        out = []
+        for call in self.calls:
+            cmd = []
+            for word in list(call) + [";"]:
+                if word == ";":
+                    if cmd:
+                        out.append(cmd)
+                    cmd = []
+                else:
+                    cmd.append(word)
+        return out
+
+    def selected(self):
+        """The panes given the keyboard, in order."""
+        return [c[c.index("-t") + 1] for c in self.commands() if c[0] == "select-pane"]
+
+    def typed(self, pane="%0"):
+        """What send-keys typed into `pane`: text, and named keys as <Name>."""
+        out = ""
+        for c in self.commands():
+            if c[0] == "send-keys" and c[c.index("-t") + 1] == pane:
+                if "-H" in c:
+                    out += bytes.fromhex("".join(c[c.index("-H") + 1:])).decode("latin1")
+                else:
+                    out += f"<{c[-1]}>"
+        return out
+
+    def looks(self):
+        return sum(1 for c in self.calls if c[0] == "display" and "window_zoomed_flag" in c[-1])
+
+
+PANES = "side=%1\ntabs=%2\nview=%0\n"  # the panes file start.sh writes in a new tmux server
 
 
 class SidebarLogicTests(unittest.TestCase):
@@ -1818,40 +1630,19 @@ class SidebarLogicTests(unittest.TestCase):
                 self.key("j")
 
     def test_sidebar_sizes_itself_again_after_a_resize(self):
-        runs = []
-
-        def fake(mode, win, goal):
-            runs.append(mode)
-            return 40, goal()  # as if Ghostty's 10% limit stopped the loop at 40 columns
-
-        def settle():
-            self.side.resized = time.monotonic() - 2 * mmini.REFIT_QUIET  # a resize, quiet since
-            self.side.refit()
-            if self.side.sizer is not None:
-                self.side.sizer.join(5)
-
         self.scr.width = 75
-        settle()
-        self.assertEqual(runs, [])  # MMINI_GHOSTTY=0: never
-        with mock.patch.object(mmini, "autosize", fake), mock.patch.object(mmini, "autosize_enabled", lambda: True):
-            self.side.resized = 0.0
-            self.side.refit()
-            self.assertEqual(runs, [])  # no resize seen
-            self.side.resized = time.monotonic()
-            self.side.refit()
-            self.assertEqual(runs, [])  # the size is still changing
-            self.assertTrue(self.side.resized)
-            settle()
-            self.assertEqual(runs, ["sidebar"])
-            self.assertEqual((self.side.resized, self.side.sized_at), (0.0, 40))
-            self.scr.width = 40  # the loop's own steps resized the pane: no second loop from where it ended
-            settle()
-            self.scr.width = mmini.WIDTH + 1  # on target
-            settle()
-            self.assertEqual(len(runs), 1)
-            self.scr.width = 60  # the window changed again
-            settle()
-            self.assertEqual(len(runs), 2)
+        with mock.patch.object(mmini, "tmux") as run:
+            self.side.refit()  # outside tmux: never
+        run.assert_not_called()
+        tm = self.fake_tmux()
+        self.side.refit()
+        self.assertEqual((tm.sizes(), self.scr.width), ([mmini.WIDTH], mmini.WIDTH))  # the first round sizes it
+        calls = len(tm.calls)
+        self.side.refit()
+        self.assertEqual(len(tm.calls), calls)  # on its width: no tmux call at all
+        self.scr.width, tm.width = 60, 180  # the window grew: tmux spread it over the panes
+        self.side.refit()
+        self.assertEqual(tm.sizes(), [mmini.WIDTH, mmini.WIDTH])
 
     def test_small_screens_do_not_crash(self):
         for mode in ("open", "strip"):
@@ -1867,29 +1658,8 @@ class SidebarLogicTests(unittest.TestCase):
                     self.side.draw()
 
     # the collapse arrow and the folded strip -------------------------------------------------------------------
-    def fake_sizing(self, ends_at):
-        """autosize stand-in with resizing switched on: records each loop's goal, ends at ends_at(goal)."""
-        goals = []
-
-        def fake(mode, win, goal):
-            goals.append(goal())
-            return ends_at(goals[-1]), goal()
-
-        for target, value in ((mmini, {"autosize": fake, "autosize_enabled": lambda: True}),):
-            patcher = mock.patch.multiple(target, **value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        return goals
-
-    def settle(self):
-        """A size change some time ago, then the loop's refit; waits for a loop it started."""
-        self.side.resized = time.monotonic() - 2 * mmini.REFIT_QUIET
-        self.side.refit()
-        self.join()
-
-    def join(self):
-        if self.side.sizer is not None:
-            self.side.sizer.join(5)
+    def fake_tmux(self, **kw):
+        return FakeTmux(self.scr, **kw).install(self)
 
     def group_line(self, key):
         return next(y for y, item in self.side.rows.items() if item == mmini.Item("group", key, ""))
@@ -1999,10 +1769,10 @@ class SidebarLogicTests(unittest.TestCase):
 
     def test_c_steps_open_strip_hidden_and_the_state_is_kept(self):
         mmini.write_atomic(self.win / "sidebar.pid", f"{os.getpid()}\n")  # as run() writes it
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
+        mmini.write_atomic(self.win / "panes", PANES)
         self.assertEqual(self.side.mode, "open")
         self.assertEqual(self.scr.line(23), fold_line("open"))
-        with mock.patch.object(mmini, "ghostty") as run:
+        with mock.patch.object(mmini, "tmux") as run:
             self.assertTrue(self.side.on_key(ord("c")))
             self.assertEqual(self.side.mode, "strip")
             self.assertEqual(mmini.read_text(self.state / "sidebar"), "strip")  # shared by all windows
@@ -2012,26 +1782,24 @@ class SidebarLogicTests(unittest.TestCase):
             self.side.draw()
             self.assertEqual(self.scr.line(23), mmini.glyph(" ‹ hide"))
             self.assertEqual(self.scr.line(22), mmini.glyph(" › open"))
-            run.assert_not_called()
+            run.assert_not_called()  # outside tmux nothing is sized
             self.assertFalse(self.side.on_key(ord("C")))  # hidden: the loop ends, so does the program
         self.assertEqual(mmini.read_sidebar_state(self.state), "hidden")
         self.assertFalse((self.win / "sidebar.pid").exists())
         self.assertTrue((self.win / "tabs.json").exists())  # the tab bar draws it until its own engine writes
-        script = run.call_args[0][0]
-        self.assertEqual(run.call_args[1], {"detach": True})  # it outlives the pane that is about to close
-        self.assertIn('focus (first terminal whose id is "V-1")', script)
-        self.assertNotIn("S-1", script)
+        run.assert_called_once_with("select-pane", "-t", "%0")
 
     def test_q_hides_the_sidebar_from_either_state(self):
+        mmini.write_atomic(self.win / "panes", PANES)
         for before in ("open", "strip"):
             self.side.mode = before
             mmini.write_sidebar_state(before, self.state)
             mmini.write_atomic(self.win / "sidebar.pid", f"{os.getpid()}\n")
-            with mock.patch.object(mmini, "ghostty") as run:
+            with mock.patch.object(mmini, "tmux") as run:
                 self.assertFalse(self.side.on_key(ord("q")), before)
             self.assertEqual(mmini.read_sidebar_state(self.state), "hidden", before)
             self.assertFalse((self.win / "sidebar.pid").exists(), before)
-            run.assert_called_once()
+            run.assert_called_once_with("select-pane", "-t", "%0")  # the keyboard to the view; tmux closes the pane
 
     def test_hide_never_removes_another_sidebars_pid_file(self):
         mmini.write_atomic(self.win / "sidebar.pid", "1\n")
@@ -2058,7 +1826,7 @@ class SidebarLogicTests(unittest.TestCase):
             self.side.on_key(mmini.curses.KEY_MOUSE)
         self.side.draw()
         self.side.mouse_quiet = 0.0
-        with pressed(9, 23, 1), mock.patch.object(mmini, "ghostty"):
+        with pressed(9, 23, 1), mock.patch.object(mmini, "tmux"):
             self.assertFalse(self.side.on_key(mmini.curses.KEY_MOUSE))  # "‹ hide"
         self.assertEqual(mmini.read_sidebar_state(self.state), "hidden")
         self.assertEqual(mmini.current_target(self.win), "")  # a click on an arrow line opens nothing
@@ -2101,74 +1869,34 @@ class SidebarLogicTests(unittest.TestCase):
                         self.assertEqual(self.side.open_y, -1, case)
                     self.assertFalse({self.side.arrow_y, self.side.open_y} & set(self.side.rows), case)
 
-    def test_folding_without_ghostty_changes_only_the_layout(self):
-        with mock.patch.object(mmini, "autosize") as sizing:
+    def test_folding_outside_tmux_changes_only_the_layout(self):
+        with mock.patch.object(mmini, "tmux") as run:
             self.key("c", "o", "c")
             self.side.refit()
-        sizing.assert_not_called()
+        run.assert_not_called()
         self.assertEqual(self.side.mode, "strip")
 
     def test_toggle_sizes_the_pane_for_the_new_mode(self):
-        goals = self.fake_sizing(lambda goal: goal)
+        tm = self.fake_tmux()
+        self.side.refit()
         self.key("c")
-        self.join()
-        self.assertEqual(goals, [mmini.NARROW])
+        self.assertEqual(tm.sizes(), [mmini.WIDTH, mmini.NARROW])  # exact: no tenth-of-the-window limit
+        self.assertEqual(self.scr.width, mmini.NARROW)
         self.key("o")
-        self.join()
-        self.assertEqual(goals, [mmini.NARROW, mmini.WIDTH])
+        self.assertEqual(tm.sizes(), [mmini.WIDTH, mmini.NARROW, mmini.WIDTH])
         self.assertEqual((self.side.sized_at, self.side.aimed), (mmini.WIDTH, mmini.WIDTH))
         self.side.refit()
-        self.join()
-        self.assertEqual(len(goals), 2)  # nothing new to do
+        self.assertEqual(len(tm.sizes()), 3)  # nothing new to do
 
-    def test_toggle_while_a_loop_runs_reaches_the_new_mode(self):
-        goals = self.fake_sizing(lambda goal: goal)
-        busy = threading.Event()
-        self.side.sizer = threading.Thread(target=busy.wait, daemon=True)  # a loop that is still running
-        self.side.sizer.start()
+    def test_the_strip_keeps_its_width_when_the_window_changes(self):
+        tm = self.fake_tmux()
         self.key("c")
-        self.assertEqual(goals, [])  # not a second loop beside the first
-        self.assertNotEqual(self.side.aimed, self.side.width_goal())
-        busy.set()
-        self.join()
-        self.side.refit()  # the loop ended on the old goal: the next round starts one for the folded strip
-        self.join()
-        self.assertEqual(goals, [mmini.NARROW])
-
-    def test_refit_in_the_folded_strip_stops_at_the_limit(self):
-        limit = {"cols": 12}  # a tenth of a 120-column window
-        goals = self.fake_sizing(lambda goal: max(goal, limit["cols"]))
-        self.key("c")
-        self.join()
-        self.assertEqual((goals, self.side.sized_at), ([mmini.NARROW], 12))
-        self.scr.width = 12  # where the loop ended: its own steps changed the size, nothing new
-        self.settle()
-        self.settle()
-        self.assertEqual(len(goals), 1)
-        self.scr.width, limit["cols"] = 20, 20  # the window grew: the strip grew with it
-        self.settle()
-        self.assertEqual(goals, [mmini.NARROW, mmini.NARROW])  # aims at the strip, not MMINI_WIDTH
-        self.settle()  # ended at 20, the new limit: no chain
-        self.assertEqual(len(goals), 2)
-        self.scr.width = mmini.NARROW + 1  # a small window: the strip is on its goal (far from MMINI_WIDTH)
-        self.settle()
-        self.assertEqual(len(goals), 2)
-        self.key("o")  # open: back to MMINI_WIDTH
-        self.join()
-        self.assertEqual(goals[-1], mmini.WIDTH)
-
-    def test_a_loop_stopped_by_a_size_change_from_outside_is_looked_at_again(self):
-        ends = [0, 14]  # the window grew during the step at the limit (no limit found); the next loop finds it
-        goals = self.fake_sizing(lambda goal: ends.pop(0) if ends else 14)
-        self.key("c")
-        self.join()
-        self.assertEqual((goals, self.side.sized_at), ([mmini.NARROW], 0))
-        self.scr.width = 14  # the strip grew with the window
-        self.settle()
-        self.assertEqual((goals, self.side.sized_at), ([mmini.NARROW, mmini.NARROW], 14))
-        self.settle()
-        self.settle()
-        self.assertEqual(len(goals), 2)  # at the new limit: no chain
+        self.assertEqual(self.scr.width, mmini.NARROW)
+        self.scr.width, tm.width = 20, 200  # the window grew: the strip grew with it
+        self.side.refit()
+        self.assertEqual(tm.sizes()[-1], mmini.NARROW)  # back to the strip's width, not MMINI_WIDTH
+        self.key("o")
+        self.assertEqual(tm.sizes()[-1], mmini.WIDTH)
 
     def test_s_and_m_open_the_strip_before_they_ask(self):
         self.key("c")
@@ -2188,52 +1916,45 @@ class SidebarLogicTests(unittest.TestCase):
         self.side.notice.say("new: cannot start")
         self.side.on_key(mmini.curses.KEY_RESIZE)
         self.assertEqual(self.side.notice.current(), "new: cannot start")
-        self.assertTrue(self.side.resized)
 
     # zoom ------------------------------------------------------------------------------------------------------
     def test_z_without_a_shown_terminal_only_says_so(self):
-        with mock.patch.object(mmini, "ghostty") as run:
+        mmini.write_atomic(self.win / "panes", PANES)
+        with mock.patch.object(mmini, "tmux") as run:
             self.key("z")
             self.assertEqual(self.side.notice.current(), "z: nothing shown")
             mmini.write_atomic(self.win / "target", "t1\n")  # a target, but the view is not attached
             self.key("z")
             self.assertEqual(self.side.notice.current(), "z: nothing shown")
         run.assert_not_called()
-        self.assertFalse((self.win / "zoom").exists())
 
-    def test_z_zooms_the_view_and_holds_the_refit_until_the_next_key(self):
-        goals = self.fake_sizing(lambda goal: goal)
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
-        self.key(*"jjj", 10)
-        with mock.patch.object(mmini, "ghostty") as run, mock.patch.object(mmini, "attach_pid", return_value=4242):
-            self.key("z")
-        script = run.call_args[0][0]
-        self.assertEqual(run.call_count, 1)
-        self.assertLess(script.index('focus (first terminal whose id is "V-1")'),
-                        script.index('perform action "toggle_split_zoom" on (first terminal whose id is "V-1")'))
-        self.assertEqual(self.side.notice.current(), "")
-        self.assertTrue(self.side.zoom_held())
-        self.scr.width = 75  # the window changed while zoomed
-        self.side.on_key(mmini.curses.KEY_RESIZE)  # a size change does not show the zoom is over
-        self.settle()
-        self.side.aimed = None  # also a loop the zoom stopped is not started again
+    def test_z_zooms_the_view_and_sets_no_size_while_zoomed(self):
+        tm = self.fake_tmux()
         self.side.refit()
-        self.join()
-        self.assertEqual(goals, [])
-        self.key("k")  # a key in the sidebar: it can be seen again
-        self.assertFalse(self.side.zoom_held())
-        self.settle()
-        self.assertEqual(goals, [mmini.WIDTH])
-
-    def test_a_zoom_from_the_tab_bar_holds_the_refit_too(self):
-        goals = self.fake_sizing(lambda goal: goal)
-        mmini.mark_zoom(self.win)
-        self.scr.width = 75
-        self.settle()
-        self.assertEqual(goals, [])
-        self.key("j")
-        self.settle()
-        self.assertEqual(goals, [mmini.WIDTH])
+        mmini.write_atomic(self.win / "panes", PANES)
+        self.key(*"jjj", 10)
+        with mock.patch.object(mmini, "attach_pid", return_value=4242):
+            self.key("z")
+        self.assertIn(("select-pane", "-t", "%0", ";", "resize-pane", "-Z", "-t", "%0"), tm.calls)
+        self.assertEqual(self.side.notice.current(), "")
+        self.assertTrue(tm.zoomed)
+        # the window changed while zoomed; the "‹ back" line on top takes a row from every pane meanwhile
+        self.scr.width, tm.width, self.scr.height = 75, 200, self.scr.height - 1
+        tm.pane_w, tm.pane_h = self.scr.width, self.scr.height
+        looks = tm.looks()
+        self.side.refit()
+        self.assertEqual((tm.sizes(), tm.looks()), ([mmini.WIDTH], looks + 1))  # a resize would end the zoom
+        for _ in range(3):
+            self.side.zoom_look -= mmini.ZOOM_LOOK
+            self.side.refit()
+        self.assertEqual(tm.looks(), looks + 1)  # no more looks while curses shows the same size
+        tm.zoomed = False  # "‹ back" clicked: the row comes back
+        self.scr.height += 1
+        tm.pane_h = self.scr.height
+        self.side.zoom_look -= mmini.ZOOM_LOOK
+        self.side.refit()
+        self.assertEqual(tm.sizes(), [mmini.WIDTH, mmini.WIDTH])
+        self.assertFalse((self.state / "width").exists())  # the width tmux rebuilt is no drag
 
     # start -----------------------------------------------------------------------------------------------------
     def start_with(self, terms, saved=""):
@@ -2317,15 +2038,15 @@ class TabBarLogicTests(unittest.TestCase):
     # without a sidebar -----------------------------------------------------------------------------------------
     def test_no_opener_while_a_sidebar_runs(self):
         mmini.write_atomic(self.win / "sidebar.pid", f"{os.getpid()}\n")
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
+        mmini.write_atomic(self.win / "panes", PANES)
         self.bar.watch_sidebar(100.0)
         self.assertFalse(self.bar.alone)
         self.assertIsNone(self.bar.engine)
         self.bar.draw(self.snap, "t1")
         self.assertEqual(self.scr.line(0), mmini.glyph(" ● alpha │ ○ beta │ ○ delta │ ○ gamma"))
         self.assertEqual(mmini.hit_test(self.bar.layout, 0, 0), ("tab", 0))
-        self.assertTrue(self.scr.line(4).endswith(mmini.glyph("←→ switch  z zoom  ⌘⇧↵ back")))
-        with mock.patch.object(mmini, "ghostty") as run:
+        self.assertTrue(self.scr.line(4).endswith(mmini.glyph("←→ switch  z zoom")))
+        with mock.patch.object(mmini, "tmux") as run:
             for key in (ord("c"), ord("o")):
                 self.bar.on_key(key, self.snap, "t1")  # the sidebar's keys: nothing here
         run.assert_not_called()
@@ -2340,95 +2061,91 @@ class TabBarLogicTests(unittest.TestCase):
         self.assertEqual(lines[1], mmini.glyph("  ○ omega │ +"))
         self.assertEqual(lines[2], mmini.glyph("  t1 · ~/dev/app · claude-code · idle"))  # the info line
         self.assertTrue(lines[4].startswith("  app"))
-        self.assertTrue(lines[4].endswith(mmini.glyph("c sidebar  z zoom  ⌘⇧↵ back")))
+        self.assertTrue(lines[4].endswith(mmini.glyph("c sidebar  ←→ switch  z zoom")))
         self.assertEqual(self.scr.cells[(0, 0)], ("›", mmini.curses.A_BOLD))
         hit = mmini.hit_test
         self.assertEqual(hit(self.bar.layout, 0, 0), ("open", -1))
         self.assertEqual(hit(self.bar.layout, 1, 0), ("tab", 0))
         self.assertEqual(hit(self.bar.layout, 2, 1), ("tab", 4))
         self.assertIsNone(hit(self.bar.layout, 0, 1))
-        with mock.patch.object(mmini, "read_click", return_value=(3, 1)):  # the tabs still switch
+        with mock.patch.object(mmini, "read_mouse", return_value=(3, 1, 1)):  # the tabs still switch
             self.bar.on_key(mmini.curses.KEY_MOUSE, self.snap, "t1")
         self.assertEqual(mmini.current_target(self.win), "t5")
 
-    def test_a_click_on_the_opener_rebuilds_and_the_old_bar_ends_on_the_new_ids(self):
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
+    def test_a_click_on_the_opener_brings_the_sidebar_back_once(self):
+        mmini.write_atomic(self.win / "panes", "tabs=%2\nview=%0\n")
         mmini.write_sidebar_state("hidden", self.state)
         self.bar.alone = True
         self.bar.draw(self.snap, "t1")
-        with mock.patch.object(mmini, "ghostty") as run, mock.patch.object(mmini, "read_click", return_value=(0, 0)):
+        tm = FakeTmux().install(self)
+        with mock.patch.object(mmini, "read_mouse", return_value=(0, 0, 1)):
             self.bar.on_key(mmini.curses.KEY_MOUSE, self.snap, "t1")
             self.assertEqual(mmini.read_sidebar_state(self.state), "open")  # the new sidebar starts open
-            self.bar.on_key(mmini.curses.KEY_MOUSE, self.snap, "t1")  # a double click: one rebuild
-        self.assertEqual(run.call_count, 1)
-        self.assertEqual(run.call_args[0][0],
-                         mmini.rebuild_script("V-1", self.win, mmini.BASE, mmini.mmini_env(os.environ)))
-        self.assertEqual(run.call_args[1], {"detach": True})  # it outlives this tab bar
-        self.bar.on_key(ord("h"), self.snap, "t1")  # any key clears a notice; this line stays while it waits
-        self.bar.draw(self.snap, "t1")
-        self.assertEqual(self.scr.line(4), mmini.glyph("  opening the sidebar…"))
-        self.assertEqual(self.scr.cells[(4, 2)][1], mmini.curses.A_DIM)  # not red: nothing went wrong
-        start = self.bar.opening[0]
-        self.assertFalse(self.bar.check_opening(start + 1))  # no new ids yet: this tab bar stays
-        mmini.write_atomic(self.win / "panes", "side=S-2\ntabs=T-1\nview=V-1\n")
-        self.assertFalse(self.bar.check_opening(start + 2))  # only a new tab bar counts
-        mmini.write_atomic(self.win / "panes", "side=S-2\ntabs=T-2\nview=V-1\n")
-        self.assertTrue(self.bar.check_opening(start + 3))  # the new one is there: this one ends
+            self.bar.on_key(mmini.curses.KEY_MOUSE, self.snap, "t1")  # a double click: one sidebar
+        splits = [c for c in tm.calls if c[0] == "split-window"]
+        self.assertEqual(len(splits), 1)
+        self.assertEqual(splits[0][:8], ("split-window", "-f", "-hb", "-d", "-l", str(mmini.WIDTH), "-t", "%0"))
+        self.assertTrue(splits[0][-1].endswith("mmini.py sidebar"))
+        self.assertEqual(mmini.pane_id("side", self.win), "%7")
+        start = self.bar.opening
+        self.bar.check_opening(start + 1)
+        self.assertEqual(self.bar.opening, start)  # not running yet
+        mmini.write_atomic(self.win / "sidebar.pid", f"{os.getpid()}\n")
+        self.bar.check_opening(start + 2)
+        self.assertIsNone(self.bar.opening)  # it runs: this tab bar stays, its engine stops (watch_sidebar)
         self.assertEqual(mmini.read_sidebar_state(self.state), "open")
 
-    def test_c_opens_too_and_a_rebuild_that_never_arrives_gives_up_after_ten_seconds(self):
-        """With MMINI_GHOSTTY=0 nothing runs, as when the script fails: the state goes back to hidden."""
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
+    def test_c_opens_too_and_a_sidebar_that_never_runs_is_reported_after_ten_seconds(self):
+        mmini.write_atomic(self.win / "panes", PANES)
         mmini.write_sidebar_state("hidden", self.state)
         self.bar.alone = True
-        with mock.patch.object(mmini.subprocess, "Popen") as popen:
-            self.bar.on_key(ord("c"), self.snap, "t1")
-        popen.assert_not_called()
-        start = self.bar.opening[0]
+        FakeTmux().install(self)
+        self.bar.on_key(ord("c"), self.snap, "t1")
+        start = self.bar.opening
         self.assertEqual(mmini.read_sidebar_state(self.state), "open")
-        self.assertFalse(self.bar.check_opening(start + mmini.OPEN_TIMEOUT - 0.1))
+        self.bar.check_opening(start + mmini.OPEN_TIMEOUT - 0.1)
         self.assertEqual(mmini.read_sidebar_state(self.state), "open")
         # (+0.01: start + 10 - start can come out a hair under 10 for a large clock value)
-        self.assertFalse(self.bar.check_opening(start + mmini.OPEN_TIMEOUT + 0.01))  # it stays
+        self.bar.check_opening(start + mmini.OPEN_TIMEOUT + 0.01)
         self.assertEqual(mmini.read_sidebar_state(self.state), "hidden")
         self.assertEqual(self.bar.notice.current(), "could not open the sidebar")
         self.assertTrue(self.bar.notice.bad)
         self.assertIsNone(self.bar.opening)
-        with mock.patch.object(mmini, "ghostty") as run:
-            self.bar.on_key(ord("o"), self.snap, "t1")  # a new try
-        run.assert_called_once()
 
-    def test_a_sidebar_that_did_start_keeps_the_state_open_when_the_rebuild_gives_up(self):
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
-        self.bar.alone = True
-        with mock.patch.object(mmini, "ghostty"):
-            self.bar.on_key(ord("c"), self.snap, "t1")
-        mmini.write_atomic(self.win / "sidebar.pid", f"{os.getpid()}\n")  # the first split worked, the second not
-        self.assertFalse(self.bar.check_opening(self.bar.opening[0] + mmini.OPEN_TIMEOUT + 0.01))
-        self.assertEqual(mmini.read_sidebar_state(self.state), "open")  # it is on screen
-        self.assertEqual(self.bar.notice.current(), "could not open the sidebar")
-
-    def test_without_the_views_id_nothing_is_split(self):
-        self.bar.alone = True
+    def test_a_split_that_fails_says_so_at_once(self):
+        mmini.write_atomic(self.win / "panes", PANES)
         mmini.write_sidebar_state("hidden", self.state)
-        with mock.patch.object(mmini, "ghostty") as run:
-            self.bar.on_key(ord("c"), self.snap, "t1")
-            mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=\"; \n")  # nothing usable left
-            self.bar.on_key(ord("c"), self.snap, "t1")
-        run.assert_not_called()
+        self.bar.alone = True
+        with mock.patch.object(mmini, "tmux", return_value=None):  # also outside tmux
+            self.bar.on_key(ord("o"), self.snap, "t1")
         self.assertEqual(self.bar.notice.current(), "could not open the sidebar")
         self.assertEqual(mmini.read_sidebar_state(self.state), "hidden")
         self.assertIsNone(self.bar.opening)
 
+    def test_without_the_views_id_the_split_is_made_from_this_pane(self):
+        self.bar.alone = True
+        mmini.write_sidebar_state("hidden", self.state)
+        tm = FakeTmux(pane="%2").install(self)
+        mmini.write_atomic(self.win / "panes", "side=%1\ntabs=%2\nview=\"; \n")  # no usable view id
+        self.bar.on_key(ord("c"), self.snap, "t1")
+        self.assertEqual(tm.calls[-1][:8], ("split-window", "-f", "-hb", "-d", "-l", str(mmini.WIDTH), "-t", "%2"))
+        self.bar.opening = None
+        tm.calls.clear()
+        with mock.patch.dict(os.environ, {"TMUX_PANE": ""}):  # not even this pane's id: nothing to split
+            self.bar.on_key(ord("c"), self.snap, "t1")
+        self.assertEqual(tm.calls, [])
+        self.assertEqual(self.bar.notice.current(), "could not open the sidebar")
+        self.assertEqual(mmini.read_sidebar_state(self.state), "hidden")
+
     def test_keys_without_a_snapshot(self):
         self.bar.alone = True
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
+        mmini.write_atomic(self.win / "panes", PANES)
         for key in (ord("h"), ord("l"), 10):
             self.bar.on_key(key, None, "")  # still loading: nothing to switch, nothing breaks
         self.assertEqual(mmini.current_target(self.win), "")
-        with mock.patch.object(mmini, "ghostty") as run:
-            self.bar.on_key(ord("c"), None, "")
-        self.assertIn("direction left", run.call_args[0][0])
+        tm = FakeTmux().install(self)
+        self.bar.on_key(ord("c"), None, "")
+        self.assertEqual(tm.calls[-1][:3], ("split-window", "-f", "-hb"))
 
     def test_rows_wrap_info_and_hints(self):
         self.bar.draw(self.snap, "t1")
@@ -2437,7 +2154,7 @@ class TabBarLogicTests(unittest.TestCase):
         self.assertEqual(lines[1], mmini.glyph(" ○ omega │ +"))
         self.assertEqual(lines[2], mmini.glyph(" t1 · ~/dev/app · claude-code · idle"))
         self.assertTrue(lines[4].startswith(" app"))
-        self.assertTrue(lines[4].endswith(mmini.glyph("←→ switch  z zoom  ⌘⇧↵ back")))  # the longest that fits
+        self.assertTrue(lines[4].endswith(mmini.glyph("←→ switch  z zoom")))  # the longest that fits
         self.scr.width = 80
         self.bar.draw(self.snap, "t1")
         self.assertTrue(self.scr.line(4).endswith(mmini.glyph(mmini.TAB_HINTS[0])))
@@ -2457,7 +2174,7 @@ class TabBarLogicTests(unittest.TestCase):
 
     def test_click_on_a_wrapped_tab_and_on_plus(self):
         self.bar.draw(self.snap, "t1")
-        with mock.patch.object(mmini, "read_click", return_value=(3, 1)):
+        with mock.patch.object(mmini, "read_mouse", return_value=(3, 1, 1)):
             self.bar.handle_key(mmini.curses.KEY_MOUSE, self.snap, "t1")
         self.assertEqual(mmini.current_target(self.win), "t5")  # omega, first tab of the second row
         calls = []
@@ -2466,7 +2183,7 @@ class TabBarLogicTests(unittest.TestCase):
             calls.append(args)
             return '{"address": "t77"}'
 
-        with mock.patch.object(mmini, "read_click", return_value=(12, 1)), mock.patch.object(mmini, "run_hc", fake):
+        with mock.patch.object(mmini, "read_mouse", return_value=(12, 1, 1)), mock.patch.object(mmini, "run_hc", fake):
             self.bar.handle_key(mmini.curses.KEY_MOUSE, self.snap, "t5")
             self.bar.handle_key(mmini.curses.KEY_MOUSE, self.snap, "t5")  # a double click
         self.assertEqual(len(calls), 1)
@@ -2500,70 +2217,17 @@ class TabBarLogicTests(unittest.TestCase):
         self.assertTrue(self.scr.line(4).startswith(" app"))
 
     def test_z_zooms_the_shown_terminal_or_says_nothing_is_shown(self):
-        mmini.write_atomic(self.win / "panes", "side=S-1\ntabs=T-1\nview=V-1\n")
-        with mock.patch.object(mmini, "ghostty") as run:
-            self.bar.handle_key(ord("z"), self.snap, "")
-            self.assertEqual(self.bar.notice.current(), "z: nothing shown")
-            run.assert_not_called()
-            mmini.show("t1", self.win)
-            with mock.patch.object(mmini, "attach_pid", return_value=4242):
-                self.bar.notice.clear()
-                self.bar.handle_key(ord("z"), self.snap, "t1")
-            self.assertEqual(self.bar.notice.current(), "")
-        script = run.call_args[0][0]
-        self.assertLess(script.index('focus (first terminal whose id is "V-1")'),
-                        script.index('perform action "toggle_split_zoom" on (first terminal whose id is "V-1")'))
-        self.assertNotIn("goto_split:right", script)  # from the tab bar the view is below, not to the right
-        self.assertTrue(mmini.zoom_mark(self.win))  # the sidebar and the loops see it
-
-    def test_a_resize_loop_cut_short_runs_again_at_the_next_key_only(self):
-        ends = [(12, None), (5, 2), (12, None), (5, 2), (0, 2), (5, 2)]  # how each loop ends (resize_loop's result)
-        runs = []
-
-        def fake(mode, win, goal=None):
-            runs.append(mode)
-            return ends.pop(0)
-
-        def join():
-            if self.bar.sizer is not None:
-                self.bar.sizer.join(5)
-
-        with mock.patch.multiple(mmini, autosize=fake, autosize_enabled=lambda: True):
-            self.bar.start_autosize()  # what run() does first
-            mmini.mark_zoom(self.win)  # z in the sidebar in the first seconds: the loop stops (12, None)
-            join()
-            self.bar.resize_again()
-            self.bar.on_key(mmini.curses.KEY_RESIZE, self.snap, "t1")  # a size change is no key
-            join()
-            self.assertEqual(runs, ["tabs"])  # hidden behind the zoom: nothing
-            self.bar.on_key(ord("h"), self.snap, "t1")  # a key in the tab bar: it can be seen again
-            join()
-            self.assertEqual((runs, self.bar.sized), (["tabs", "tabs"], (5, 2)))
-            self.bar.on_key(ord("h"), self.snap, "t1")
-            join()
-            self.assertEqual(len(runs), 2)  # sized: nothing more
-            self.bar.start_autosize()  # (12, None) once more, then a z in the tab bar itself
-            join()
-            mmini.write_atomic(self.win / "target", "t1\n")
-            with mock.patch.object(mmini, "ghostty") as run, \
-                    mock.patch.object(mmini, "attach_pid", return_value=4242):
-                self.bar.on_key(ord("z"), self.snap, "t1")
-            self.assertIn("toggle_split_zoom", run.call_args[0][0])
-            join()
-            self.assertEqual(len(runs), 3)  # the z holds it
-            self.bar.on_key(ord("h"), self.snap, "t1")
-            join()
-            self.assertEqual(len(runs), 4)
-            self.bar.start_autosize()  # a size change from outside stopped it: no limit found (0)
-            join()
-            self.bar.on_key(ord("h"), self.snap, "t1")
-            join()
-            self.assertEqual(len(runs), 6)
-        with mock.patch.object(mmini, "autosize") as sizing:  # MMINI_GHOSTTY=0: never
-            self.bar.sized = (0, None)
-            self.bar.on_key(ord("h"), self.snap, "t1")
-        sizing.assert_not_called()
-
+        mmini.write_atomic(self.win / "panes", PANES)
+        tm = FakeTmux().install(self)
+        self.bar.handle_key(ord("z"), self.snap, "")
+        self.assertEqual(self.bar.notice.current(), "z: nothing shown")
+        self.assertEqual(tm.calls, [])
+        mmini.show("t1", self.win)
+        with mock.patch.object(mmini, "attach_pid", return_value=4242):
+            self.bar.notice.clear()
+            self.bar.handle_key(ord("z"), self.snap, "t1")
+        self.assertEqual(self.bar.notice.current(), "")
+        self.assertEqual(tm.calls[-1], ("select-pane", "-t", "%0", ";", "resize-pane", "-Z", "-t", "%0"))
 
 class TabEngineTests(unittest.TestCase):
     """The tab bar runs the engine (a thread of its own) only while its window has no live sidebar."""
@@ -2913,95 +2577,35 @@ def applescript_literals(line):
     return [re.sub(r"\\(.)", r"\1", m) for m in re.findall(r'"((?:[^"\\]|\\.)*)"', line)]
 
 
-class RebuildScriptTests(unittest.TestCase):
-    """The AppleScript the tab bar runs to bring the sidebar back at full height."""
-
-    VID = "6C1D0F2A-3B4E-4F5A-9C8D-7E6F5A4B3C2D"
-    WIN = Path("/Users/x/.local/state/mmini/w-AbC123")
-    BASE = Path("/Users/x/.local/share/mmini")
-
-    def test_exact_text(self):
-        script = mmini.rebuild_script(self.VID, self.WIN, self.BASE, [("MMINI_WIDTH", "28")])
-        line = ("exec env MMINI_WINDOW=/Users/x/.local/state/mmini/w-AbC123 MMINI_WIDTH=28 "
-                "python3 /Users/x/.local/share/mmini/mmini.py ")
-        win = "/Users/x/.local/state/mmini/w-AbC123"
-        self.assertEqual(script.split("\n"), [
-            'tell application "Ghostty"',
-            "    set sideCfg to new surface configuration",
-            f'    set initial input of sideCfg to "{line}sidebar" & linefeed',
-            f'    set sideTerm to split (first terminal whose id is "{self.VID}") direction left with configuration '
-            "sideCfg",
-            "    set tabsCfg to new surface configuration",
-            f'    set initial input of tabsCfg to "{line}tabs" & linefeed',
-            f'    set tabsTerm to split (first terminal whose id is "{self.VID}") direction up with configuration '
-            "tabsCfg",
-            f'    set ids to "side=" & (id of sideTerm) & linefeed & "tabs=" & (id of tabsTerm) & linefeed & '
-            f'"view={self.VID}" & linefeed',
-            f'    tell current application to do shell script "printf %s " & quoted form of ids & '
-            f'" > {win}/panes.tmp && mv {win}/panes.tmp {win}/panes"',
-            "    tell current application to delay 0.8",
-            "    focus sideTerm",
-            "end tell",
-        ])
-
-    def test_order_splits_first_ids_then_the_delay_then_the_focus(self):
-        script = mmini.rebuild_script(self.VID, self.WIN, self.BASE, [])
-        steps = ["direction left", "direction up", "set ids to", "do shell script", "delay 0.8", "focus sideTerm"]
-        at = [script.index(s) for s in steps]
-        self.assertEqual(at, sorted(at), steps)
-        self.assertEqual(script.count("split "), 2)  # both from the view: a split is made from a leaf
-        self.assertNotIn("close", script)  # no close command, no close_surface action (it can ask first)
-        self.assertNotIn("perform action", script)
-        self.assertEqual(script.count('tell application "Ghostty"'), 1)
-
-    def test_ids_go_through_safe_id(self):
-        script = mmini.rebuild_script('V-1"; do shell script "rm -rf ~', self.WIN, self.BASE, [])
-        self.assertIn('(first terminal whose id is "V-1doshellscriptrm-rf")', script)
-        self.assertNotIn("rm -rf", script)
+class PaneCommandTests(unittest.TestCase):
+    """The command of a sidebar brought back ("›"), and the tmux split that runs it."""
 
     def test_env_pairs(self):
         environ = {"MMINI_STATE": "/s", "MMINI_WINDOW": "/elsewhere", "MMINI_HC": "/my bin/hc", "PATH": "/bin",
-                   "MMINI_bad": "x", "XMMINI_A": "1", "MMINI_GHOSTTY": "1"}
+                   "MMINI_bad": "x", "XMMINI_A": "1", "MMINI_TMUX": "1"}
         pairs = mmini.mmini_env(environ)
-        self.assertEqual(pairs, [("MMINI_GHOSTTY", "1"), ("MMINI_HC", "/my bin/hc"), ("MMINI_STATE", "/s")])
+        self.assertEqual(pairs, [("MMINI_HC", "/my bin/hc"), ("MMINI_STATE", "/s"), ("MMINI_TMUX", "1")])
         line = mmini.pane_command("tabs", Path("/w"), Path("/b"), pairs + [("MMINI_WINDOW", "/x"), ("BAD NAME", "1")])
-        self.assertEqual(line, "exec env MMINI_WINDOW=/w MMINI_GHOSTTY=1 MMINI_HC='/my bin/hc' MMINI_STATE=/s "
+        self.assertEqual(line, "exec env MMINI_WINDOW=/w MMINI_HC='/my bin/hc' MMINI_STATE=/s MMINI_TMUX=1 "
                                "python3 /b/mmini.py tabs")  # the window folder given wins over one in the pairs
 
+    def test_mmini_s_own_terminal_type_goes_along(self):
+        environ = {"MMINI_HC": "/h", "TERM": "xterm-mmini", "TERMINFO": "/w/terminfo"}
+        pairs = mmini.mmini_env(environ)
+        self.assertEqual(pairs, [("MMINI_HC", "/h"), ("TERM", "xterm-mmini"), ("TERMINFO", "/w/terminfo")])
+        self.assertEqual(mmini.pane_command("sidebar", Path("/w"), Path("/b"), pairs),
+                         "exec env MMINI_WINDOW=/w MMINI_HC=/h TERM=xterm-mmini TERMINFO=/w/terminfo "
+                         "python3 /b/mmini.py sidebar")
+        other = mmini.mmini_env({"MMINI_HC": "/h", "TERM": "screen-256color", "TERMINFO": "/x"})
+        self.assertEqual(other, [("MMINI_HC", "/h")])  # tmux's own type: the new pane gets it from tmux
+        self.assertEqual(mmini.pane_command("tabs", Path("/w"), Path("/b"), [("TERM", "vt100"), ("TERMINFO", "/x")]),
+                         "exec env MMINI_WINDOW=/w python3 /b/mmini.py tabs")
+
     def test_quoting_survives_spaces_and_quotes_in_the_window_folder(self):
-        """The literals are unescaped as AppleScript reads them and handed to /bin/sh, as Ghostty types the line
-        and `do shell script` runs the write: python3 is a stand-in that records what it got."""
-        with tempfile.TemporaryDirectory() as tmp:
-            win = Path(tmp) / "my win" / 'it\'s "x" \\ $HOME `id`'
-            win.mkdir(parents=True)
-            base = Path(tmp) / "app dir"
-            bin_dir = Path(tmp) / "bin"
-            bin_dir.mkdir()
-            record = Path(tmp) / "record"
-            stub = bin_dir / "python3"
-            stub.write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done >"$RECORD"\n'
-                            'printf "%s\\n" "$MMINI_WINDOW" "$MMINI_STATE" >>"$RECORD"\n')
-            stub.chmod(0o755)
-            env_pairs = [("MMINI_STATE", "/st ate/'q'")]
-            script = mmini.rebuild_script(self.VID, win, base, env_pairs)
-            lines = script.split("\n")
-            for mode, line in (("sidebar", lines[2]), ("tabs", lines[5])):
-                typed = applescript_literals(line)
-                self.assertEqual(len(typed), 1, line)
-                out = subprocess.run(["/bin/sh", "-c", typed[0]], capture_output=True, text=True,
-                                     env={"PATH": f"{bin_dir}:/usr/bin:/bin", "RECORD": str(record)})
-                self.assertEqual(out.returncode, 0, out.stderr)
-                self.assertEqual(record.read_text().split("\n")[:-1],
-                                 [str(base / "mmini.py"), mode, str(win), "/st ate/'q'"])
-            write = lines[8]
-            prefix, rest = applescript_literals(write)  # "printf %s " & quoted form of ids & " > ... && mv ..."
-            self.assertEqual(prefix, "printf %s ")
-            ids = f"side=S-9\ntabs=T-9\nview={self.VID}\n"
-            # AppleScript's quoted form of a text without single quotes is that text in single quotes
-            out = subprocess.run(["/bin/sh", "-c", prefix + "'" + ids + "'" + rest], capture_output=True, text=True)
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual(mmini.read_panes(win), {"side": "S-9", "tabs": "T-9", "view": self.VID})
-            self.assertFalse((win / "panes.tmp").exists())
+        line = mmini.pane_command("sidebar", Path("/Users/a b/it's"), Path("/opt/m m"), [("MMINI_HC", 'x"y')])
+        self.assertEqual(subprocess.run(["/bin/sh", "-c", "set -- " + line[len("exec "):] + '; printf "%s|" "$@"'],
+                                        capture_output=True, text=True).stdout,
+                         "env|MMINI_WINDOW=/Users/a b/it's|MMINI_HC=x\"y|python3|/opt/m m/mmini.py|sidebar|")
 
     def test_the_tab_bar_passes_its_settings_and_its_own_folder(self):
         with mock.patch.dict(os.environ, {"MMINI_WIDTH": "28", "MMINI_HC": "/h"}):
@@ -3009,6 +2613,93 @@ class RebuildScriptTests(unittest.TestCase):
         self.assertIn(("MMINI_WIDTH", "28"), pairs)
         self.assertIn(("MMINI_STATE", _DEFAULT_STATE), pairs)
         self.assertEqual(mmini.BASE.resolve(), ROOT)
+
+    def test_split_sidebar_makes_a_full_height_pane_and_writes_its_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            win = Path(tmp)
+            tm = FakeTmux().install(self)
+            with mock.patch.dict(os.environ, {"TMUX_PANE": ""}):
+                self.assertEqual(mmini.split_sidebar(win, Path("/b"), [], 33), "")  # no pane to split from
+            self.assertEqual(tm.calls, [])
+            self.assertEqual(mmini.split_sidebar(win, Path("/b"), [], 33), "%7")  # no view id: from this pane
+            self.assertEqual(tm.calls[-1][7], "%1")
+            tm.calls.clear()
+            mmini.write_atomic(win / "panes", "tabs=%2\nview=%0\n")
+            self.assertEqual(mmini.split_sidebar(win, Path("/b"), [("MMINI_HC", "/h")], 33), "%7")
+            self.assertEqual(tm.calls[-1][:12], ("split-window", "-f", "-hb", "-d", "-l", "33", "-t", "%0", "-P", "-F",
+                                                 "#{pane_id}", f"exec env MMINI_WINDOW={win} MMINI_HC=/h python3 "
+                                                 "/b/mmini.py sidebar"))
+            self.assertEqual(mmini.read_panes(win), {"tabs": "%2", "view": "%0", "side": "%7"})
+            tm.split_id = ""  # tmux failed
+            self.assertEqual(mmini.split_sidebar(win, Path("/b"), [], 33), "")
+            mmini.write_atomic(win / "panes", 'view="; rm -rf x\n')
+            with mock.patch.dict(os.environ, {"TMUX_PANE": ""}):
+                self.assertEqual(mmini.split_sidebar(win, Path("/b"), [], 33), "")  # not a pane id: nothing is run
+            self.assertEqual(len(tm.calls), 2)
+
+
+class TmuxTests(unittest.TestCase):
+    def test_off_outside_tmux_and_in_the_tests(self):
+        with mock.patch.object(mmini.subprocess, "run") as run:
+            self.assertIsNone(mmini.tmux("select-pane", "-t", "%0"))  # no $TMUX
+            with mock.patch.dict(os.environ, {"TMUX": "/tmp/x,1,0", "MMINI_TMUX": "0"}):
+                self.assertIsNone(mmini.tmux("select-pane", "-t", "%0"))
+        run.assert_not_called()
+
+    def test_never_raises_and_returns_the_output(self):
+        with mock.patch.dict(os.environ, {"TMUX": "/tmp/x,1,0", "MMINI_TMUX": "1"}):
+            with mock.patch.object(mmini.subprocess, "run", side_effect=OSError("gone")):
+                self.assertIsNone(mmini.tmux("display", "-p", "x"))
+            done = subprocess.CompletedProcess([], 0, stdout="1 \n", stderr="")
+            with mock.patch.object(mmini.subprocess, "run", return_value=done) as run:
+                self.assertEqual(mmini.tmux("display", "-p", "x"), "1 \n")
+            self.assertEqual(run.call_args[0][0][1:], ["display", "-p", "x"])
+            failed = subprocess.CompletedProcess([], 1, stdout="", stderr="no pane")
+            with mock.patch.object(mmini.subprocess, "run", return_value=failed):
+                self.assertIsNone(mmini.tmux("display", "-p", "x"))
+
+    def test_pane_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            win = Path(tmp)
+            mmini.write_atomic(win / "panes", 'side=%1\ntabs=T-1\nview=%0"\n')
+            self.assertEqual([mmini.pane_id(k, win) for k in ("side", "tabs", "view", "none")], ["%1", "", "", ""])
+        for value, want in (("%3", "%3"), ("", ""), ("3", ""), ("%3;x", "")):
+            with mock.patch.dict(os.environ, {"TMUX_PANE": value}):
+                self.assertEqual(mmini.own_pane(), want)
+
+    def test_focus_and_zoom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            win = Path(tmp)
+            tm = FakeTmux().install(self)
+            mmini.focus_view(win)  # no panes file: nothing
+            self.assertEqual(tm.calls, [])
+            mmini.write_atomic(win / "panes", PANES)
+            mmini.focus_view(win)
+            mmini.focus_pane("tabs", win)
+            self.assertEqual(tm.selected(), ["%0", "%2"])
+            self.assertEqual(mmini.zoom_view(win), "z: nothing shown")
+            mmini.show("t1", win)
+            self.assertEqual(tm.calls[-1], ("if-shell", "-F", "-t", "%0", "#{pane_in_mode}",
+                                            "send-keys -X -t %0 cancel"))  # a pick leaves a scrolled-back view
+            with mock.patch.object(mmini, "attach_pid", return_value=4242):
+                self.assertEqual(mmini.zoom_view(win), "")
+            self.assertEqual(tm.calls[-1], ("select-pane", "-t", "%0", ";", "resize-pane", "-Z", "-t", "%0"))
+
+    def test_window_look_and_size_pane(self):
+        p = mmini.parse_window_look
+        self.assertEqual(p("0 120 40 30 40\n"), mmini.WindowLook(False, 120, 40, 30, 40))
+        self.assertEqual(p("1 200 50 30 3\n"), mmini.WindowLook(True, 200, 50, 30, 3))
+        self.assertEqual(p("junk\n0 120 40 30 40\n"), mmini.WindowLook(False, 120, 40, 30, 40))  # the last line
+        for junk in (None, "", "x 1 2 3 4", "2 1 1 1 1", "0 1", "0 a 40 1 1", "0 120 40 9"):
+            self.assertIsNone(p(junk))
+        scr = FakeScr(10, 50)
+        tm = FakeTmux(scr).install(self)
+        self.assertEqual(mmini.size_pane("%1", cols=30).pane_width, 30)
+        self.assertEqual(mmini.size_pane("%1", rows=3).pane_height, 3)
+        self.assertEqual(tm.calls[0], ("resize-pane", "-t", "%1", "-x", "30", ";", "display", "-p", "-t", "%1",
+                                       mmini.LOOK_FORMAT))  # the window's width from the same call
+        with mock.patch.object(mmini, "tmux", return_value=None):
+            self.assertIsNone(mmini.size_pane("%1", cols=30))
 
 
 class ProgramTests(unittest.TestCase):
@@ -3146,6 +2837,452 @@ class ProgramTests(unittest.TestCase):
 def struct_winsize(rows, cols):
     import struct
     return struct.pack("HHHH", rows, cols, 0, 0)
+
+
+class TabMenuTests(unittest.TestCase):
+    """A right click on a tab: its menu, the rename, move and close questions, and what they do."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.win = Path(self._tmp.name)
+        self.state = self.win / "shared"
+        patcher = mock.patch.object(mmini.curses, "color_pair", lambda n: n << 8)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.scr = FakeScr(5, 70)
+        self.bar = mmini.TabBar(self.scr, self.win, self.state)
+        self.addCleanup(self.bar.stop_engine)
+        self.hc = FakeHc([term("mmini/t1", "/Users/x/dev/app", "claude-code", "alpha", "idle"),
+                          term("mmini/t2", "/Users/x/dev/app", "zsh", "beta"),
+                          term("mmini/t3", "/Users/x/dev/app", "zsh", "gamma"),
+                          term("mmini/t9", "/Users/x/dev/web", "zsh", "web")],
+                         infos={"mmini/t3": {"parent": "mmini/t1", "dies": True}})
+        self.snap = self.snapshot()
+        mmini.write_atomic(self.win / "panes", PANES)
+        self.tm = FakeTmux().install(self)
+
+    def snapshot(self):
+        terms = mmini.parse(self.hc("ls", "--json"))
+        infos = {a: mmini.parse_info(self.hc("get", a), a) for a in [t.address for t in terms]}
+        spaces, _ = mmini.build_groups(terms, "mmini", infos)
+        app = next(g for g in spaces if g.name == "app")
+        mmini.write_snapshot(app, self.win, everything=terms, infos=infos)
+        return mmini.read_snapshot(self.win)
+
+    def press(self, x, y, button=1, shown="mmini/t1"):
+        with mock.patch.object(mmini, "read_mouse", return_value=(x, y, button)):
+            self.bar.on_key(mmini.curses.KEY_MOUSE, self.snap, shown)
+        self.bar.draw(self.snap, shown)
+
+    def key(self, k, shown="mmini/t1"):
+        self.bar.on_key(ord(k) if isinstance(k, str) else k, self.snap, shown)
+        self.bar.draw(self.snap, shown)
+
+    def tab_x(self, label):
+        return next(s.x for s in self.bar.layout.segs if s.kind == "tab" and label in s.text)
+
+    def entry_x(self, word):
+        return next(s.x for s in self.bar.menu_segs if s.kind == "entry" and s.text.lower().startswith(word))
+
+    # pure parts ------------------------------------------------------------------------------------------------
+    def test_entries_move_only_in_a_space(self):
+        self.assertEqual([e.label for e in mmini.tab_menu_entries("space")],
+                         ["New terminal", "Rename", "Move to space", "Close"])
+        self.assertEqual([e.label for e in mmini.tab_menu_entries("server")], ["New terminal", "Rename", "Close"])
+        self.assertEqual([e.key for e in mmini.tab_menu_entries("space")], ["n", "e", "m", "d"])  # the sidebar's
+
+    def test_menu_line_shortens_before_it_cuts(self):
+        entries = mmini.tab_menu_entries("space")
+
+        def text(width):
+            return " ".join(s.text for s in mmini.tab_menu_segs("alpha", entries, width))
+
+        self.assertEqual(text(80), "alpha: New terminal · Rename · Move to space · Close")
+        self.assertEqual(text(46), "New terminal · Rename · Move to space · Close")
+        self.assertEqual(text(30), "new · rename · move · close")
+        self.assertEqual(text(20), "new · rename · move")  # no separator left hanging
+        segs = mmini.tab_menu_segs("alpha", entries, 80)
+        self.assertEqual(mmini.menu_entry_at(segs, segs[1].x), 0)
+        self.assertEqual(mmini.menu_entry_at(segs, segs[-1].end - 1), 3)
+        self.assertIsNone(mmini.menu_entry_at(segs, segs[2].x))  # a separator
+        self.assertTrue(all(s.end <= 20 for s in mmini.tab_menu_segs("alpha", entries, 20)))
+
+    def test_tab_after_close(self):
+        order = ["a", "b", "c", "d"]
+        self.assertEqual(mmini.tab_after_close(order, {"b"}, "b"), "c")
+        self.assertEqual(mmini.tab_after_close(order, {"b", "c"}, "b"), "d")
+        self.assertEqual(mmini.tab_after_close(order, {"d"}, "d"), "c")
+        self.assertEqual(mmini.tab_after_close(order, set(order), "a"), "")
+        self.assertEqual(mmini.tab_after_close(order, {"b"}, "a"), "a")  # the shown one stays
+
+    def test_snapshot_lists_what_ends_and_every_name(self):
+        tab = mmini.tab_of(self.snap, "mmini/t1")
+        self.assertEqual(mmini.tab_ends(tab), [("mmini/t3", "gamma", "zsh")])
+        self.assertEqual(tab["own"], "alpha")
+        self.assertEqual(mmini.snapshot_names(self.snap)["mmini/t9"], "web")  # also outside this space
+        self.assertEqual(mmini.tab_ends({"ends": [["x", 1, "zsh"], "junk", ["y", "n", "zsh"]]}), [("y", "n", "zsh")])
+        self.assertEqual(mmini.snapshot_names({"names": ["junk"]}), {})
+        self.assertIsNone(mmini.tab_of(self.snap, "mmini/t77"))
+
+    # the menu --------------------------------------------------------------------------------------------------
+    def test_right_click_opens_the_menu_below_the_tabs(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.assertEqual(self.bar.menu.address, "mmini/t2")
+        self.assertEqual(mmini.current_target(self.win), "")  # a right click shows nothing
+        lines = self.scr.lines()
+        self.assertEqual(lines[1], " beta: New terminal · Rename · Move to space · Close")
+        self.assertEqual(lines[4], " " + mmini.TAB_MENU_HINT)
+        beta = [attr for (y, x), (c, attr) in self.scr.cells.items() if y == 0 and x == self.tab_x("beta") + 3]
+        self.assertTrue(beta[0] & mmini.curses.A_UNDERLINE)  # the tab the menu belongs to
+        self.press(self.tab_x("gamma"), 0, button=3)  # another tab's right click: its menu
+        self.assertEqual(self.bar.menu.address, "mmini/t3")
+        self.key(27)
+        self.assertIsNone(self.bar.menu)
+        self.assertTrue(self.scr.line(1).startswith(" mmini/t1"))  # the info line again
+
+    def test_a_left_click_outside_only_closes(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.tab_x("gamma"), 0)
+        self.assertIsNone(self.bar.menu)
+        self.assertEqual(mmini.current_target(self.win), "")  # the click closed the menu, nothing else
+
+    def test_keys_never_pick_an_entry_they_go_on_to_the_terminal(self):
+        """Keys typed after a right click were meant for the terminal: "git status", "dyld", an arrow, enter."""
+        self.bar.draw(self.snap, "mmini/t1")
+        gen = mmini.read_text(self.win / "gen")
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            for key, typed in (("d", "d"), ("n", "n"), ("e", "e"), ("m", "m"), ("y", "y"), (10, "<Enter>"),
+                               (mmini.curses.KEY_RIGHT, "<Right>"), (27, "")):
+                self.tm.calls.clear()
+                self.press(self.tab_x("beta"), 0, button=3)
+                self.key(key)
+                self.assertIsNone(self.bar.menu, key)
+                self.assertIsNone(self.bar.prompt, key)
+                self.assertEqual(self.tm.typed(), typed, key)  # esc only closes
+                self.assertEqual(self.tm.selected()[-1], "%0", key)  # the keyboard back to the view
+                self.assertEqual(self.bar.notice.current(), "", key)
+        self.assertFalse(any(c[0] in ("run", "kill", "label") for c in self.hc.calls))
+        self.assertEqual(mmini.read_names(self.state), {})
+        self.assertEqual((mmini.current_target(self.win), mmini.read_text(self.win / "gen")), ("", gen))
+
+    def test_keys_typed_ahead_go_with_it(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.scr.typed = [ord(c) for c in "it status"] + [10]
+        self.key("g")
+        self.assertEqual(self.tm.typed(), "git status<Enter>")
+        self.assertEqual(self.scr.typed, [])
+
+    def test_keys_go_on_byte_for_byte(self):
+        """";", ctrl+C, esc sequences reach the terminal unchanged (review: a trailing ";" was eaten by tmux)."""
+        args = mmini.view_key_args([ord("l"), ord("s"), ord(";"), 10, 3, 27, ord("["), ord("1"), ord(";"), ord("5"),
+                                    ord("D"), mmini.curses.KEY_LEFT, mmini.curses.KEY_F0 + 2, 0xC3, 0xA9], "%0")
+        self.assertEqual(args, ["send-keys", "-t", "%0", "-H", "6c", "73", "3b", ";",
+                                "send-keys", "-t", "%0", "Enter", ";",
+                                "send-keys", "-t", "%0", "-H", "03", "1b", "5b", "31", "3b", "35", "44", ";",
+                                "send-keys", "-t", "%0", "Left", ";", "send-keys", "-t", "%0", "F2", ";",
+                                "send-keys", "-t", "%0", "-H", "c3", "a9", ";"])
+        self.assertEqual(mmini.view_key_args([mmini.curses.KEY_F0 + 15], "%0"), ["send-keys", "-t", "%0", "S-F3", ";"])
+        self.assertEqual(mmini.view_key_args([99999], "%0"), [])  # no name: left out
+
+    def test_keys_right_after_the_closing_key_go_on_too(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("l")  # closes the menu, goes on
+            self.key("n")  # arrived before tmux moved the keyboard: goes on too, no new terminal, no tab switch
+        self.assertEqual(self.tm.typed(), "ln")
+        self.assertFalse(any(c[0] == "run" for c in self.hc.calls))
+        self.assertEqual(mmini.current_target(self.win), "")
+        self.bar.forward_until = 0.0
+        self.key("l")  # later: the tab bar's own key again
+        self.assertEqual(self.tm.typed(), "ln")
+
+    def test_a_paste_that_cannot_be_passed_on_says_so_and_gives_the_view_the_keyboard(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        failing = FakeTmux()
+        calls = []
+
+        def tmux(*args, input=None):
+            calls.append(args)
+            return None if args[0] == "load-buffer" else ""
+
+        with mock.patch.object(mmini, "tmux", tmux):
+            self.scr.typed = [ord(c) for c in "[200~" + "x" * 20000] + mmini.PASTE_END
+            self.key(27)
+        self.assertEqual(self.bar.notice.current(), "the paste could not be passed on to the terminal")
+        self.assertEqual(calls[-1], ("select-pane", "-t", "%0"))
+        del failing
+
+    def test_a_double_click_on_an_entry_keeps_its_question(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        x = self.entry_x("rename")
+        self.press(x, 1)
+        self.press(x, 1)  # the double click's second press
+        self.assertEqual(self.bar.prompt.kind, "rename")
+
+    def test_the_tabs_keep_their_rows_while_close_asks(self):
+        """Wrapped tabs must not take the rows the bar grew by for the question (review finding)."""
+        many = [term(f"mmini/t{n}", "/Users/x/dev/app", "zsh", f"tab-number-{n}") for n in range(40, 52)]
+        self.hc.terms += many
+        kids = [term(f"mmini/t{n}", "/Users/x/dev/kids", "zsh", f"child-{n}") for n in range(20, 26)]
+        self.hc.terms += kids
+        for t in kids:
+            self.hc.infos[t["address"]] = {"parent": "mmini/t2", "dies": True, "labels": {"space": "kids"}}
+        self.snap = self.snapshot()
+        self.bar.draw(self.snap, "mmini/t1")
+        menu_row = next(s.y for s in self.bar.layout.segs if s.kind == "tab") if self.bar.layout else 0
+        x = next(s.x for s in self.bar.layout.segs if s.kind == "tab" and "beta" in s.text)
+        self.press(x + 1, menu_row, button=3)
+        y = next(g.y for g in self.bar.menu_segs)
+        self.press(next(g.x for g in self.bar.menu_segs if g.kind == "entry" and g.text.lower().startswith("close")), y)
+        self.assertEqual(self.bar.prompt.kind, "close")
+        self.scr.height = self.bar.rows_goal()
+        self.bar.draw(self.snap, "mmini/t1")
+        self.assertFalse(self.bar.close_cut)  # the grown rows went to the question
+        self.assertLessEqual(self.bar.layout.rows, mmini.TAB_ROWS - 1)
+
+    def test_a_right_click_in_the_view_opens_the_shown_terminals_menu_here(self):
+        self.bar.draw(self.snap, "mmini/t2")
+        mmini.write_atomic(self.win / "ask", "menu\n")  # what mmini.tmux.conf writes
+        self.bar.check_ask(self.snap, "mmini/t2")
+        self.assertEqual(self.bar.menu.address, "mmini/t2")
+        self.assertEqual(self.tm.selected(), ["%2"])  # the tab bar takes the keyboard, as for a tab's right click
+        self.assertFalse((self.win / "ask").exists())
+        self.bar.check_ask(self.snap, "mmini/t2")  # read once
+        self.assertEqual(self.tm.selected(), ["%2"])
+        self.bar.menu = None
+        mmini.write_atomic(self.win / "ask", "menu\n")
+        self.bar.check_ask(self.snap, "")  # nothing shown
+        self.assertIsNone(self.bar.menu)
+        self.assertEqual(self.bar.notice.current(), "nothing shown")
+
+    def test_a_paste_goes_on_to_the_view_or_into_the_question(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        drop = [ord(c) for c in "[200~/Users/me/Desktop/shot one.png"] + mmini.PASTE_END
+        self.scr.typed = list(drop)
+        self.key(27)
+        self.assertIn(["load-buffer", "-b", "mmini-paste", "-"], self.tm.commands())
+        self.assertEqual(self.tm.inputs, ["/Users/me/Desktop/shot one.png"])  # on stdin: no 16 KB limit
+        self.assertIn(["paste-buffer", "-p", "-d", "-b", "mmini-paste", "-t", "%0"], self.tm.commands())
+        self.assertEqual(self.tm.selected()[-1], "%0")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("rename"), 1)
+        self.key(21)
+        self.scr.typed = [ord(c) for c in "[200~web\nside"] + mmini.PASTE_END
+        self.key(27)
+        self.assertEqual(self.bar.prompt.text, "web side")  # one line, into the question
+        self.scr.typed = [ord(c) for c in "[A"]  # esc of its own: the keys read to tell are given back
+        self.assertIsNone(mmini.read_paste(self.scr))
+        self.assertEqual(self.scr.typed, [ord("["), ord("A")])
+
+    def test_a_click_in_another_pane_closes_the_menu(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%2"}):
+            self.bar.watch_menu()
+            self.assertIsNotNone(self.bar.menu)  # still the tab bar's keyboard
+            self.tm.active = False  # a click in the view
+            self.bar.watch_menu()
+        self.assertIsNone(self.bar.menu)
+
+    def test_menu_on_a_one_row_pane_takes_the_row(self):
+        self.scr.height = 1
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.assertTrue(self.scr.line(0).startswith(" beta: New terminal"))
+
+    # the actions -----------------------------------------------------------------------------------------------
+    def test_rename_from_the_menu(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("rename"), 1)
+        self.assertEqual(self.bar.prompt.text, "beta")  # the current name filled in
+        self.assertEqual(self.tm.selected(), ["%2"])  # the answer is typed here
+        self.assertEqual(self.scr.line(1), " rename beta to: beta_")
+        self.assertEqual(self.scr.line(4), " " + mmini.TAB_ASK["rename"])
+        self.key(21)
+        for c in "web":
+            self.key(c)
+        self.key(10)
+        self.assertEqual(self.bar.notice.current(), "rename: web is taken")  # t9 in another space shows it
+        self.assertNotIn("term:mmini/t2", mmini.read_names(self.state))
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("rename"), 1)
+        for c in "-two":
+            self.key(c)
+        self.key(10)
+        self.assertEqual(mmini.read_names(self.state), {"term:mmini/t2": "beta-two"})
+        self.assertEqual(self.tm.selected()[-1], "%0")  # the keyboard back to the view
+        self.assertIsNone(self.bar.prompt)
+
+    def test_rename_cancelled_by_esc_or_a_click(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        for cancel in (27, None):
+            self.press(self.tab_x("beta"), 0, button=3)
+            self.press(self.entry_x("rename"), 1)
+            self.key("x")
+            self.bar.mouse_quiet = 0.0  # past a double click's second press (that one keeps the question)
+            if cancel is None:
+                self.press(self.tab_x("gamma"), 0)
+            else:
+                self.key(cancel)
+            self.assertIsNone(self.bar.prompt)
+        self.assertEqual(mmini.read_names(self.state), {})
+        self.assertEqual(mmini.current_target(self.win), "")
+
+    def test_move_labels_and_asks_for_a_full_listing(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("move"), 1)
+        self.assertEqual(self.scr.line(1), " move beta to space: _")
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            for c in "web":
+                self.key(c)
+            self.key(10)
+        self.assertIn(("label", "mmini/t2", "space=web"), self.hc.calls)
+        self.assertTrue((self.win / "poke.full").exists())  # the engine asks every label again
+
+    def test_new_terminal_from_the_menu(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.press(self.entry_x("new"), 1)
+        run = next(c for c in self.hc.calls if c[0] == "run")
+        self.assertEqual(run[-2:], ("--label", "space=app"))
+        self.assertEqual(mmini.current_target(self.win), "mmini/t54")  # the new shell is shown
+        self.assertIsNone(self.bar.menu)
+
+    def test_close_asks_for_y_and_lists_what_ends(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("alpha"), 0, button=3)
+        self.press(self.entry_x("close"), 1)
+        self.assertEqual(self.scr.line(1), " close alpha? ends 2: alpha (claude-code), gamma (zsh)")
+        self.assertEqual(self.scr.line(4), " " + mmini.TAB_ASK["close"])
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("n")  # any other key: nothing ends
+        self.assertEqual(self.bar.notice.current(), "not closed")
+        self.assertFalse(any(c[0] == "kill" for c in self.hc.calls))
+        mmini.show("mmini/t1", self.win)
+        mmini.change_names({"term:mmini/t3": "kid"}, self.state)
+        self.press(self.tab_x("alpha"), 0, button=3)
+        self.press(self.entry_x("close"), 1)
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")
+        self.assertEqual([c[1] for c in self.hc.calls if c[0] == "kill"], ["mmini/t1", "mmini/t3"])
+        self.assertEqual([t["address"] for t in self.hc.terms], ["mmini/t2", "mmini/t9"])
+        self.assertEqual(mmini.current_target(self.win), "mmini/t2")  # the next tab that stays
+        self.assertEqual(mmini.read_names(self.state), {})  # the names of what ended went
+        self.assertEqual(self.bar.notice.current(), "")
+        self.assertIsNone(self.bar.prompt)
+
+    def test_close_of_a_tab_not_shown_keeps_the_view(self):
+        mmini.show("mmini/t1", self.win)
+        gen = (self.win / "gen").read_text()
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("close"), 1)
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("Y")
+        self.assertEqual((self.win / "gen").read_text(), gen)
+        self.assertNotIn("mmini/t2", [t["address"] for t in self.hc.terms])
+
+    def test_close_asks_again_when_what_ends_has_changed(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("close"), 1)
+        self.assertEqual(self.bar.prompt.data, ("mmini/t2",))
+        self.hc.infos["mmini/t9"] = {"parent": "mmini/t2", "dies": True}  # t9 now ends with beta
+        self.snap = self.snapshot()
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")
+        self.assertFalse(any(c[0] == "kill" for c in self.hc.calls))
+        self.assertEqual(self.bar.prompt.data, ("mmini/t2", "mmini/t9"))
+        self.assertTrue(self.scr.line(1).startswith(" changed: close beta? ends 2:"))  # said where it is read
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")  # at once: not taken
+        self.assertFalse(any(c[0] == "kill" for c in self.hc.calls))
+        self.bar.asked_again -= mmini.CLOSE_AGAIN
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")
+        self.assertEqual([c[1] for c in self.hc.calls if c[0] == "kill"], ["mmini/t2", "mmini/t9"])
+
+    def test_a_close_list_that_does_not_fit_refuses_y_and_the_bar_grows_for_it(self):
+        many = [term(f"mmini/t{n}", "/Users/x/dev/kids", "zsh", f"child-number-{n}") for n in range(20, 32)]
+        self.hc.terms += many
+        for t in many:  # in a space of their own: not tabs here
+            self.hc.infos[t["address"]] = {"parent": "mmini/t2", "dies": True, "labels": {"space": "kids"}}
+        self.snap = self.snapshot()
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("close"), 1)
+        self.assertTrue(self.bar.close_cut)  # 5 rows of 70 columns: the 13 names do not fit
+        self.assertIn("the list is cut", self.scr.line(4))
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")
+        self.assertFalse(any(c[0] == "kill" for c in self.hc.calls))
+        self.assertIsNotNone(self.bar.prompt)  # still asking
+        goal = self.bar.rows_goal()
+        self.assertGreater(goal, mmini.TAB_ROWS)  # in tmux the bar grows to show it all
+        self.scr.height = goal
+        self.bar.draw(self.snap, "mmini/t1")
+        self.assertFalse(self.bar.close_cut)
+        self.assertEqual(self.scr.line(goal - 1), " " + mmini.TAB_ASK["close"])
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")
+        self.assertEqual(len([c for c in self.hc.calls if c[0] == "kill"]), 13)
+        self.assertEqual(self.bar.rows_goal(), mmini.TAB_ROWS)  # and back to its rows
+
+    def test_a_failed_close_says_so(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        self.press(self.entry_x("close"), 1)
+        self.hc.fail = '{"error": {"kind": "io", "message": "core gone"}}'
+        with mock.patch.object(mmini, "run_hc", self.hc):
+            self.key("y")
+        self.assertEqual(self.bar.notice.current(), "close: 1 of 1 failed, mmini/t2: core gone")
+
+    def test_a_tab_that_ended_meanwhile(self):
+        self.bar.draw(self.snap, "mmini/t1")
+        self.press(self.tab_x("beta"), 0, button=3)
+        x = self.entry_x("rename")
+        self.snap = dict(self.snap, tabs=[t for t in self.snap["tabs"] if t["address"] != "mmini/t2"])
+        self.press(x, 1)
+        self.assertIsNone(self.bar.prompt)
+        self.assertEqual(self.bar.notice.current(), "that terminal has ended")
+
+
+class PokeTests(unittest.TestCase):
+    def test_a_full_poke_asks_for_every_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            win = Path(tmp)
+            engine = mmini.Engine(win / "shared", win)
+            calls = []
+            done = threading.Event()
+
+            def refresh(full=False, also=()):
+                calls.append(full)
+                if len(calls) >= 3:
+                    done.set()
+
+            with mock.patch.object(engine, "refresh_once", refresh):
+                thread = threading.Thread(target=engine.refresh_forever, daemon=True)
+                thread.start()
+                self.assertTrue(wait_for(lambda: len(calls) == 1))
+                time.sleep(0.05)
+                mmini.poke_engine(win)
+                self.assertTrue(wait_for(lambda: len(calls) == 2))
+                time.sleep(0.05)
+                mmini.poke_engine(win, full=True)
+                mmini.poke_engine(win)  # a plain poke right after does not hide it
+                self.assertTrue(done.wait(6))
+                engine.stop()
+                thread.join(3)
+        self.assertEqual(calls[:3], [False, False, True])
 
 
 class NamesTests(unittest.TestCase):
@@ -3649,6 +3786,88 @@ class ActionTests(unittest.TestCase):
         self.click(5, self.side.menu_at.top)  # its border: nothing
         self.assertIsNotNone(self.side.menu)
 
+    def test_a_right_click_menu_takes_clicks_only(self):
+        """Keys typed after a right click were meant for the terminal: they close the menu and go on to it."""
+        mmini.write_atomic(self.win / "panes", PANES)
+        row = self.line_of(mmini.Item("group", "rig:vps", ""))
+        tm = FakeTmux().install(self)
+        for key, typed in (("e", "e"), ("n", "n"), ("d", "d"), ("s", "s"), ("j", "j"), (10, "<Enter>"), (27, "")):
+            self.side.mouse_quiet = 0.0
+            tm.calls.clear()
+            self.click(5, row, 3)
+            self.assertTrue(self.side.menu.by_mouse)
+            self.key(key)
+            self.assertIsNone(self.side.menu, key)
+            self.assertIsNone(self.side.prompt, key)
+            self.assertEqual(tm.typed(), typed, key)
+            self.assertEqual(tm.selected()[-1], "%0", key)  # the keyboard back to the view
+            self.assertEqual(mmini.current_target(self.win), "", key)  # enter did not open the row
+        self.assertFalse(any(c[0] in ("run", "kill", "rm") or c[:2] in (("machine", "add"), ("machine", "rm"))
+                             for c in self.hc.calls))
+        self.side.forward_until = 0.0
+        self.key("a", "e")  # opened with a, the menu keeps its keys
+        self.assertEqual(self.side.prompt.kind, "rename")
+
+    def test_a_right_click_menu_shows_no_keys_and_nothing_selected(self):
+        row = self.line_of(mmini.Item("group", "rig:vps", ""))
+        self.click(5, row, 3)
+        box = self.side.menu_at
+        lines = [self.scr.line(box.entry_y(i)) for i in range(box.offset, box.offset + box.shown)]
+        self.assertFalse(any(re.search(r" [a-z↵] │$", line) for line in lines), lines)
+        reversed_rows = [y for (y, x), (_, attr) in self.scr.cells.items() if attr & mmini.curses.A_REVERSE]
+        self.assertFalse(set(reversed_rows) & {box.entry_y(i) for i in range(box.offset, box.offset + box.shown)})
+        self.key(27)
+        self.side.forward_until = 0.0  # past the moment keys still go on to the terminal
+        self.key("a")  # with a: the keys and the selected entry
+        box = self.side.menu_at
+        self.assertTrue(self.scr.line(box.entry_y(0)).rstrip("│").rstrip().endswith("↵") or
+                        re.search(r" [a-z↵] │$", self.scr.line(box.entry_y(1))))
+
+    def test_a_question_from_a_right_click_menu_goes_with_a_click_elsewhere(self):
+        row = self.line_of(mmini.Item("group", "rig:vps", ""))
+        tm = FakeTmux().install(self)
+        self.click(5, row, 3)
+        box = self.side.menu_at
+        self.click(box.left + 3, box.entry_y(2))  # Rename
+        self.assertTrue(self.side.prompt.by_mouse)
+        tm.active = False  # a click in the view
+        self.side.watch_menu()
+        self.assertIsNone(self.side.prompt)
+        self.assertEqual(self.side.notice.current(), "cancelled")
+        self.side.mouse_quiet = 0.0
+        self.key("e")  # a question opened with a key: a press in the sidebar ends it and acts
+        self.assertIsNotNone(self.side.prompt)
+        self.click(5, self.line_of(mmini.Item("group", "space:other", "")))
+        self.assertIsNone(self.side.prompt)
+        self.assertEqual(self.side.cur, "space:other")
+
+    def test_a_paste_in_the_sidebar_goes_on_to_the_view_or_into_the_question(self):
+        mmini.write_atomic(self.win / "panes", PANES)
+        tm = FakeTmux().install(self)
+        self.scr.typed = [ord(c) for c in "[200~/Users/me/a.png"] + mmini.PASTE_END
+        self.key(27)
+        self.assertEqual(tm.inputs, ["/Users/me/a.png"])
+        self.assertEqual(tm.selected()[-1], "%0")
+        self.assertIsNone(self.side.prompt)  # no key of it acted: no "s" question, no "e"
+        self.key("s")
+        self.scr.typed = [ord(c) for c in "[200~~/dev/web"] + mmini.PASTE_END
+        self.key(27)
+        self.assertEqual(self.side.prompt.text, "~/dev/web")
+
+    def test_a_right_click_menu_goes_when_another_pane_gets_the_keyboard(self):
+        row = self.line_of(mmini.Item("group", "rig:vps", ""))
+        tm = FakeTmux().install(self)
+        self.click(5, row, 3)
+        self.side.watch_menu()
+        self.assertIsNotNone(self.side.menu)
+        tm.active = False  # a click in the view
+        self.side.watch_menu()
+        self.assertIsNone(self.side.menu)
+        self.key("a")  # a menu opened with a is not watched: the keyboard is here
+        tm.active = False
+        self.side.watch_menu()
+        self.assertIsNotNone(self.side.menu)
+
     def test_a_menu_whose_row_has_gone_closes(self):
         self.go(mmini.Item("agent", "space:other", "t4"))
         self.key("a")
@@ -3919,7 +4138,7 @@ class ActionTests(unittest.TestCase):
 
 class ScriptTests(unittest.TestCase):
     def test_shell_syntax(self):
-        for name in ("view.sh", "build.sh"):
+        for name in ("view.sh", "build.sh", "start.sh"):
             out = subprocess.run(["/bin/sh", "-n", str(ROOT / name)], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, out.stderr)
 
@@ -3928,85 +4147,248 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("git clone https://github.com/PerIPan/herdr-core-ghostty-UI ~/.local/share/mmini && "
                       "sh ~/.local/share/mmini/build.sh", text)
         self.assertIn("git -C ~/.local/share/mmini pull && sh ~/.local/share/mmini/build.sh", text)
-        self.assertIn("focus-follows-mouse", text)
-        for line in text.splitlines():
-            if "ghostty/config" in line or "com.mitchellh.ghostty" in line or '"$c"' in line:
-                self.assertNotRegex(line, r">>|>\s*\"?\$c|tee|sed -i")
+        self.assertNotIn("focus-follows-mouse", text)  # one click is enough without it now
+        self.assertNotIn("Application Support/com.mitchellh.ghostty", text)  # the config is not even read
+        self.assertNotRegex(text, r"ghostty/config")
 
-    def test_build_reads_all_four_config_files_and_the_hint_names_its_limit(self):
+    def test_build_needs_tmux_and_the_new_files(self):
         text = (ROOT / "build.sh").read_text()
-        loop = next(line for line in text.splitlines() if line.startswith("for c in "))
-        self.assertEqual(loop.rstrip("; do").split()[3:],
-                         ['"$xdg/config"', '"$xdg/config.ghostty"', '"$mac/config"', '"$mac/config.ghostty"'])
-        hint = text[text.index("mmini: hint:"):]
-        self.assertIn('echo "    focus-follows-mouse = true"', hint)
-        self.assertIn("keyboard then follows the pointer", hint)
+        self.assertIn('echo "mmini: tmux not found (brew install tmux)" >&2; exit 1', text)
+        self.assertIn("for f in mmini.py view.sh start.sh mmini.tmux.conf; do", text)
 
-    def test_config_check_finds_the_setting_in_either_file_name(self):
+    def test_launcher_types_start_sh_into_one_window(self):
         text = (ROOT / "build.sh").read_text()
-        check = text[text.index("# --- Ghostty settings"):]  # the last part: reads the config files, prints hints
-        cases = (({}, True), ({"config": "focus-follows-mouse = true\n"}, False),
-                 ({"config.ghostty": ' focus-follows-mouse="true"\n'}, False),
-                 ({"config": "focus-follows-mouse = true\n", "config.ghostty": "focus-follows-mouse = false\n"}, True),
-                 ({"config.ghostty": "# focus-follows-mouse = true\nfont-size = 12\n"}, True))
-        for files, hinted in cases:
-            with tempfile.TemporaryDirectory() as home:
-                folder = Path(home) / ".config" / "ghostty"
-                folder.mkdir(parents=True)
-                for name, body in files.items():
-                    (folder / name).write_text(body)
-                before = {f.name: f.read_text() for f in folder.iterdir()}
-                out = subprocess.run(["/bin/sh", "-euc", check], capture_output=True, text=True,
-                                     env={"HOME": home, "PATH": "/usr/bin:/bin"})
-                self.assertEqual(out.returncode, 0, out.stderr)
-                self.assertEqual("    focus-follows-mouse = true" in out.stdout, hinted, files)
-                self.assertEqual({f.name: f.read_text() for f in folder.iterdir()}, before)  # read only
-
-    def test_launcher_waits_for_ghosttys_own_split_focus_before_focusing_the_sidebar(self):
-        lines = [line.strip() for line in (ROOT / "build.sh").read_text().splitlines()]
-        focus = lines.index("focus sideTerm")
-        delay = lines.index("tell current application to delay 0.8")
-        self.assertLess(delay, focus)
-        self.assertTrue(all(line.startswith("--") or line == "try" for line in lines[delay + 1:focus]))
-        self.assertLess(max(i for i, line in enumerate(lines) if line.startswith("set tabsTerm to split")), focus)
-
-    def test_launcher_focus_falls_back_to_the_view_when_the_sidebar_is_gone(self):
-        lines = [line.strip() for line in (ROOT / "build.sh").read_text().splitlines()]
-        focus = lines.index("focus sideTerm")
-        self.assertEqual(lines[focus - 1], "try")  # a sidebar started hidden has ended: its pane is gone
-        self.assertEqual(lines[focus + 1:focus + 4], ["on error", "focus viewTerm", "end try"])
-
-    def test_launcher_panes_close_when_their_program_ends(self):
-        lines = [line.strip() for line in (ROOT / "build.sh").read_text().splitlines()]
-
-        def typed(name):
-            return next(line for line in lines if line.startswith(f"set initial input of {name} to"))
-
-        for name, mode in (("sideCfg", "sidebar"), ("tabsCfg", "tabs")):
-            self.assertIn('to "exec " & pre & "python3 " & (quoted form of (base & "mmini.py"))', typed(name))
-            self.assertTrue(typed(name).endswith(f'& " {mode}" & linefeed'), typed(name))
-        self.assertNotIn("exec", typed("viewCfg"))  # the view's command stays as it was
-        self.assertIn('set pre to "env MMINI_WINDOW=" & (quoted form of winDir) & " "', lines)
+        script = text[text.index("osacompile"):text.index("\nEOF\n", text.index("osacompile"))]
+        lines = [line.strip() for line in script.splitlines()]
+        self.assertIn('set initial input of cfg to "exec env MMINI_WINDOW=" & (quoted form of winDir) & " sh " & '
+                      '(quoted form of (base & "start.sh")) & linefeed', lines)
+        self.assertNotIn(" split ", script)  # tmux makes the panes, not Ghostty
+        self.assertEqual(lines[-1], "end tell")  # the heredoc ends right after it
+        self.assertTrue(text[text.index(script) + len(script):].startswith("\nEOF\nrm -rf \"$app\"\n"))
+        self.assertEqual(sum(line.startswith("set win to new window") for line in lines), 1)
 
     def test_build_header_says_what_to_expect_of_the_three_states(self):
         text = (ROOT / "build.sh").read_text()
-        header = text[:text.index("set -eu")].lower()
-        for words in ("open, strip and hidden", "q now closes the sidebar's pane", "a click on \"›\"", "untested",
-                      "bringing the sidebar back at full height"):
+        header = " ".join(text[:text.index("set -eu")].lower().replace("#", " ").split())
+        for words in ("open, strip", "hidden (its pane closes", "\"›\", whose click", "untested", "brings the sidebar back at full",
+                      "one click acts, in any pane", "‹ back"):
             self.assertIn(words, header)
 
     def test_build_header_says_what_to_expect_of_the_menu(self):
         text = (ROOT / "build.sh").read_text()
         header = " ".join(text[:text.index("set -eu")].lower().replace("#", " ").split())
-        for words in ("the key a, or a right click on the row", "ghostty may show its own context menu instead",
-                      "the key a always works", "a delete asks for the name first", "runs `hc machine add`",
-                      "a right click in ghostty", "adding and forgetting a real machine"):
+        for words in ("a right click on a sidebar row or a tab, or in the shown terminal, opens its menu",
+                      "keys typed then go on to the terminal", "a file dropped on the window lands in the terminal",
+                      "adding and forgetting a real machine"):
             self.assertIn(words, header)
         readme = " ".join((ROOT / "README.md").read_text().split())
         for words in ("A delete asks for the name to be typed first", "names.json",
-                      "A right click may open Ghostty's own menu instead of mmini's"):
+                      "A right click on a tab, or in the shown terminal, opens its menu", "brew install tmux",
+                      "A file dropped on the window reaches the shown terminal"):
             self.assertIn(words, readme)
 
+
+class StartScriptTests(unittest.TestCase):
+    """start.sh with the real tmux, in a pseudo terminal, against a stand-in hc that lists nothing. Skipped where
+    tmux is not installed."""
+
+    def setUp(self):
+        self.tmux = shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux")
+                                                  if os.access(p, os.X_OK)), None)
+        if self.tmux is None:
+            self.skipTest("tmux not installed")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        tmp = Path(self._tmp.name)
+        self.win = tmp / "state" / "w-test01"
+        self.win.mkdir(parents=True)
+        hc = tmp / "hc"
+        hc.write_text('#!/bin/sh\ncase "$1 $2" in "ls --json") echo \'{"terminals": [{"address": "t1", '
+                      '"agent": "zsh", "cwd": "/tmp/work", "state": "live", "name": "one"}]}\' ;; '
+                      '"machine ls") echo \'{"machines": []}\' ;; "get t1") echo "{}" ;; '
+                      '"attach t1") trap "exit 0" TERM; while :; do sleep 1; done ;; esac\nexit 0\n')
+        hc.chmod(0o755)
+        self.sock = "mmini-" + self.win.name
+        self.addCleanup(lambda: subprocess.run([self.tmux, "-L", self.sock, "kill-server"], capture_output=True))
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("MMINI_", "TMUX"))}
+        env.update(TERM="xterm-256color", MMINI_HC=str(hc), MMINI_STATE=str(tmp / "state"),
+                   MMINI_WINDOW=str(self.win), MMINI_KEYCHAIN="0", MMINI_BROWSER="0",
+                   PYTHONDONTWRITEBYTECODE="1")
+        import pty
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execve("/bin/sh", ["/bin/sh", str(ROOT / "start.sh")], env)
+        self.pid, self.fd = pid, fd
+        self.size(120, 40)
+        threading.Thread(target=self.drain, daemon=True).start()
+        self.addCleanup(self.close)
+
+    def size(self, cols, rows):
+        import fcntl
+        import struct
+        import termios
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        os.kill(self.pid, signal.SIGWINCH)
+
+    def drain(self):
+        while True:
+            try:
+                if not os.read(self.fd, 65536):
+                    return
+            except OSError:
+                return
+
+    def close(self):
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        try:
+            os.waitpid(self.pid, 0)
+        except ChildProcessError:
+            pass
+
+    def t(self, *args):
+        return subprocess.run([self.tmux, "-L", self.sock, *args], capture_output=True, text=True).stdout
+
+    def panes(self):
+        """{pane id: (left, top, width, height)} and the active pane."""
+        out, active = {}, ""
+        for line in self.t("list-panes", "-F", "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} "
+                                                "#{pane_active}").splitlines():
+            parts = line.split()
+            out[parts[0]] = tuple(int(v) for v in parts[1:5])
+            if parts[5] == "1":
+                active = parts[0]
+        return out, active
+
+    def test_layout_sizes_click_and_close(self):
+        self.assertTrue(wait_for(lambda: len(mmini.read_panes(self.win)) == 3, 10))
+        ids = mmini.read_panes(self.win)
+        side, tabs, view = ids["side"], ids["tabs"], ids["view"]
+
+        def laid_out(cols, rows):
+            panes, active = self.panes()
+            return (len(panes) == 3 and panes[side] == (0, 0, mmini.WIDTH, rows)
+                    and panes[tabs][2:] == (cols - mmini.WIDTH - 1, mmini.TAB_ROWS)
+                    and panes[view][1] == mmini.TAB_ROWS + 1 and active == view)
+
+        self.assertTrue(wait_for(lambda: laid_out(120, 40), 10), self.panes())
+        self.size(160, 50)  # a bigger window: tmux spreads it, the panes set their sizes again
+        self.assertTrue(wait_for(lambda: laid_out(160, 50), 10), self.panes())
+        self.assertEqual(self.t("show", "-gv", "prefix").strip(), "None")
+        sgr = {p: self.t("display", "-p", "-t", p, "#{mouse_sgr_flag}").strip() for p in (side, tabs)}
+        self.assertEqual(sgr, {side: "1", tabs: "1"})  # xterm-mmini: a click far right keeps its column
+        self.assertTrue((self.win / "terminfo").is_dir())
+        # one click on "‹ fold" (the sidebar's last line), while the view has the keyboard: it acts at once
+        os.write(self.fd, b"\x1b[<0;3;50M")
+        time.sleep(0.05)
+        os.write(self.fd, b"\x1b[<0;3;50m")
+        self.assertTrue(wait_for(lambda: self.panes()[0][side][2] == mmini.NARROW, 10), self.panes())
+        self.assertEqual(mmini.read_text(self.win.parent / "sidebar"), "strip")
+        # q in the sidebar: its pane closes, the tab bar takes the width and shows "›"; one click on it brings a
+        # full-height sidebar back
+        self.t("send-keys", "-t", side, "q")
+        self.assertTrue(wait_for(lambda: side not in self.panes()[0] and self.panes()[0][tabs][0] == 0, 10),
+                        self.panes())
+        self.assertTrue(wait_for(lambda: "›" in self.t("capture-pane", "-p", "-t", tabs).splitlines()[0], 10))
+        os.write(self.fd, b"\x1b[<0;1;1M")
+        time.sleep(0.05)
+        os.write(self.fd, b"\x1b[<0;1;1m")
+        self.assertTrue(wait_for(lambda: len(self.panes()[0]) == 3, 10), self.panes())
+        new = mmini.read_panes(self.win)["side"]
+        self.assertNotEqual(new, side)
+        self.assertTrue(wait_for(lambda: self.panes()[0][new] == (0, 0, mmini.WIDTH, 50), 10), self.panes())
+        self.assertEqual(mmini.read_text(self.win.parent / "sidebar"), "open")
+        # a slow drag of the divider, one column at a time: every step stays, the width is kept for later windows
+        x = mmini.WIDTH + 1  # the border column (1-based): right of the 30-column sidebar
+        os.write(self.fd, f"\x1b[<0;{x};20M".encode())
+        for step in range(1, 9):
+            time.sleep(0.12)
+            os.write(self.fd, f"\x1b[<32;{x + step};20M".encode())
+        time.sleep(0.12)
+        os.write(self.fd, f"\x1b[<0;{x + 8};20m".encode())
+        self.assertTrue(wait_for(lambda: self.panes()[0][new][2] == mmini.WIDTH + 8, 10), self.panes())
+        self.assertTrue(wait_for(lambda: mmini.read_text(self.win.parent / "width") == str(mmini.WIDTH + 8), 10))
+        self.size(170, 50)  # a wider window: the dragged width stays
+        time.sleep(0.5)
+        self.assertTrue(wait_for(lambda: self.panes()[0][new][2] == mmini.WIDTH + 8, 10), self.panes())
+        # a right click in the view: the shown terminal's menu, in the tab bar, which takes the keyboard; a key closes it
+        tabs = mmini.read_panes(self.win)["tabs"]
+        view = mmini.read_panes(self.win)["view"]
+        self.assertTrue(wait_for(lambda: mmini.current_target(self.win) == "t1", 10))
+        os.write(self.fd, b"\x1b[<2;120;30M")
+        time.sleep(0.05)
+        os.write(self.fd, b"\x1b[<2;120;30m")
+        self.assertTrue(wait_for(lambda: "New terminal" in self.t("capture-pane", "-p", "-t", tabs), 10),
+                        self.t("capture-pane", "-p", "-t", tabs))
+        self.assertTrue(wait_for(lambda: self.panes()[1] == tabs, 10))
+        os.write(self.fd, b"x")
+        self.assertTrue(wait_for(lambda: self.panes()[1] == view, 10))
+        self.assertTrue(wait_for(lambda: "New terminal" not in self.t("capture-pane", "-p", "-t", tabs), 10))
+        # a double click on a sidebar row: the pick gives the view the keyboard, and the double click leaves it there
+        side_lines = self.t("capture-pane", "-p", "-t", new).splitlines()
+        row = next(i for i, line in enumerate(side_lines) if " work" in line) + 1
+        for _ in range(2):
+            os.write(self.fd, f"\x1b[<0;6;{row}M".encode())
+            time.sleep(0.03)
+            os.write(self.fd, f"\x1b[<0;6;{row}m".encode())
+            time.sleep(0.08)
+        time.sleep(0.8)  # tmux reports the double click about 300 ms later
+        self.assertEqual(self.panes()[1], view)
+        # ctrl+C typed after a right click in the view goes on to the terminal; the tab bar lives on (raw mode)
+        os.write(self.fd, b"\x1b[<2;120;30M")
+        time.sleep(0.05)
+        os.write(self.fd, b"\x1b[<2;120;30m")
+        self.assertTrue(wait_for(lambda: self.panes()[1] == tabs, 10))
+        os.write(self.fd, b"\x03")
+        self.assertTrue(wait_for(lambda: self.panes()[1] == view, 10))
+        time.sleep(0.5)
+        self.assertIn(tabs, self.panes()[0])
+        # zoomed: a right click in the view leaves the zoom (the tab bar is hidden then)
+        self.t("resize-pane", "-Z", "-t", view)
+        self.assertTrue(wait_for(lambda: self.t("display", "-p", "#{window_zoomed_flag}").strip() == "1", 10))
+        os.write(self.fd, b"\x1b[<2;120;30M")
+        time.sleep(0.05)
+        os.write(self.fd, b"\x1b[<2;120;30m")
+        time.sleep(0.8)
+        self.assertEqual(self.t("display", "-p", "#{window_zoomed_flag}").strip(), "1")
+        self.assertFalse((self.win / "ask").exists())
+        self.close()  # the window closed: its tmux ends
+        self.assertTrue(wait_for(lambda: subprocess.run([self.tmux, "-L", self.sock, "ls"],
+                                                        capture_output=True).returncode != 0, 10))
+
+class StartFailureTests(unittest.TestCase):
+    def run_start(self, tmux_script, width="abc"):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bad = tmp / "bin"
+            bad.mkdir()
+            log = tmp / "tmux.log"
+            (bad / "tmux").write_text("#!/bin/sh\necho \"$*\" >> " + str(log) + "\n" + tmux_script)
+            (bad / "tmux").chmod(0o755)
+            env = {"HOME": str(tmp), "PATH": f"{bad}:/usr/bin:/bin", "MMINI_STATE": str(tmp / "state"),
+                   "MMINI_WIDTH": width}
+            out = subprocess.run(["/bin/sh", str(ROOT / "start.sh")], env=env, input="\n", capture_output=True,
+                                 text=True, timeout=20)
+            return out, log.read_text().splitlines() if log.exists() else []
+
+    def test_a_tmux_that_fails_is_said_and_leaves_nothing_behind(self):
+        out, calls = self.run_start("echo 'no server: broken' >&2\nexit 1\n")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("mmini: tmux could not start: no server: broken", out.stdout)
+        self.assertIn("(enter closes this window)", out.stdout)
+        self.assertTrue(calls[-1].startswith("-L mmini-w-") and calls[-1].endswith(" kill-server"), calls)
+
+    def test_a_split_that_fails_ends_the_server_and_a_junk_width_is_30(self):
+        script = 'case "$*" in *new-session*) echo %0 ;; *split-window*) echo "no space" >&2; exit 1 ;; esac\n'
+        out, calls = self.run_start(script)
+        self.assertIn("mmini: tmux could not make the sidebar: no space", out.stdout)
+        split = next(c for c in calls if "split-window" in c)
+        self.assertIn(" -l 30 ", split)  # MMINI_WIDTH=abc
+        self.assertTrue(calls[-1].endswith(" kill-server"))
+        out, calls = self.run_start(script, width="7")
+        self.assertIn(" -l 30 ", next(c for c in calls if "split-window" in c))  # out of 10-200
 
 class ServerTests(unittest.TestCase):
     """The servers section: user@host names, the home machine's row, hidden by default, v and the menu switch. The
@@ -4314,11 +4696,12 @@ class HelpTests(unittest.TestCase):
     def test_tab_bar_question_mark_says_its_keys(self):
         bar = mmini.TabBar(FakeScr(5, 120), self.win, self.state)
         bar.handle_key(ord("?"), None, "")
-        self.assertEqual(bar.notice.current(), "keys: ←→ h l switch · enter ↓ focus · z zoom · ⌘⇧↵ back")
+        keys = "←→ h l switch · enter ↓ focus · right click: menu · z zoom (a click on the top line ends it)"
+        self.assertEqual(bar.notice.current(), "keys: " + keys)
         bar.alone = True
         bar.handle_key(ord("?"), None, "")
-        self.assertEqual(bar.notice.current(), "keys: c o sidebar · ←→ h l switch · enter ↓ focus · z zoom · ⌘⇧↵ back")
-        self.assertEqual(mmini.TAB_HINTS_ALONE[0], "c sidebar  ←→ switch  enter focus  z zoom  ⌘⇧↵ back")  # stays
+        self.assertEqual(bar.notice.current(), "keys: c o sidebar · " + keys)
+        self.assertEqual(mmini.TAB_HINTS_ALONE[0], "c sidebar  ←→ switch  enter focus  right click menu  z zoom")
 
 
 class DragTests(unittest.TestCase):
@@ -4330,105 +4713,91 @@ class DragTests(unittest.TestCase):
         self.state = Path(self._tmp.name) / "state"
         self.win = self.state / "w-1"
         self.hc = FakeHc(SidebarLogicTests.TERMS)
-        self.goals = []
-
-        def fake(mode, win, goal):  # the loop reaches its goal; the pane is that wide then
-            self.goals.append(goal())
-            self.scr.width = goal()
-            return goal(), goal()
-
-        for target, value in ((mmini, {"run_hc": self.hc, "autosize": fake, "autosize_enabled": lambda: True}),
-                              (mmini.curses, {"color_pair": lambda n: n << 8})):
+        for target, value in ((mmini, {"run_hc": self.hc}), (mmini.curses, {"color_pair": lambda n: n << 8})):
             patcher = mock.patch.multiple(target, **value)
             patcher.start()
             self.addCleanup(patcher.stop)
         self.scr = FakeScr(24, 60)
+        self.tm = FakeTmux(self.scr).install(self)
         seen_done(self.state, self.hc.terms)
         self.side = mmini.Sidebar(self.scr, self.state, self.win)
         self.side.refresh_once()
-        self.side.start_autosize()  # as run() does
-        self.join()
+        self.side.refit()  # as run()'s first round does
 
-    def join(self):
-        if self.side.sizer is not None:
-            self.side.sizer.join(5)
+    def drag(self, *widths):
+        """The divider dragged through `widths`: tmux resized the pane at each step, the window kept its width."""
+        for width in widths:
+            self.tm.drag(width)
+            self.side.refit()
 
-    def tabs(self, cols):
-        mmini.write_atomic(self.win / "tabs.cols", f"{cols}\n")
-
-    def quiet(self):
-        """The size has been quiet for a while since the last loop or change: the sidebar takes its measure."""
-        self.side.sized_when = time.monotonic() - 2 * mmini.REFIT_QUIET
+    def resize(self, width, window):
+        """The window resized to `window` columns: tmux spread it over the panes, the sidebar first."""
+        self.tm.resize(width, window)
         self.side.refit()
 
-    def resize(self, side, tabs):
-        """Ghostty resized both panes; quiet since then."""
-        self.scr.width = side
-        self.tabs(tabs)
-        self.side.resized = time.monotonic() - 2 * mmini.REFIT_QUIET
-        self.side.refit()
-        self.join()
-
-    def test_resize_kind(self):
-        k = mmini.resize_kind
-        self.assertEqual(k((30, 90), (45, 75)), "drag")  # opposite directions, the sum stays
-        self.assertEqual(k((30, 90), (20, 101)), "drag")  # within a column of rounding
-        self.assertEqual(k((30, 90), (31, 89)), "none")
-        self.assertEqual(k((30, 90), (60, 150)), "window")  # both grew
-        self.assertEqual(k((30, 90), (30, 60)), "window")
-        self.assertEqual(k(None, (45, 75)), "window")  # nothing known to compare with: as before
-        self.assertEqual(k((30, 0), (45, 75)), "window")
-        self.assertEqual(k((30, 90), (45, 0)), "window")
-
-    def test_a_drag_is_kept_and_remembered_a_window_change_is_not(self):
-        self.assertEqual(self.goals, [30])
-        self.tabs(90)
-        self.quiet()
-        self.assertEqual(self.side.layout_seen, (30, 90))
-        self.resize(45, 75)  # the divider dragged to 45 columns
-        self.assertEqual(self.goals, [30])  # not snapped back
+    def test_a_drag_is_kept_at_every_step_and_remembered_a_window_change_is_not(self):
+        self.assertEqual(self.tm.sizes(), [30])
+        self.drag(31, 33, 38, 45)  # a slow drag: every step seen, none snapped back (the drag would die)
+        self.assertEqual(self.tm.sizes(), [30])
         self.assertEqual((self.side.open_width, self.side.width_goal()), (45, 45))
         self.assertEqual(mmini.read_text(self.state / "width"), "45")
         self.side.refit()
-        self.assertEqual(self.goals, [30])  # and not later either
-        self.resize(90, 150)  # the window grew: back to the dragged width
-        self.assertEqual(self.goals, [30, 45])
-        self.assertIsNone(self.side.layout_seen)  # the loop moved the divider: measured again once quiet
-        self.quiet()
-        self.assertEqual(self.side.layout_seen, (45, 150))
+        self.assertEqual(self.tm.sizes(), [30])  # and not later either
+        self.resize(90, 200)  # the window grew: back to the dragged width
+        self.assertEqual(self.tm.sizes(), [30, 45])
         again = mmini.Sidebar(FakeScr(24, 30), self.state, self.state / "w-2")  # the next window
         self.assertEqual(again.width_goal(), 45)
 
-    def test_without_the_tab_bars_width_every_change_is_a_window_change(self):
-        self.quiet()  # no tabs.cols: a tab bar that never wrote it
-        self.resize(45, 0)
-        self.assertEqual(self.goals, [30, 30])
+    def test_a_late_curses_width_is_no_drag(self):
+        """tmux holds a pane's next size signal up to 250 ms: curses may still show the old width (review finding)."""
+        self.tm.lag = True
+        self.side.on_key(ord("c"))
+        self.side.on_key(ord("o"))  # quickly: curses still shows 30, tmux has 6, then 30
+        for _ in range(3):
+            self.side.refit()
+        self.tm.settle()
+        self.side.refit()
+        self.assertEqual((self.side.mode, self.tm.pane_w, self.scr.width), ("open", 30, 30))
+        self.assertFalse((self.state / "width").exists())  # nobody dragged
+        self.tm.lag = False
+        self.resize(38, 160)  # a live resize: a step of it seen late by curses
+        self.tm.lag = True
+        self.tm.width, self.scr.width = 170, 44
+        self.side.refit()
+        self.tm.settle()
+        self.side.refit()
+        self.assertEqual(self.tm.pane_w, 30)
         self.assertFalse((self.state / "width").exists())
 
-    def test_a_change_before_the_first_quiet_moment_counts_as_a_window_change(self):
-        self.tabs(90)
-        self.resize(45, 75)  # no quiet moment since the loop: nothing to compare with
-        self.assertEqual(self.goals, [30, 30])
+    def test_the_view_keeps_room_in_a_narrow_window(self):
+        self.drag(90)
+        self.resize(60, 70)  # a narrow window: the dragged 90 would leave the view nothing
+        self.assertEqual(self.tm.sizes()[-1], 70 - 1 - mmini.MIN_VIEW)
+        self.assertEqual(mmini.read_text(self.state / "width"), "90")  # kept for wide windows
+        self.resize(100, 200)
+        self.assertEqual(self.tm.sizes()[-1], 90)
+
+    def test_a_drag_past_the_limits_is_set_to_the_limit_at_once(self):
+        self.drag(5)
+        self.side.refit()
+        self.assertEqual((self.tm.sizes()[-1], self.side.open_width), (10, 10))
+
+    def test_a_width_only_window_change_after_a_drag_is_no_drag(self):
+        self.drag(40)
+        self.resize(70, 160)  # maximised: wider only
+        self.assertEqual(self.tm.sizes(), [30, 40])
+        self.assertEqual(mmini.read_text(self.state / "width"), "40")
 
     def test_a_dragged_strip_lasts_until_the_next_state_change(self):
-        self.tabs(90)
-        self.key_c()
-        self.assertEqual(self.goals[-1], mmini.NARROW)
-        self.tabs(114)
-        self.quiet()
-        self.resize(20, 100)  # dragged
-        self.assertEqual((self.side.width_goal(), self.goals[-1]), (20, mmini.NARROW))
+        self.side.on_key(ord("c"))
+        self.assertEqual(self.tm.sizes()[-1], mmini.NARROW)
+        self.drag(20)
+        self.assertEqual((self.side.width_goal(), self.tm.sizes()[-1]), (20, mmini.NARROW))
         self.assertFalse((self.state / "width").exists())  # only an open width is kept for later
         self.side.on_key(ord("o"))
-        self.join()
-        self.assertEqual((self.side.strip_width, self.goals[-1]), (0, 30))
+        self.assertEqual((self.side.strip_width, self.tm.sizes()[-1]), (0, 30))
         self.side.on_key(ord("c"))
-        self.join()
-        self.assertEqual(self.goals[-1], mmini.NARROW)
-
-    def key_c(self):
-        self.side.on_key(ord("c"))
-        self.join()
+        self.assertEqual(self.tm.sizes()[-1], mmini.NARROW)
 
     def test_the_open_width_file(self):
         self.assertEqual(mmini.read_open_width(self.state), mmini.WIDTH)
@@ -4440,23 +4809,23 @@ class DragTests(unittest.TestCase):
         self.assertEqual(mmini.write_open_width(44, self.state), 44)
         self.assertEqual(mmini.read_open_width(self.state), 44)
         self.side.on_key(ord("c"))
-        self.join()
         self.side.on_key(ord("o"))  # dragged in another window meanwhile: the next open takes it
-        self.join()
-        self.assertEqual(self.goals[-1], 44)
+        self.assertEqual(self.tm.sizes()[-1], 44)
 
-    def test_the_tab_bar_writes_its_width_when_it_changes(self):
-        scr = FakeScr(5, 90)
+    def test_the_tab_bar_keeps_its_rows(self):
+        scr = FakeScr(9, 90)
+        tm = FakeTmux(scr, pane="%2").install(self)
         bar = mmini.TabBar(scr, self.win, self.state)
-        with mock.patch.object(mmini, "write_atomic", wraps=mmini.write_atomic) as write:
-            bar.note_width()
-            bar.note_width()
-            scr.width = 75
-            bar.note_width()
-        self.assertEqual(write.call_count, 2)
-        self.assertEqual(mmini.read_tabs_cols(self.win), 75)
-        mmini.write_atomic(self.win / "tabs.cols", "junk\n")
-        self.assertEqual(mmini.read_tabs_cols(self.win), 0)
+        bar.refit()
+        self.assertEqual((tm.sizes("-y"), scr.height), ([mmini.TAB_ROWS], mmini.TAB_ROWS))
+        bar.refit()
+        self.assertEqual(tm.sizes("-y"), [mmini.TAB_ROWS])  # on its rows: no tmux call
+        scr.height = tm.pane_h = 6  # its line dragged, or the window resized: back to its rows
+        bar.refit()
+        self.assertEqual(tm.sizes("-y"), [mmini.TAB_ROWS, mmini.TAB_ROWS])
+        scr.height, tm.pane_h, tm.zoomed = 8, 8, True
+        bar.refit()
+        self.assertEqual(len(tm.sizes("-y")), 2)  # never while zoomed
 
 
 class PaneTitleTests(unittest.TestCase):
@@ -4493,54 +4862,6 @@ class PaneTitleTests(unittest.TestCase):
         self.assertIn('[ "$on_tty" = 1 ] && own_title "$target"', text)
         loop = text[text.index("while :; do\n  read_gen"):]
         self.assertLess(loop.index('own_title "$target"'), loop.index('"$hc" attach'))
-
-
-class GhosttyHintTests(unittest.TestCase):
-    """build.sh's last words: the two Ghostty settings mmini cannot set per window, with the exact lines."""
-
-    def run_check(self, files, folder=".config/ghostty"):
-        text = (ROOT / "build.sh").read_text()
-        check = text[text.index("# --- Ghostty settings"):]
-        with tempfile.TemporaryDirectory() as home:
-            where = Path(home) / folder
-            where.mkdir(parents=True)
-            for name, body in files.items():
-                (where / name).write_text(body)
-            before = {f.name: f.read_text() for f in where.iterdir()}
-            out = subprocess.run(["/bin/sh", "-euc", check], capture_output=True, text=True,
-                                 env={"HOME": home, "PATH": "/usr/bin:/bin"})
-            self.assertEqual(out.returncode, 0, out.stderr)
-            self.assertEqual({f.name: f.read_text() for f in where.iterdir()}, before)  # read only
-            return out.stdout.replace(home, "~")
-
-    def test_both_lines_when_neither_is_set(self):
-        out = self.run_check({})
-        self.assertIn("mmini: hint: add these lines to the Ghostty config (~/.config/ghostty/config.ghostty), then "
-                      "reload it in Ghostty (cmd+shift+,):", out)
-        self.assertIn("\n    focus-follows-mouse = true\n    macos-titlebar-proxy-icon = hidden\n", out)
-        self.assertTrue(out.rstrip().endswith("never edits the config."))
-
-    def test_only_what_is_missing_in_the_file_that_counts(self):
-        out = self.run_check({"config": "focus-follows-mouse = true\n"})
-        self.assertNotIn("focus-follows-mouse = true", out)
-        self.assertIn("    macos-titlebar-proxy-icon = hidden", out)
-        self.assertIn("(~/.config/ghostty/config)", out)
-        out = self.run_check({"config": "macos-titlebar-proxy-icon = hidden\nfocus-follows-mouse = true\n"})
-        self.assertEqual(out, "")
-        out = self.run_check({"config.ghostty": 'macos-titlebar-proxy-icon = "hidden"\n'},
-                             "Library/Application Support/com.mitchellh.ghostty")
-        self.assertIn("    focus-follows-mouse = true", out)
-        self.assertNotIn("proxy-icon = hidden", out)
-        self.assertIn("(~/Library/Application Support/com.mitchellh.ghostty/config.ghostty)", out)
-
-    def test_the_hints_are_the_last_thing_build_sh_prints(self):
-        text = (ROOT / "build.sh").read_text()
-        after = text[text.index("# --- Ghostty settings"):]
-        before = text[:text.index("# --- Ghostty settings")]
-        self.assertIn('echo "built $app', before)
-        self.assertNotIn("osacompile", after)
-        self.assertIn("focus-follows-mouse = true", after)
-        self.assertIn("macos-titlebar-proxy-icon = hidden", after)
 
 
 OSC_RE = re.compile(rb"\x1b\](\d+);(.*?)\x07", re.DOTALL)
@@ -5037,7 +5358,7 @@ class PressTests(unittest.TestCase):
         self.mouse(5, self.side.arrow_y, PRESS1)
         self.assertEqual(self.side.mode, "strip")
         self.mouse(5, self.side.arrow_y, RELEASE1)
-        with mock.patch.object(mmini, "ghostty"):
+        with mock.patch.object(mmini, "tmux"):
             self.mouse(5, self.side.arrow_y, PRESS1)  # the second press, within MOUSE_QUIET: no hide
         self.assertEqual(mmini.read_sidebar_state(self.state), "strip")
 
@@ -5075,13 +5396,15 @@ class LoopWakeTests(unittest.TestCase):
 
     def test_pick_stamp_moves_on_a_pick_and_on_new_tabs(self):
         first = mmini.pick_stamp(self.win)
-        self.assertEqual(first, (0, 0))
+        self.assertEqual(first, (0, 0, 0))
         mmini.show("t1", self.win)
         second = mmini.pick_stamp(self.win)
         self.assertNotEqual(second[0], 0)
         time.sleep(0.002)
         mmini.write_snapshot(None, self.win)
         self.assertNotEqual(mmini.pick_stamp(self.win)[1], second[1])
+        mmini.write_atomic(self.win / "ask", "menu\n")  # a right click in the view
+        self.assertNotEqual(mmini.pick_stamp(self.win)[2], 0)
 
     def test_wait_key(self):
         keys = iter([-1, -1, ord("j")])
@@ -5756,12 +6079,15 @@ class DragReportTests(unittest.TestCase):
 
     def test_the_sidebar_asks_for_moves_and_the_tab_bar_does_not(self):
         calls = []
+        raw = []
         patches = {"curs_set": lambda n: None, "use_default_colors": lambda: None, "init_pair": lambda *a: None,
-                   "mouseinterval": lambda ms: None, "mousemask": lambda mask: calls.append(mask) or (mask, 0)}
+                   "mouseinterval": lambda ms: None, "mousemask": lambda mask: calls.append(mask) or (mask, 0),
+                   "raw": lambda: raw.append(1)}
         with mock.patch.multiple(mmini.curses, **patches):
             mmini.setup_curses(mock.Mock(), right=True, motion=True)
             mmini.setup_curses(mock.Mock())
         self.assertEqual(calls, [PRESS1 | RELEASE1 | PRESS3 | RELEASE3 | MOTION, PRESS1 | RELEASE1])
+        self.assertEqual(raw, [1, 1])  # ctrl+C is a key in the panes, never a signal that ends one
         text = (ROOT / "mmini.py").read_text()
         side = text[text.index("class Sidebar(Engine):"):text.index("class TabBar:")]
         run = side[side.index("    def run(self) -> None:"):]

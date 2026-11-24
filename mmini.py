@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""mmini: sidebar and tab bar for a Ghostty window on top of herdr-core (`hc`).
+"""mmini: sidebar and tab bar for herdr-core (`hc`) terminals, in one Ghostty window.
 
-herdr-core draws nothing itself, so one Ghostty window holds three panes: this file draws two of them
-("python3 mmini.py sidebar" on the left, "python3 mmini.py tabs" on top), view.sh is the third (it runs
-`hc attach` on the terminal the other two picked).
+herdr-core draws nothing itself, so the window runs a tmux of its own (start.sh, mmini.tmux.conf) with three panes:
+this file draws two of them ("python3 mmini.py sidebar" on the left, "python3 mmini.py tabs" on top), view.sh is the
+third (it runs `hc attach` on the terminal the other two picked). tmux passes a click to the pane under the pointer
+at once, so no click is spent on moving the keyboard first; after a pick the keyboard goes to the view (focus_view).
 
 The sidebar lists, top to bottom, "needs you" (agents blocked or in error, and agents done that were not shown
 since; only while there is one), "spaces" (projects on the home machine), "servers" (every machine
@@ -21,15 +22,15 @@ The tab bar shows one tab per terminal of the current space or server. A termina
 server is still a "rig" (Group.kind, names.json keys "rig:<machine>"); only what is drawn says "server".
 
 The sidebar has three states: open (MMINI_WIDTH columns), strip (folded to status dots and the start of each
-name) and hidden (its program ends, Ghostty closes its pane, and the tab bar and the view take the full width). The
+name) and hidden (its program ends, tmux closes its pane, and the tab bar and the view take the full width). The
 data side (Engine: `hc ls`, `hc get`, the current group, last.json, the tab snapshot) runs in the sidebar; while a
 window has no live sidebar the tab bar runs it itself, so its tabs stay fresh. The tab bar brings the sidebar back
-at full height by splitting the view twice and then ending itself (rebuild_script).
+at full height with one tmux split (split_sidebar).
 
 The panes talk through files. Per window ($MMINI_WINDOW, set by the launcher app; without it the shared folder):
-target, gen, view.pid, view.loop, tabs.json, tabs.cols (the tab bar's width, to tell a dragged divider from a
-resized window), poke, panes (Ghostty ids: side=, tabs=, view=), sidebar.pid, zoom (when "z" was last pressed),
-title (the window title of the shown terminal, for view.sh).
+target, gen, view.pid, view.loop, tabs.json, poke, poke.full (the engine asks every label again), ask (a right click
+in the view: the tab bar opens the shown terminal's menu), panes (tmux pane ids: side=, tabs=, view=), sidebar.pid,
+title (the window title of the shown terminal, for view.sh), terminfo (xterm-mmini, compiled by start.sh).
 Shared by all windows ($MMINI_STATE): group, last.json, names.json (display names: {"space:dev": "Main",
 "rig:guest": "Guest", "term:mini/t5": "web"}), sidebar ("open", "strip" or "hidden": how the next sidebar
 starts; while it does not exist, the old file "collapsed" is read instead, 1 = strip), servers ("shown" or
@@ -52,9 +53,11 @@ the dev servers, c one step smaller (open, strip, hidden; also a click on "‹" 
 again (also a click on "›" on the line above), q hide (the same as hidden: the program ends), z zoom, [ ] (also
 - =) the separator up or down, r refresh (also the keychain and the dev servers), ? the list of keys, then the
 account marks (also a click on the "?" at the end of the last line; any key or click closes it). Tab bar:
-left/right (h/l), enter, z zoom, ? its keys; without a sidebar, c or o (also a click on "›" at its left edge)
-brings the sidebar back, open. z gives the whole window to the shown terminal (Ghostty's toggle_split_zoom); Ghostty's own key for that action
-(cmd+shift+enter) brings the panes back, as nothing of mmini can be seen while zoomed.
+left/right (h/l), enter, z zoom, ? its keys, a right click on a tab (or in the view: the shown terminal) its menu
+(New terminal, Rename, Move to space, Close; Close asks for "y"), clicks only: keys typed then go on to the view;
+a paste (a dropped file) in the sidebar or the tab bar goes on to the view too; without a sidebar, c or o (also a click on "›" at its left edge) brings the sidebar
+back, open. z gives the whole window to the shown terminal (tmux's zoom); a click on the line it shows on top
+("‹ back") brings the panes back.
 
 The separator (the line between the upper part and the agents) can be moved: a press on it, the pointer moved with
 the button held (the sidebar asks the terminal for such moves, mode 1002, and the line follows), the release puts
@@ -64,14 +67,14 @@ proportion and a notice or a prompt at the bottom does not move it, unless it is
 their heading or last row: then it moves up only that far (also in the strip, whose "› open" takes a line). A drag
 quiet for DRAG_IDLE that gets a move is dropped (a lost release: ncurses reads the next press as a move).
 
-A dragged divider (Ghostty's split divider can be dragged with the mouse) is kept: the sidebar tells it from a
-resized window by the tab bar's width (a drag moves the two widths in opposite directions, their sum stays), keeps
-the new width and, when open, writes it to "width" for the next window. A resized window still brings the sidebar
-back to its width. The sidebar, the tab bar and view.sh clear their pane's working directory (an empty OSC 7, once,
-after the title "mmini"), so Ghostty shows no folder icon next to the window title for them. All three then set
-the window title to the shown terminal and its server ("web · me@mini"; nothing shown: "mmini"), each
-time it changes: the engine writes it to the window's file "title" (address, then title) and to the snapshot;
-view.sh sets it before each attach and again after one.
+A dragged divider (tmux lets a pane border be dragged with the mouse) is kept: the sidebar (refit) tells a drag
+from a resized window by the window's width (unchanged for a drag), as tmux has it (curses learns sizes late), keeps
+the new width and, when open, writes it to "width" for the next window. A resized window (tmux spreads it over the panes)
+brings the sidebar back to its width and the tab bar to TAB_ROWS rows. start.sh clears the login shell's folder (an
+empty OSC 7), so Ghostty shows no folder icon next to the window title. tmux shows the title of the pane with the
+keyboard (set-titles): the sidebar, the tab bar and view.sh each set it to the shown terminal and its server ("web ·
+me@mini"; nothing shown: "mmini"), each time it changes: the engine writes it to the window's file "title"
+(address, then title) and to the snapshot; view.sh sets it before each attach and again after one.
 
 Switching is quick: a click acts on the press of the button (no mouse interval, so ncurses holds nothing back; the
 release is dropped, unless it ends a drag of the separator), the other pane sees a pick within LOOP_WAIT_MS
@@ -80,10 +83,9 @@ the pane between two attaches.
 
 Runs on Python 3.9, standard library only. Settings (environment): MMINI_HC, MMINI_STATE, MMINI_WINDOW,
 MMINI_FIRST (the home machine; unset: the only machine `hc machine ls` knows, else this Mac), MMINI_WIDTH (the open
-width until a divider is dragged), MMINI_NARROW (width of the folded strip, default 6; Ghostty stops it at a tenth of
-the window), MMINI_MARKS, MMINI_SHARED_USER, MMINI_SHARED_MARK (account marks), MMINI_DEV_PROGRAM (default node),
-MMINI_KEYCHAIN=0, MMINI_BROWSER=0, MMINI_AUTOSIZE=0, MMINI_AUTOOPEN=0, MMINI_GHOSTTY=0 (no Ghostty calls at all, for
-tests on a Mac without Ghostty).
+width until a divider is dragged), MMINI_NARROW (width of the folded strip, default 6), MMINI_MARKS, MMINI_SHARED_USER, MMINI_SHARED_MARK (account marks), MMINI_DEV_PROGRAM (default node),
+MMINI_KEYCHAIN=0, MMINI_BROWSER=0, MMINI_AUTOSIZE=0, MMINI_AUTOOPEN=0, MMINI_TMUX=0 (no tmux calls at all, for the
+tests).
 """
 
 from __future__ import annotations
@@ -92,23 +94,22 @@ import base64
 import concurrent.futures
 import curses
 import errno
-import fcntl
 import json
 import locale
 import os
 import re
 import shlex
+import shutil
 import signal
 import struct
 import subprocess
 import sys
-import termios
 import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Collection, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 def env_int(name: str, default: int, low: int, high: int) -> int:
@@ -124,7 +125,7 @@ STATE = Path(os.environ.get("MMINI_STATE") or str(Path.home() / ".local/state/mm
 WINDOW = Path(os.environ.get("MMINI_WINDOW") or str(STATE))  # this window's files (see the docstring)
 FIRST = (os.environ.get("MMINI_FIRST") or "").strip()  # the home machine; "" = chosen by first_machine
 WIDTH = env_int("MMINI_WIDTH", 30, 10, 200)
-NARROW = env_int("MMINI_NARROW", 6, 3, 200)  # the folded sidebar; Ghostty keeps it at a tenth of the window or more
+NARROW = env_int("MMINI_NARROW", 6, 3, 200)  # the folded sidebar
 LOCAL = "this Mac"
 REFRESH_SECONDS = 2.0  # hc ls
 INFO_SECONDS = 30.0  # hc get of every terminal (labels, parents)
@@ -157,8 +158,7 @@ ENGINE_BEAT = 0.25  # seconds between two syncs of the tab bar's engine (the sid
 # within about 50 ms instead of up to 250 ms, and a quiet pane still does a full round only 4 times a second.
 LOOP_WAIT_MS = 50
 ROUND_SECONDS = 0.25
-OPEN_TIMEOUT = 10.0  # seconds the old tab bar waits for the new panes after "›" before it gives up
-PANES_WAIT = 3.0  # seconds a sidebar started hidden waits for the launcher's panes file
+OPEN_TIMEOUT = 10.0  # seconds the tab bar waits for the sidebar it brought back ("›") to run
 BASE = Path(os.path.abspath(__file__)).parent  # the folder of this file: the panes a rebuild makes start it there
 ENV_NAME = re.compile(r"MMINI_[A-Z0-9_]+")
 
@@ -1283,7 +1283,12 @@ def ending(terms: Sequence[Term], everything: Sequence[Term], infos: Mapping[str
 
 def ends_text(terms: Sequence[Term]) -> str:
     """ "ends 3: web (claude-code), api (claude-code), t1f (zsh)": by name and program."""
-    return f"ends {len(terms)}: " + ", ".join(f"{t.shown} ({t.agent or '?'})" for t in terms)
+    return ends_line([(t.shown, t.agent) for t in terms])
+
+
+def ends_line(pairs: Sequence[Tuple[str, str]]) -> str:
+    """ends_text from (shown name, program) pairs."""
+    return f"ends {len(pairs)}: " + ", ".join(f"{name} ({agent or '?'})" for name, agent in pairs)
 
 
 def confirm_matches(typed: str, accepted: Sequence[str]) -> bool:
@@ -1341,7 +1346,7 @@ KEY_HELP = (("↑↓ j k", "move"), ("enter", "show it"), (MENU_KEY, "menu (righ
             ("d", "delete, forget, end"), ("n", "new terminal here"), ("s", "new space"), ("m", "move to a space"),
             (SERVERS_KEY, "show/hide servers"), (AGENTS_KEY, "show/hide agents"), (DEVS_KEY, "dev servers on/off"),
             ("c", "fold, then hide"), ("o", "open the strip"), ("q", "hide"),
-            ("z", "zoom the view"), ("⌘⇧↵", "back from the zoom"), ("[ ] - =", "separator up/down"), ("r", "refresh"),
+            ("z", "zoom the view"), ("‹ back", "click: zoom ends"), ("[ ] - =", "separator up/down"), ("r", "refresh"),
             (HELP_KEY, "this list"))
 HELP_TITLE = "keys · any key closes"
 
@@ -1771,27 +1776,29 @@ def hit_test(layout: TabLayout, x: int, y: int = 0) -> Optional[Tuple[str, int]]
     return None
 
 
-TAB_HINTS = ("←→ switch  enter focus  z zoom  ⌘⇧↵ back", "←→ switch  z zoom  ⌘⇧↵ back", "z zoom  ⌘⇧↵ back")
-TAB_HINTS_ALONE = ("c sidebar  ←→ switch  enter focus  z zoom  ⌘⇧↵ back", "c sidebar  ←→ switch  z zoom  ⌘⇧↵ back",
-                   "c sidebar  z zoom  ⌘⇧↵ back", "z zoom  ⌘⇧↵ back")  # without a sidebar
+TAB_HINTS = ("←→ switch  enter focus  right click menu  z zoom", "←→ switch  right click menu  z zoom",
+             "←→ switch  z zoom", "z zoom")
+TAB_HINTS_ALONE = ("c sidebar  ←→ switch  enter focus  right click menu  z zoom",
+                   "c sidebar  ←→ switch  right click menu  z zoom", "c sidebar  ←→ switch  z zoom", "c sidebar  z zoom",
+                   "z zoom")  # without a sidebar
 
 
 def tab_hint(room: int, alone: bool = False) -> str:
-    """The longest tab bar hint that fits in `room` columns as drawn (the ASCII stand-ins for ⌘⇧↵ are longer). The
-    way back from a zoom goes last: while zoomed no pane of mmini can be seen to say it. `alone`: no sidebar, so
-    the hint names the key that brings it back."""
+    """The longest tab bar hint that fits in `room` columns as drawn (ASCII stand-ins may be longer). The way back
+    from a zoom needs no hint: the line it is clicked on says it. `alone`: no sidebar, so the hint names the key
+    that brings it back first."""
     return next((h for h in (TAB_HINTS_ALONE if alone else TAB_HINTS) if len(glyph(h)) <= room), "")
 
 
 def tab_keys(alone: bool = False) -> str:
     """The tab bar's "?": all of its keys in one notice line (its hint line drops some when the pane is narrow)."""
-    keys = "←→ h l switch · enter ↓ focus · z zoom · ⌘⇧↵ back"
+    keys = "←→ h l switch · enter ↓ focus · right click: menu · z zoom (a click on the top line ends it)"
     return "keys: " + ("c o sidebar · " if alone else "") + keys
 
 
 def tab_bar_rows(height: int) -> Tuple[int, int]:
-    """(rows the tabs may use, row of the hints or -1) for a pane of `height` rows. Ghostty gives the pane about a
-    tenth of the window, so there are usually several rows; the hints take the last one when there are two."""
+    """(rows the tabs may use, row of the hints or -1) for a pane of `height` rows (TAB_ROWS in an mmini window).
+    The hints take the last row when there are two."""
     if height < 2:
         return (max(0, height), -1)
     return (height - 1, height - 1)
@@ -1817,134 +1824,99 @@ def tab_info(tab: Mapping[str, object], room: int = 200) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Resize decision (pure)
+# The tab menu (pure): a right click on a tab
 # ---------------------------------------------------------------------------------------------------------------
-# Ghostty facts this is built around (read from its 1.3.0 source, not testable without a screen):
-# - a new split is 50/50, and no split can go below 10% or above 90% of its parent;
-# - resize_split:left makes the left side of the nearest left/right split smaller, resize_split:up the top side
-#   of the nearest top/bottom split (macOS SplitTree.resizing). The sidebar is the left side of the window's
-#   first split and the tab bar the top side of the view's split, so "left" and "up" always shrink them, also
-#   when the step falls back to the focused terminal. A pane that moved the other way was moved by something
-#   else (the window, a dragged divider, a step for an earlier goal that arrived late), never by the last step.
-# - resize_split's amount is in points, while the terminal reports its size in device pixels: on a Retina
-#   display a pane moves twice as far as "pixels per cell" says. So the amount is learnt, not assumed.
-# - a split is kept as a share of the window, so a window that grows (maximise, full screen) makes the sidebar
-#   wider than MMINI_WIDTH again: the sidebar sizes itself again once its size has been quiet for a moment.
-# - the divider between two splits can be dragged with the mouse (SplitView: a DragGesture on the divider; it stops
-#   10 points from either edge, not at 10%). A drag moves the sidebar's and the tab bar's widths in opposite
-#   directions, a window that changes size moves both the same way (resize_kind tells them apart): a drag is kept,
-#   a window change is not.
-# - while a split is zoomed only that pane is in the window. A resize_split sent to a hidden pane is dropped
-#   (Ghostty.App resizeSplit needs the pane's window; "perform action" then returns false, not an error, so
-#   action_script does not fall back); one sent to the zoomed pane ends the zoom (SplitTree.resizing returns
-#   `zoomed: nil`), which action_script's fallback would do when the panes file has no id. A dropped step looks
-#   like the 10% limit and would leave a wrong width behind. So after "z" no resize step is sent: a running loop
-#   stops, and a pane does not size itself again until its next key or click (it cannot tell when the zoom
-#   ended; a key or click in it means it can be seen again).
-MAX_RESIZE_STEPS = 6
-REFIT_QUIET = 0.5  # seconds without a size change before the sidebar sizes itself again
-FIRST_GAIN = 2.0  # cells moved per cell asked for, before anything is measured: a MacBook's display is 2x
-GAIN_LIMITS = (0.25, 4.0)
-# A step that has shown nothing after this long is taken as the one at Ghostty's 10% limit when the goal changes
-# meanwhile (c pressed again): the loop then turns to the new goal instead of waiting the full 10 s for it.
-STEP_GRACE = 1.0
+CLOSE_YES = "y"  # the one key that closes a tab after its question; any other key or a click cancels
+TAB_MENU_HINT = "a click picks · a key closes"
+CLOSE_ROWS = 10  # the most rows the tab bar takes while Close's question shows what ends
+CLOSE_AGAIN = 1.0  # seconds a y is not taken after Close asked again (what ends had changed)
+TAB_ASK = {"rename": "enter saves · empty: own name · esc cancels", "move": "enter moves · esc cancels",
+           "close": f"{CLOSE_YES} closes · any other key cancels"}
 
 
-@dataclass(frozen=True)
-class ResizeState:
-    """What the resize loop has learnt so far."""
-
-    steps: int = 0  # steps sent
-    gain: float = FIRST_GAIN  # cells the pane really moves per cell asked for
-    before: Optional[int] = None  # the size when the last step was sent
-    asked: float = 0.0  # cells the last step asked for
-    grow: bool = False  # the last step was meant to make the pane bigger
-    stray: bool = False  # ended on a size change from outside (window, divider), not on the loop's own step
+def tab_menu_entries(kind: str) -> List[Entry]:
+    """The menu of a tab (and of the shown terminal, a right click in the view): New terminal (in the tab bar's space
+    or server), Rename, Move to space (only in a space), Close. Clicks pick; the keys are the sidebar's for the same
+    actions, kept only to match its entries (the tab menu takes no keys)."""
+    entries = [Entry("new", "New terminal", "n"), Entry("rename", "Rename", "e")]
+    if kind == "space":
+        entries.append(Entry("move", "Move to space", "m"))
+    return entries + [Entry("close", "Close", "d")]
 
 
-def next_resize(measured: int, target: int, state: ResizeState, dirs: Tuple[str, str] = ("left", "right"),
-                tolerance: int = 1) -> Tuple[Optional[Tuple[str, float]], ResizeState]:
-    """The next resize step toward `target` columns or rows: ((direction, cells to ask for), new state), or
-    (None, state) when done. dirs = (the direction that shrinks the pane, the one that grows it): fixed by the
-    layout (see the Ghostty facts above), never guessed.
-
-    `measured` is the size after the last step had its time to arrive; moved / asked becomes the gain for the next
-    amount. Stops within `tolerance`, after MAX_RESIZE_STEPS, and when the last step moved nothing: then the pane
-    is at Ghostty's 10% / 90% limit or the step never arrived, and sending it again could only stack up. Also stops
-    when the pane went the other way than the step (the state says `stray`): the window or a divider changed it
-    meanwhile, mostly during the long wait of a step at the limit. That size says nothing about the step, and a
-    gain or a direction taken from it would send the next step far off."""
-    gain = state.gain
-    if state.before is not None:
-        moved = measured - state.before
-        if moved == 0:
-            return None, state
-        if (moved > 0) != state.grow:
-            return None, replace(state, stray=True)
-        if state.asked >= 1:
-            gain = max(GAIN_LIMITS[0], min(GAIN_LIMITS[1], abs(moved) / state.asked))
-    diff = measured - target
-    if abs(diff) <= tolerance or state.steps >= MAX_RESIZE_STEPS:
-        return None, ResizeState(state.steps, gain)
-    grow = diff < 0
-    cells = abs(diff) / gain
-    return (dirs[1] if grow else dirs[0], cells), ResizeState(state.steps + 1, gain, measured, cells, grow)
+def tab_menu_segs(title: str, entries: Sequence[Entry], width: int) -> List[Seg]:
+    """The tab menu in one row of `width` columns, from column 0: "api: New terminal · Rename · Close". When it does
+    not fit: without the title, then each entry by its first word in lower case ("new", "rename", "move",
+    "close"); entries that still do not fit are left out. Pieces: "title", "entry" (its index), "sep"."""
+    long = [e.label for e in entries]
+    short = [e.label.split()[0].lower() for e in entries]
+    segs: List[Seg] = []
+    for head, labels in ((clip(title, 16) + ":", long), ("", long), ("", short)):
+        segs, x = [], 0
+        if head != ":" and head:
+            segs.append(Seg(0, 0, head, "title"))
+            x = len(head) + 1
+        for i, label in enumerate(labels):
+            if i:
+                segs.append(Seg(0, x + 1, "·", "sep"))
+                x += 3
+            segs.append(Seg(0, x, label, "entry", i))
+            x += len(label)
+        if x <= width:
+            return segs
+    kept = [s for s in segs if s.end <= width]
+    return kept[:-1] if kept and kept[-1].kind == "sep" else kept
 
 
-def refit_due(width: int, target: int, quiet: float, running: bool, ended_at: int, tolerance: int = 1) -> bool:
-    """Should the sidebar size itself again after its pane changed size? Yes when the size has been quiet for
-    REFIT_QUIET seconds, no resize loop is running, the width is off target, and it is not the width the last loop
-    ended at: that is Ghostty's 10% limit or a loop that gave up, and starting again from there would never end
-    (the loop's own steps change the size too)."""
-    return not running and quiet >= REFIT_QUIET and abs(width - target) > tolerance and width != ended_at
+def menu_entry_at(segs: Sequence[Seg], x: int) -> Optional[int]:
+    """The index of the tab menu entry at column x, None between or after them."""
+    return next((s.index for s in segs if s.kind == "entry" and s.x <= x < s.end), None)
 
 
-def resize_kind(before: Optional[Tuple[int, int]], after: Tuple[int, int], tolerance: int = 1) -> str:
-    """What changed the sidebar's width, from (sidebar columns, tab bar columns) when it was last quiet and now:
-    "drag" when the divider was dragged between the sidebar and the right side (Ghostty moves the two widths
-    in opposite directions: their sum stays, within a column of rounding), "window" when the window itself changed
-    width (the sum changed) or nothing is known to compare with (no earlier size, no tab bar width), "none" when
-    the sidebar's width did not change. Only for a change no resize loop made: the loop moves the divider too."""
-    if before is None or before[1] <= 0 or after[1] <= 0:
-        return "window"
-    if abs(sum(after) - sum(before)) > tolerance:
-        return "window"
-    return "drag" if abs(after[0] - before[0]) > tolerance else "none"
+def tab_of(snap: Optional[Mapping[str, object]], address: str) -> Optional[Mapping[str, object]]:
+    """The tab of `address` in the snapshot, None when it is not there (any more)."""
+    tabs = snap.get("tabs") if snap else None
+    return next((t for t in tabs if t.get("address") == address), None) if isinstance(tabs, list) else None
 
 
-def loop_cut_short(ended_at: int, aimed: Optional[int]) -> bool:
-    """Did a resize loop end before its pane was sized? Yes when a "z" stopped it (goal None) or it found no limit
-    (size 0, see resize_loop). The tab bar has no refit, so it runs its loop again at its next key or click."""
-    return aimed is None or ended_at == 0
+def tab_ends(tab: Mapping[str, object]) -> List[Tuple[str, str, str]]:
+    """The child terminals that end with a tab, as the snapshot has them: (address, shown name, program). Entries
+    that are not three strings are left out."""
+    ends = tab.get("ends")
+    out: List[Tuple[str, str, str]] = []
+    for e in ends if isinstance(ends, list) else []:
+        if isinstance(e, list) and len(e) == 3 and all(isinstance(v, str) for v in e) and e[0]:
+            out.append((e[0], e[1], e[2]))
+    return out
 
 
-def resize_loop(read: Callable[[], Tuple[int, float]], send: Callable[[str, int], None],
-                goal: Callable[[], Optional[int]], wait: Callable[[int, Callable[[], bool]], int],
-                dirs: Tuple[str, str] = ("left", "right"), tolerance: int = 1) -> Tuple[int, Optional[int]]:
-    """The steps of autosize toward goal(), with the terminal and Ghostty passed in: read() = (size, pixels per
-    cell), send(direction, amount), wait(size before, goal moved on?) = the size after the step. Returns (the
-    size it ended at, 0 = no limit found: nothing measured, or a size change from outside stopped it; the goal it
-    ended on, None = stopped by a zoom).
+def snapshot_names(snap: Optional[Mapping[str, object]]) -> Dict[str, str]:
+    """address -> shown name of every listed terminal (the snapshot's "names"), for the rename's "taken" check."""
+    names = snap.get("names") if snap else None
+    return {a: v for a, v in names.items() if isinstance(a, str) and isinstance(v, str)} \
+        if isinstance(names, dict) else {}
 
-    goal() is read again after every step. A new goal (c pressed again while the loop ran) starts afresh: a new
-    count of steps (the last step's "moved nothing" is no limit for it) and FIRST_GAIN, as the last step may have
-    run into Ghostty's 10% limit and moved less than asked, a gain that would overshoot the new goal. None stops
-    the loop at once (see the zoom in the Ghostty facts)."""
-    want = goal()
-    state = ResizeState()
-    size, per_px = read()
-    while size and per_px and want is not None:
-        action, state = next_resize(size, want, state, dirs, tolerance)
-        if action is None:
-            return (0 if state.stray else size), want
-        direction, cells = action
-        send(direction, max(1, round(cells * per_px)))
-        size = wait(size, lambda: goal() != want)
-        per_px = read()[1]
-        now = goal()
-        if now != want:
-            want, state = now, ResizeState()
-    return (size if want is None else 0), want
+
+def close_question(tab: Mapping[str, object]) -> Prompt:
+    """Close's question for a tab of the snapshot: what ends (the tab's terminal, then the children that end with
+    it), and those addresses as the prompt's data."""
+    address = str(tab.get("address") or "")
+    label = str(tab.get("label") or address)
+    ends = tab_ends(tab)
+    question = f"close {tab_label(tab) or address}? " + ends_line([(label, str(tab.get("agent") or ""))] +
+                                                                  [(name, agent) for _, name, agent in ends])
+    return Prompt("close", question, address=address, data=(address,) + tuple(a for a, _, _ in ends))
+
+
+def tab_after_close(order: Sequence[str], gone: Collection[str], shown: str) -> str:
+    """The tab to show once the shown one closed: the next one after it that stays, else the nearest before it,
+    else "" (nothing). `shown` still open: it stays."""
+    if shown not in gone:
+        return shown
+    at = order.index(shown) if shown in order else len(order)
+    after = [a for a in order[at + 1:] if a not in gone]
+    before = [a for a in order[:at] if a not in gone]
+    return after[0] if after else (before[-1] if before else "")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -1984,13 +1956,14 @@ def current_target(win: Path = WINDOW) -> str:
     return read_text(win / "target")
 
 
-def pick_stamp(win: Path = WINDOW) -> Tuple[int, int]:
-    """What a pane's loop watches between two rounds: the times gen (each pick) and tabs.json (the tabs) last
-    changed. Two stats, no read: cheap enough for every LOOP_WAIT_MS."""
-    return mtime(win / "gen"), mtime(win / "tabs.json")
+def pick_stamp(win: Path = WINDOW) -> Tuple[int, int, int]:
+    """What a pane's loop watches between two rounds: the times gen (each pick), tabs.json (the tabs) and ask (a
+    right click in the view, written by mmini.tmux.conf) last changed. Three stats, no read: cheap enough for every
+    LOOP_WAIT_MS."""
+    return mtime(win / "gen"), mtime(win / "tabs.json"), mtime(win / "ask")
 
 
-def round_due(stamp: Tuple[int, int], seen: Tuple[int, int], now: float, last_round: float,
+def round_due(stamp: Tuple[int, ...], seen: Tuple[int, ...], now: float, last_round: float,
               beat: float = ROUND_SECONDS) -> bool:
     """After a getch without a key: draw again now? Yes when a pick or the tabs changed since the last round, or
     `beat` seconds went by (the data, a notice running out, a resize loop)."""
@@ -2030,22 +2003,14 @@ def change_names(changes: Mapping[str, str], state: Path = STATE) -> Dict[str, s
 
 
 def read_panes(win: Path = WINDOW) -> Dict[str, str]:
-    """Ghostty terminal ids written by the launcher app: {"side": id, "tabs": id, "view": id}."""
+    """The window's tmux pane ids, written by start.sh (a sidebar brought back writes its own):
+    {"side": "%1", "tabs": "%2", "view": "%0"}."""
     panes: Dict[str, str] = {}
     for line in read_text(win / "panes").splitlines():
         key, _, value = line.partition("=")
         if key.strip() and value.strip():
             panes[key.strip()] = value.strip()
     return panes
-
-
-def zoom_mark(win: Path = WINDOW) -> int:
-    """When "z" was last pressed in this window (0 = never): a change stops the resize loops (see autosize)."""
-    return mtime(win / "zoom")
-
-
-def mark_zoom(win: Path = WINDOW) -> None:
-    write_atomic(win / "zoom", f"{time.time_ns()}\n")
 
 
 def parse_sidebar_state(text: Optional[str], collapsed: str = "") -> str:
@@ -2145,14 +2110,6 @@ def clear_split(state: Path = STATE) -> None:
         pass
 
 
-def read_tabs_cols(win: Path = WINDOW) -> int:
-    """The tab bar's width in columns, as it last wrote it (tabs.cols); 0 when unknown."""
-    try:
-        return max(0, int(read_text(win / "tabs.cols")))
-    except ValueError:
-        return 0
-
-
 def sidebar_alive(win: Path = WINDOW) -> bool:
     """Does this window have a running sidebar? The pid in sidebar.pid, looked at with signal 0 (nothing is sent).
     A sidebar ended by a hangup leaves its file behind: a dead pid counts as no sidebar."""
@@ -2187,36 +2144,39 @@ def tab_engine_wanted(alive: bool, missing_for: float, hidden: bool, grace: floa
     return not alive and (hidden or missing_for >= grace)
 
 
-def opening_verdict(tabs_before: str, tabs_now: str, waited: float, limit: float = OPEN_TIMEOUT) -> str:
-    """The old tab bar after "›": "done" once the panes file names another tab bar (the rebuild wrote the new ids:
-    this pane may end), "failed" after `limit` seconds without that, else "wait"."""
-    if tabs_now and tabs_now != tabs_before:
-        return "done"
-    return "failed" if waited >= limit else "wait"
-
-
 def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]] = None, shown: str = "",
-                  shown_title: str = NO_TITLE) -> dict:
+                  shown_title: str = NO_TITLE, everything: Sequence[Term] = (),
+                  infos: Optional[Mapping[str, Info]] = None) -> dict:
     """What the tab bar needs about the current group. "name" is the space's own name (the label a new shell gets),
     "title" what is drawn (the display name); a tab's "label" is the terminal's shown name, its "mark" the account
     mark drawn after it (never part of the window title). "server" (the group's,
     and each tab's) is the server's drawn name (`servers`: machine -> server_name; a machine missing there: its hc
     name), known also while the servers are hidden: the tab bar builds the window title from it. "shown" and
-    "shown_title": the terminal shown when this was written and its window title (the engine's own)."""
-    servers = servers or {}
+    "shown_title": the terminal shown when this was written and its window title (the engine's own).
+
+    For the tab menu: a tab's "own" is its name without a rename (a rename to it removes the rename), its "ends"
+    the child terminals that end with it ([address, shown name, program], from `everything` and `infos`, see
+    ending); "names" is the shown name of every listed terminal (`everything`), so a rename can refuse a taken one."""
+    servers, infos = servers or {}, infos or {}
+
+    def ends(t: Term) -> List[List[str]]:
+        return [[c.address, c.shown, c.agent] for c in ending([t], everything, infos)[1:]]
+
     return {"group": group.key, "name": group.name, "title": group.shown, "kind": group.kind, "machine": group.machine,
             "server": servers.get(group.machine, group.machine), "cwd": group.cwd, "ts": now, "shown": shown,
-            "shown_title": shown_title,
+            "shown_title": shown_title, "names": {t.address: t.shown for t in everything},
             "tabs": [{"address": t.address, "label": t.shown, "status": t.status, "agent": t.agent, "cwd": t.cwd,
-                      "server": servers.get(t.machine, t.machine), "mark": t.mark} for t in group.terms]}
+                      "server": servers.get(t.machine, t.machine), "mark": t.mark, "own": t.label, "ends": ends(t)}
+                     for t in group.terms]}
 
 
 def write_snapshot(group: Optional[Group], win: Path = WINDOW, now: Optional[float] = None,
-                   servers: Optional[Mapping[str, str]] = None, shown: str = "", shown_title: str = NO_TITLE) -> None:
+                   servers: Optional[Mapping[str, str]] = None, shown: str = "", shown_title: str = NO_TITLE,
+                   everything: Sequence[Term] = (), infos: Optional[Mapping[str, Info]] = None) -> None:
     now = time.time() if now is None else now
-    snap = make_snapshot(group, now, servers, shown, shown_title) if group else {
+    snap = make_snapshot(group, now, servers, shown, shown_title, everything, infos) if group else {
         "group": "", "name": "", "title": "", "kind": "", "machine": LOCAL, "server": LOCAL, "cwd": "", "ts": now,
-        "shown": shown, "shown_title": shown_title, "tabs": []}
+        "shown": shown, "shown_title": shown_title, "names": {}, "tabs": []}
     write_atomic(win / "tabs.json", json.dumps(snap) + "\n")
 
 
@@ -2323,6 +2283,15 @@ def show(address: str, win: Path = WINDOW, title: Optional[str] = None) -> None:
     write_atomic(win / "target", address + "\n")
     write_atomic(win / "gen", f"{time.time_ns()}\n")
     end_current_attach(win)
+    leave_copy_mode(win)
+
+
+def leave_copy_mode(win: Path = WINDOW) -> None:
+    """A view scrolled back (tmux's copy mode, the mouse wheel) would keep showing the old terminal's lines over the
+    new one, and take the keys: a pick ends it."""
+    view = pane_id("view", win)
+    if view:
+        tmux("if-shell", "-F", "-t", view, "#{pane_in_mode}", f"send-keys -X -t {view} cancel")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -2378,8 +2347,17 @@ def started(raw: str, machine: str, win: Path = WINDOW) -> str:
         raise ValueError("hc returned no address")
     if "/" not in address and machine != LOCAL:
         address = f"{machine}/{address}"
-    write_atomic(win / "poke", f"{time.time_ns()}\n")
+    poke_engine(win)
     return address
+
+
+def poke_engine(win: Path = WINDOW, full: bool = False) -> None:
+    """Wake the window's engine for a listing now (refresh_forever watches the file "poke"). `full`: it also asks
+    `hc get` again for every terminal (a label set by hand, a moved terminal): the file "poke.full", which only
+    the engine removes, so a plain poke right after cannot hide it."""
+    if full:
+        write_atomic(win / "poke.full", f"{time.time_ns()}\n")
+    write_atomic(win / "poke", f"{time.time_ns()}\n")
 
 
 def start_add_rig(target: str, name: str, win: Path = WINDOW, runner: Runner = None) -> str:
@@ -2469,9 +2447,9 @@ def fetch_dev_servers(machine: str, runner: Runner = None) -> Optional[List[DevS
 
 
 def browser_enabled() -> bool:
-    """May a dev server be opened in this Mac's browser? Not with MMINI_GHOSTTY=0 (a Mac without a screen, the
-    tests) nor MMINI_BROWSER=0."""
-    return ghostty_enabled() and os.environ.get("MMINI_BROWSER", "1") != "0"
+    """May a dev server be opened in this Mac's browser? Not with MMINI_BROWSER=0 (a Mac without a screen, the
+    tests)."""
+    return os.environ.get("MMINI_BROWSER", "1") != "0"
 
 
 def open_url(host: str, port: int) -> bool:
@@ -2488,187 +2466,319 @@ def open_url(host: str, port: int) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Ghostty (macOS AppleScript, Ghostty 1.3+). One helper, never waits, never raises.
+# tmux: the window's three panes run in a tmux server of the window's own (start.sh, mmini.tmux.conf), so a click
+# reaches the pane under the pointer at once. The panes file names them by tmux pane id. Nothing here raises.
 # ---------------------------------------------------------------------------------------------------------------
-FOCUSED = "(focused terminal of selected tab of front window)"
+PANE_ID = re.compile(r"%[0-9]+")
+TERM_NAME = "xterm-mmini"  # the terminal type of mmini's own panes (mmini.terminfo)
+TAB_ROWS = 3  # the tab bar: the tabs, the line about the shown terminal (or a tab's menu), the hints
+ZOOM_LOOK = 0.25  # seconds between two looks at a zoomed window by a pane that waits to size itself (a round)
+MIN_VIEW = 20  # columns the view keeps at least: a sidebar width dragged in a wide window is capped in a narrow one
+_TMUX: List[str] = []  # the tmux program, once found
 
 
-def ghostty_enabled() -> bool:
-    return os.environ.get("MMINI_GHOSTTY", "1") != "0"
+def tmux_enabled() -> bool:
+    """Inside the window's tmux ($TMUX, set by tmux in its panes), unless MMINI_TMUX=0 (the tests)."""
+    return bool(os.environ.get("TMUX")) and os.environ.get("MMINI_TMUX", "1") != "0"
 
 
-def ghostty(script: str, detach: bool = False) -> None:
-    """Run an AppleScript, without waiting. `detach`: in a session of its own, so it outlives this program and its
-    pane (a pane that closes hangs up everything started in it), for the last script before this program ends."""
-    if not ghostty_enabled():
-        return
+def tmux_program() -> str:
+    """tmux from PATH, else Homebrew's (Apple silicon, then Intel)."""
+    if not _TMUX:
+        found = shutil.which("tmux") or next(
+            (p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux") if os.access(p, os.X_OK)), "tmux")
+        _TMUX.append(found)
+    return _TMUX[0]
+
+
+def tmux(*args: str, input: Optional[str] = None) -> Optional[str]:
+    """Run tmux commands in this window's server (several: joined by a ";" argument); their output, None when tmux
+    is off, could not run or failed. `input`: what tmux reads on stdin (load-buffer -: no size limit, where an
+    argument over 16 KB is refused). Waits at most 3 s."""
+    if not tmux_enabled():
+        return None
     try:
-        subprocess.Popen(["/usr/bin/osascript", "-e", script], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=detach)
-    except Exception:  # noqa: BLE001 - the UI must never die because of Ghostty
+        feed = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
+        done = subprocess.run([tmux_program(), *args], capture_output=True, text=True, timeout=3.0, **feed)
+    except Exception:  # noqa: BLE001 - the UI must never die because of tmux
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def pane_id(pane: str, win: Path = WINDOW) -> str:
+    """The tmux id of one of the window's panes ("side", "tabs", "view"), "" when the panes file has none."""
+    value = read_panes(win).get(pane, "")
+    return value if PANE_ID.fullmatch(value) else ""
+
+
+def own_pane() -> str:
+    """This program's tmux pane ($TMUX_PANE), "" outside tmux."""
+    value = os.environ.get("TMUX_PANE", "")
+    return value if PANE_ID.fullmatch(value) else ""
+
+
+def focus_pane(pane: str, win: Path = WINDOW) -> None:
+    """Give the keyboard to one of the window's panes ("side", "tabs", "view")."""
+    target = pane_id(pane, win)
+    if target:
+        tmux("select-pane", "-t", target)
+
+
+def focus_view(win: Path = WINDOW) -> None:
+    """The keyboard to the shown terminal: after a pick, and when a menu or a question has gone."""
+    focus_pane("view", win)
+
+
+def zoom_view(win: Path = WINDOW) -> str:
+    """The "z" key: the whole window for the shown terminal (tmux's zoom). A line on top, "‹ back", brings the panes
+    back on a click (mmini.tmux.conf). Returns a notice instead when nothing is shown (no target, or the view is
+    not attached to it), "" when done."""
+    if not current_target(win) or not attach_pid(win):
+        return "z: nothing shown"
+    target = pane_id("view", win)
+    if target:
+        tmux("select-pane", "-t", target, ";", "resize-pane", "-Z", "-t", target)
+    return ""
+
+
+# Keys typed in a pane of mmini that go on to the view (send_keys_to_view): bytes as they came (send-keys -H: the
+# exact bytes, ";" and control keys included), keys curses decoded by their tmux name.
+KEY_NAMES = {curses.KEY_ENTER: "Enter", curses.KEY_BACKSPACE: "BSpace", curses.KEY_UP: "Up", curses.KEY_DOWN: "Down",
+             curses.KEY_LEFT: "Left", curses.KEY_RIGHT: "Right", curses.KEY_HOME: "Home", curses.KEY_END: "End",
+             curses.KEY_DC: "DC", curses.KEY_IC: "IC", curses.KEY_PPAGE: "PPage", curses.KEY_NPAGE: "NPage",
+             curses.KEY_BTAB: "BTab"}
+# terminfo names of modified keys (kLFT5: ctrl+left) -> tmux's: the key, then the modifier digit
+TERMINFO_KEYS = {"LFT": "Left", "RIT": "Right", "UP": "Up", "DN": "Down", "HOM": "Home", "END": "End", "DC": "DC",
+                 "IC": "IC", "PRV": "PPage", "NXT": "NPage"}
+MODIFIERS = {"2": "S-", "3": "M-", "4": "S-M-", "5": "C-", "6": "C-S-", "7": "C-M-", "8": "C-S-M-"}
+FORWARD_GRACE = 0.3  # seconds after a key closed a right-click menu in which keys still go on to the view
+
+
+def key_name(key: int) -> str:
+    """tmux's name for a key curses decoded (>= 256), "" when it has none."""
+    if key in KEY_NAMES:
+        return KEY_NAMES[key]
+    if curses.KEY_F0 < key <= curses.KEY_F0 + 24:
+        n = key - curses.KEY_F0
+        return f"F{n}" if n <= 12 else f"S-F{n - 12}"
+    try:
+        name = curses.keyname(key).decode("ascii", "replace")
+    except (curses.error, ValueError, OverflowError):
+        return ""
+    found = re.fullmatch(r"k(LFT|RIT|UP|DN|HOM|END|DC|IC|PRV|NXT)([2-8])", name)
+    return MODIFIERS[found.group(2)] + TERMINFO_KEYS[found.group(1)] if found else ""
+
+
+def view_key_args(keys: Sequence[int], view: str) -> List[str]:
+    """tmux arguments that type `keys` into the view: bytes as they came (send-keys -H, so ";", esc and control
+    keys arrive unchanged), enter (10 or 13: curses reads the return key as 10) by name, keys curses decoded by
+    their tmux name (key_name); a key without one is left out."""
+    args: List[str] = []
+    run: List[str] = []
+
+    def flush() -> None:
+        if run:
+            args.extend(["send-keys", "-t", view, "-H", *run, ";"])
+            run.clear()
+
+    for key in keys:
+        name = "Enter" if key in (10, 13) else ("" if 0 <= key < 256 else key_name(key))
+        if 0 <= key < 256 and not name:
+            run.append(f"{key:02x}")
+        elif name:
+            flush()
+            args.extend(["send-keys", "-t", view, name, ";"])
+    flush()
+    return args
+
+
+def drain_keys(scr: "curses.window", limit: int = 4096) -> List[int]:
+    """The keys typed ahead and not read yet (mouse events are read and dropped)."""
+    keys: List[int] = []
+    scr.nodelay(True)
+    try:
+        while len(keys) < limit:
+            key = scr.getch()
+            if key == -1:
+                break
+            if key == curses.KEY_MOUSE:
+                read_mouse_event()
+                continue
+            keys.append(key)
+    finally:
+        scr.nodelay(False)
+        scr.timeout(LOOP_WAIT_MS)
+    return keys
+
+
+def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW) -> None:
+    """Type `keys` into the view and give it the keyboard: keys typed in a pane of mmini that were meant for the
+    terminal (after a right click) are not lost. A lone esc (no bytes after it) only closed the menu."""
+    view = pane_id("view", win)
+    if not view:
+        return
+    tmux(*view_key_args([] if list(keys) == [27] else keys, view), "select-pane", "-t", view)
+
+
+PASTE_START = [ord(c) for c in "[200~"]  # after the esc that bracketed paste starts with
+PASTE_END = [27] + [ord(c) for c in "[201~"]
+
+
+def read_paste(scr: "curses.window", wait: float = 1.0, limit: int = 64 * 1024 * 1024) -> Optional[str]:
+    """After an esc: the text of a bracketed paste (mode 2004, which the sidebar and the tab bar ask for), or None
+    when the esc was a key of its own (the keys read to tell are given back). A dropped file arrives as such a
+    paste of its path. Read until the end marker; given up only after `wait` seconds without a byte (a long paste
+    may come in slowly), or at `limit` bytes."""
+    got: List[int] = []
+    scr.nodelay(True)
+    try:
+        for want in PASTE_START:
+            key = scr.getch()
+            if key != want:
+                unget = getattr(scr, "unget", None) or curses.ungetch  # the tests' screen keeps its own queue
+                for back in reversed(got + ([key] if key != -1 else [])):
+                    unget(back)
+                return None
+            got.append(key)
+        body: List[int] = []
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline and len(body) < limit:
+            key = scr.getch()
+            if key == -1:
+                time.sleep(0.005)
+                continue
+            deadline = time.monotonic() + wait
+            if 0 <= key < 256:
+                body.append(key)
+            if body[-len(PASTE_END):] == PASTE_END:
+                del body[-len(PASTE_END):]
+                break
+        return bytes(body).decode("utf-8", "replace")
+    finally:
+        scr.nodelay(False)
+        scr.timeout(LOOP_WAIT_MS)
+
+
+def paste_to_view(text: str, win: Path = WINDOW) -> bool:
+    """A paste (a dropped file) that reached a pane of mmini: into the view, as a paste (bracketed when the
+    program there asks for it), and the view gets the keyboard either way. Before tmux each pane got its own drops;
+    now a drop goes to the pane with the keyboard. The text goes on tmux's stdin (load-buffer -): an argument over
+    16 KB would be refused. False when it could not be passed on (the caller says so)."""
+    view = pane_id("view", win)
+    if not view:
+        return False
+    loaded = bool(text) and tmux("load-buffer", "-b", "mmini-paste", "-", input=text) is not None
+    if loaded:
+        loaded = tmux("paste-buffer", "-p", "-d", "-b", "mmini-paste", "-t", view) is not None
+    tmux("select-pane", "-t", view)
+    return loaded or not text
+
+
+def prompt_text(text: str) -> str:
+    """A paste typed into a question: one line, printable ASCII only (as the keys a question takes)."""
+    return "".join(c for c in text.replace("\r", " ").replace("\n", " ") if 32 <= ord(c) < 127)
+
+
+BRACKETED_PASTE_ON, BRACKETED_PASTE_OFF = b"\x1b[?2004h", b"\x1b[?2004l"
+
+
+def bracketed_paste(on: bool, fd: int = 1) -> None:
+    """Ask the terminal (tmux) to mark pastes in this pane (mode 2004), or stop: a paste is then told from typing."""
+    try:
+        os.write(fd, BRACKETED_PASTE_ON if on else BRACKETED_PASTE_OFF)
+    except OSError:
         pass
 
 
-def safe_id(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.:-]", "", value)
+@dataclass(frozen=True)
+class WindowLook:
+    """What a pane needs to know before it sizes itself: is the view zoomed (a resize would end the zoom), the
+    window's size and the pane's own size, as tmux has them now. curses learns a new size later (tmux holds a
+    pane's next size signal up to 250 ms), so a pane decides on these, never on getmaxyx. tmux gives a width change
+    of the window to the sidebar first (it is the window's first column): the sidebar's own width changing while the
+    window kept its width is a dragged divider."""
+
+    zoomed: bool
+    width: int
+    height: int
+    pane_width: int
+    pane_height: int
 
 
-def action_script(action: str, pane: str, win: Path = WINDOW) -> str:
-    """Run a keybind action on a pane's terminal (id from the panes file); if that fails, on the focused one."""
-    action = re.sub(r"[^A-Za-z0-9_:,.-]", "", action)
-    tid = safe_id(read_panes(win).get(pane, ""))
-    if not tid:
-        return f'tell application "Ghostty"\ntry\nperform action "{action}" on {FOCUSED}\nend try\nend tell'
-    return (f'tell application "Ghostty"\ntry\nperform action "{action}" on (first terminal whose id is "{tid}")\n'
-            f'on error\ntry\nperform action "{action}" on {FOCUSED}\nend try\nend try\nend tell')
+LOOK_FORMAT = "#{window_zoomed_flag} #{window_width} #{window_height} #{pane_width} #{pane_height}"
 
 
-def focus_script(from_side: bool, win: Path = WINDOW) -> str:
-    """Move the Ghostty focus to the view: by its id from the panes file. Without the id, by direction. From the
-    sidebar that takes two moves: goto_split:right lands on the tab bar (the nearest pane to the right), then
-    goto_split:down reaches the view, and does nothing when the focus already is there."""
-    moves = ["goto_split:right", "goto_split:down"] if from_side else ["goto_split:down"]
-    fallback = "\ndelay 0.05\n".join(f'perform action "{m}" on {FOCUSED}' for m in moves)
-    vid = safe_id(read_panes(win).get("view", ""))
-    if vid:
-        body = f'try\nfocus (first terminal whose id is "{vid}")\non error\ntry\n{fallback}\nend try\nend try'
-    else:
-        body = f"try\n{fallback}\nend try"
-    return f'tell application "Ghostty"\n{body}\nend tell'
+def parse_window_look(out: Optional[str]) -> Optional[WindowLook]:
+    """tmux's answer to LOOK_FORMAT (the last line: size_pane asks after a resize); None for anything else."""
+    lines = (out or "").strip().splitlines()
+    parts = lines[-1].split() if lines else []
+    if len(parts) != 5 or parts[0] not in ("0", "1") or not all(p.isdigit() for p in parts[1:]):
+        return None
+    return WindowLook(parts[0] == "1", *(int(p) for p in parts[1:]))
 
 
-def focus_view(from_side: bool, win: Path = WINDOW) -> None:
-    ghostty(focus_script(from_side, win))
+def window_look(pane: str) -> Optional[WindowLook]:
+    return parse_window_look(tmux("display", "-p", "-t", pane, LOOK_FORMAT))
 
 
-def applescript_string(text: str) -> str:
-    """`text` as an AppleScript string literal: backslash and double quote escaped."""
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+def pane_active(pane: str) -> Optional[bool]:
+    """Has `pane` the keyboard? None when tmux cannot tell."""
+    out = (tmux("display", "-p", "-t", pane, "#{pane_active}") or "").strip()
+    return {"1": True, "0": False}.get(out)
+
+
+def size_pane(pane: str, cols: int = 0, rows: int = 0) -> Optional[WindowLook]:
+    """Make a pane exactly `cols` columns wide or `rows` rows high (tmux leaves every other pane at least one cell);
+    returns the window and the pane as they are right after, in the same tmux call (a window change in between
+    cannot be missed), None when unknown."""
+    flag, value = ("-x", cols) if cols else ("-y", rows)
+    return parse_window_look(tmux("resize-pane", "-t", pane, flag, str(value), ";", "display", "-p", "-t", pane,
+                                  LOOK_FORMAT))
 
 
 def mmini_env(environ: Mapping[str, str]) -> List[Tuple[str, str]]:
-    """This program's MMINI_* settings, sorted, for the panes a rebuild starts (MMINI_WINDOW is passed apart)."""
-    return sorted((k, v) for k, v in environ.items() if ENV_NAME.fullmatch(k) and k != "MMINI_WINDOW")
+    """This program's MMINI_* settings, sorted, for a sidebar brought back (MMINI_WINDOW is passed apart); then its
+    TERM and TERMINFO when the terminal type is mmini's own (TERM_NAME)."""
+    pairs = sorted((k, v) for k, v in environ.items() if ENV_NAME.fullmatch(k) and k != "MMINI_WINDOW")
+    if environ.get("TERM") == TERM_NAME:
+        pairs += [(k, environ[k]) for k in ("TERM", "TERMINFO") if environ.get(k)]
+    return pairs
 
 
 def pane_command(mode: str, win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
-    """The line typed into a new pane, as the launcher types it: `exec` replaces the login shell, so the pane
-    closes when the program ends. MMINI_WINDOW first, then the other settings."""
+    """The command of a new pane (tmux runs it with sh -c): `exec` replaces the shell, so the pane closes when the
+    program ends. MMINI_WINDOW first, then the other settings, then this pane's terminal type when it is mmini's
+    own (TERM xterm-mmini with its TERMINFO folder, see start.sh): the new pane gets the same mouse codes."""
     pairs = [("MMINI_WINDOW", str(win))] + [(k, v) for k, v in env if k != "MMINI_WINDOW" and ENV_NAME.fullmatch(k)]
+    pairs += [(k, v) for k, v in env if k in ("TERM", "TERMINFO") and env_get(env, "TERM") == TERM_NAME]
     assigns = " ".join(f"{k}={shlex.quote(v)}" for k, v in pairs)
     return f"exec env {assigns} python3 {shlex.quote(str(base / 'mmini.py'))} {mode}"
 
 
-def rebuild_script(view_id: str, win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
-    """The AppleScript that brings the sidebar back at full height. A split can only be made from a leaf, so from
-    [tabs / view] it splits the view twice: left for a new sidebar, then up for a new tab bar, which gives
-    [old tabs / [sidebar | [tabs / view]]]. Then it writes the new ids into the panes file (as the launcher does:
-    panes.tmp, then mv) and, after the launcher's 0.8 s (Ghostty gives the keyboard to each new split itself, a little
-    later), focuses the new sidebar. The old tab bar ends once it reads the new ids; its pane closes and the sidebar
-    gets the full height. Splits first, ids last: a script that fails on the way writes no ids, and the old tab bar
-    stays. Only verbs the launcher (build.sh) already uses, plus "first terminal whose id is"."""
-    vid = safe_id(view_id)
-    view = f'(first terminal whose id is "{vid}")'
-    side = applescript_string(pane_command("sidebar", win, base, env))
-    tabs = applescript_string(pane_command("tabs", win, base, env))
-    tmp, panes = shlex.quote(str(win / "panes.tmp")), shlex.quote(str(win / "panes"))
-    write = applescript_string(f" > {tmp} && mv {tmp} {panes}")
-    return "\n".join((
-        'tell application "Ghostty"',
-        "    set sideCfg to new surface configuration",
-        f"    set initial input of sideCfg to {side} & linefeed",
-        f"    set sideTerm to split {view} direction left with configuration sideCfg",
-        "    set tabsCfg to new surface configuration",
-        f"    set initial input of tabsCfg to {tabs} & linefeed",
-        f"    set tabsTerm to split {view} direction up with configuration tabsCfg",
-        f'    set ids to "side=" & (id of sideTerm) & linefeed & "tabs=" & (id of tabsTerm) & linefeed & "view={vid}"'
-        " & linefeed",
-        f'    tell current application to do shell script "printf %s " & quoted form of ids & {write}',
-        "    tell current application to delay 0.8",
-        "    focus sideTerm",
-        "end tell",
-    ))
+def env_get(env: Sequence[Tuple[str, str]], name: str) -> str:
+    return next((v for k, v in env if k == name), "")
 
 
-def zoom_script(from_side: bool, win: Path = WINDOW) -> str:
-    """Focus the view (focus_script), then toggle_split_zoom on it: one script, so the two always run in this order.
-    The short delay lets a focus by direction land before the fallback acts on the focused terminal."""
-    return focus_script(from_side, win) + "\ndelay 0.1\n" + action_script("toggle_split_zoom", "view", win)
-
-
-def zoom_view(from_side: bool, win: Path = WINDOW) -> str:
-    """The "z" key: the whole window for the shown terminal. Returns a notice instead when nothing is shown (no
-    target, or the view is not attached to it), "" when done. The zoom is marked first, so no resize step follows
-    it: Ghostty drops one sent to a hidden pane, and one sent to the zoomed pane ends the zoom (Ghostty facts)."""
-    if not current_target(win) or not attach_pid(win):
-        return "z: nothing shown"
-    mark_zoom(win)
-    ghostty(zoom_script(from_side, win))
-    return ""
-
-
-def measure(vertical: bool) -> Tuple[int, float]:
-    """(columns or rows, pixels per column or row) of this terminal; pixels 0 when the terminal does not say."""
-    for fd in (1, 0, 2):
-        try:
-            rows, cols, xpx, ypx = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
-        except OSError:
-            continue
-        size, px = (rows, ypx) if vertical else (cols, xpx)
-        return size, (px / size if size and px else 0.0)
-    return 0, 0.0
-
-
-def wait_for_change(read: Callable[[], int], before: int, timeout: float, settle: float = 0.15,
-                    stop: Optional[Callable[[], bool]] = None, grace: float = STEP_GRACE) -> int:
-    """The size once it differs from `before` (read again after it settled), or `before` after `timeout`, or
-    earlier when stop() says the goal moved on and nothing has changed for `grace` seconds (see STEP_GRACE)."""
-    started = time.monotonic()
-    deadline = started + timeout
-    while time.monotonic() < deadline:
-        time.sleep(0.1)
-        if read() != before:
-            time.sleep(settle)
-            return read()
-        if stop is not None and time.monotonic() - started >= grace and stop():
-            break
-    return read()
+def split_sidebar(win: Path, base: Path, env: Sequence[Tuple[str, str]], width: int) -> str:
+    """Bring the sidebar back: a new pane on the left of the view and the tab bar, at the window's full height
+    (split-window -f), `width` columns wide, running `mmini.py sidebar`. Its id goes into the panes file. Returns
+    the id, "" when nothing was made (no pane to split from, tmux off or failed)."""
+    target = pane_id("view", win) or own_pane()  # with -f the target only names the window
+    if not target:
+        return ""
+    out = tmux("split-window", "-f", "-hb", "-d", "-l", str(max(1, width)), "-t", target, "-P", "-F", "#{pane_id}",
+               pane_command("sidebar", win, base, env))
+    new = (out or "").strip()
+    if not PANE_ID.fullmatch(new):
+        return ""
+    panes = dict(read_panes(win), side=new)
+    write_atomic(win / "panes", "".join(f"{k}={v}\n" for k, v in panes.items()))
+    return new
 
 
 def autosize_enabled() -> bool:
-    return os.environ.get("MMINI_AUTOSIZE", "1") != "0" and ghostty_enabled()
-
-
-def autosize(mode: str, win: Path = WINDOW,
-             goal: Optional[Callable[[], int]] = None) -> Tuple[int, Optional[int]]:
-    """Ghostty makes splits 50/50: bring this pane to goal() columns (sidebar: MMINI_WIDTH, or MMINI_NARROW when
-    folded) or 2 rows (tabs). Ghostty stops a pane at a tenth of the window; the loop then ends by itself. One step
-    at a time: a step is only followed by the next one after its effect was seen, however late it arrives, so steps
-    never stack up (one exception: see STEP_GRACE). A "z" in this window stops the loop (see the zoom in the Ghostty
-    facts). Returns (the size the pane ended at, 0 = no limit found; the goal it ended on, None = a zoom): see
-    resize_loop."""
-    vertical = mode == "tabs"
-    fixed, tolerance = (2, 0) if vertical else (WIDTH, 1)
-    wanted = goal or (lambda: fixed)
-    if not autosize_enabled():
-        return 0, wanted()
-    zoomed = zoom_mark(win)
-
-    def aim() -> Optional[int]:
-        return None if zoom_mark(win) != zoomed else wanted()
-
-    def send(direction: str, amount: int) -> None:
-        ghostty(action_script(f"resize_split:{direction},{amount}", "tabs" if vertical else "side", win))
-
-    def wait(before: int, moved_on: Callable[[], bool]) -> int:
-        return wait_for_change(lambda: measure(vertical)[0], before, 10.0, stop=moved_on)
-
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline and not (win / "panes").exists():
-        time.sleep(0.1)
-    time.sleep(0.3)
-    return resize_loop(lambda: measure(vertical), send, aim, wait,
-                       ("up", "down") if vertical else ("left", "right"), tolerance)
+    """Do the sidebar and the tab bar size their panes? In tmux, unless MMINI_AUTOSIZE=0."""
+    return os.environ.get("MMINI_AUTOSIZE", "1") != "0" and tmux_enabled()
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -2732,7 +2842,7 @@ class Screen:
 
 
 def setup_curses(scr: "curses.window", right: bool = False, motion: bool = False) -> None:
-    """`right`: take the right button too (the sidebar's menu). The tab bar leaves it to Ghostty. `motion`: ncurses
+    """`right`: take the right button too (the menus of the sidebar and of a tab). `motion`: ncurses
     also reports the pointer moving (the sidebar's separator drag; report_drags asks the terminal for it)."""
     try:
         curses.curs_set(0)
@@ -2752,6 +2862,10 @@ def setup_curses(scr: "curses.window", right: bool = False, motion: bool = False
         curses.mouseinterval(0)
     except curses.error:
         pass
+    try:  # ctrl+C, ctrl+\ and ctrl+Z read as keys: as signals they would end this pane for good
+        curses.raw()
+    except curses.error:
+        pass
     curses.mousemask(mouse_buttons(right) | (curses.REPORT_MOUSE_POSITION if motion else 0))
     scr.timeout(LOOP_WAIT_MS)
     scr.keypad(True)
@@ -2764,10 +2878,10 @@ def mouse_buttons(right: bool) -> int:
     return left | (curses.BUTTON3_PRESSED | curses.BUTTON3_RELEASED if right else 0)
 
 
-# xterm's mode 1002: the terminal also reports the pointer moving while a button is held (Ghostty: "button"
-# tracking, in the encoding already asked for, SGR or X10). ncurses 6.0 asks only for mode 1000 (with Ghostty's
-# terminfo "1006;1000": XM), never for 1002, but decodes such moves in both encodings as REPORT_MOUSE_POSITION
-# (tried in a pseudo terminal). Mode 1003 (every move, no button) is never asked for: ncurses 6.0 reads its SGR
+# xterm's mode 1002: the terminal (tmux, for its pane) also reports the pointer moving while a button is held, in
+# the encoding already asked for. ncurses 6.0 asks only for mode 1000 (X10 codes with the panes' screen-256color;
+# SGR with a terminfo that has "1006;1000": XM), never for 1002, but decodes such moves in both encodings as
+# REPORT_MOUSE_POSITION (tried in a pseudo terminal). Mode 1003 (every move, no button) is never asked for: ncurses 6.0 reads its SGR
 # code 35 as a release.
 DRAG_REPORTS_ON, DRAG_REPORTS_OFF = b"\x1b[?1002h", b"\x1b[?1002l"
 
@@ -2776,7 +2890,7 @@ def report_drags(scr: "curses.window", on: bool, fd: int = 1) -> None:
     """Ask the terminal for moves with a button held (mode 1002), or stop them. After the refresh: ncurses sends its
     own mouse mode from its buffer at the first refresh, and a 1000 after the 1002 would turn the moves off again
     (curses.putp is no good: its bytes wait in another buffer until the program ends). Resetting 1000 at the end
-    (ncurses' endwin) turns 1002 off as well in Ghostty (its source: any of 9, 1000, 1002, 1003 reset means no
+    (ncurses' endwin) turns 1002 off as well (tmux and Ghostty: any of 9, 1000, 1002, 1003 reset means no
     tracking); `on` False says it once more first."""
     try:
         scr.refresh()
@@ -2785,7 +2899,7 @@ def report_drags(scr: "curses.window", on: bool, fd: int = 1) -> None:
         pass
 
 
-def wait_key(scr: "curses.window", win: Path, seen: Tuple[int, int], last_round: float) -> Optional[int]:
+def wait_key(scr: "curses.window", win: Path, seen: Tuple[int, ...], last_round: float) -> Optional[int]:
     """The next key or click; -1 as soon as a round is due without one (round_due: a pick or the tabs changed, or
     ROUND_SECONDS went by since `last_round`); None when the pane was closed (terminal_gone)."""
     while True:
@@ -2903,16 +3017,29 @@ class Prompt:
     ask: str = ""
     accept: Tuple[str, ...] = ()
     data: Tuple[str, ...] = ()
+    by_mouse: bool = False  # opened from a right-click menu: a click in another pane cancels it
 
 
 @dataclass
 class Menu:
-    """The open action menu: the row it belongs to, its entries, the selected one."""
+    """The open action menu: the row it belongs to, its entries, the selected one. `by_mouse`: opened with a right
+    click, so it takes clicks only (keys typed then were meant for the terminal: a key closes it)."""
 
     item: Item
     title: str
     entries: List[Entry]
     selected: int = 0
+    by_mouse: bool = False
+
+
+@dataclass
+class TabMenu:
+    """A tab's open menu (a right click): the tab's address, its drawn name (with the account mark), the entries. It
+    takes clicks only: a key closes it."""
+
+    address: str
+    label: str
+    entries: List[Entry]
 
 
 def autoopen_enabled() -> bool:
@@ -3026,6 +3153,13 @@ class Engine:
             while time.monotonic() < end and mtime(poke) == seen and not self.wake.is_set():
                 self.wake.wait(0.2)
             self.wake.clear()
+            if (self.win / "poke.full").exists():  # poke_engine(full=True)
+                try:
+                    (self.win / "poke.full").unlink()
+                except OSError:
+                    pass
+                with self.lock:
+                    self.full_due = True
 
     def servers_shown(self) -> bool:
         """Is the servers section shown (the shared file "servers", read each time: a few bytes, and another
@@ -3111,7 +3245,10 @@ class Engine:
         now = time.monotonic()
         if stamp != self.written or now - self.written_at > SNAPSHOT_BEAT:
             group = self.find_group(self.cur)
-            write_snapshot(group, self.win, servers=self.server_names(group), shown=shown, shown_title=self.title)
+            with self.lock:
+                infos = dict(self.infos)
+            write_snapshot(group, self.win, servers=self.server_names(group), shown=shown, shown_title=self.title,
+                           everything=self.all_terms(), infos=infos)
             self.written, self.written_at = stamp, now
 
     def seen_now(self) -> Dict[str, int]:
@@ -3284,19 +3421,15 @@ class Sidebar(Engine):
         self.pane_title = PaneTitle()  # this pane's window title (the engine's self.title)
         self.prompt: Optional[Prompt] = None
         self.notice = Notice()
-        self.sizer: Optional[threading.Thread] = None  # the resize loop (autosize), while it runs
-        self.sized_at = 0  # the width the last resize loop ended at
-        self.sized_when = 0.0  # when the last resize loop ended (0 = none has ended yet)
-        self.resized = 0.0  # when the pane last changed size (0 = nothing to look at)
-        # (sidebar columns, tab bar columns) when the size was last quiet and no loop ran: what a later size change
-        # is compared with to tell a dragged divider from a resized window (resize_kind). None: not known yet.
-        self.layout_seen: Optional[Tuple[int, int]] = None
+        self.sized_at = -1  # the width the pane had after its last sizing (refit); -1: not sized yet
+        self.window_width = -1  # the window's width at refit's last look (-1: none yet)
+        self.sized_h = -1  # the pane's height at refit's last look (a zoom's end changes it)
+        self.zoom_look: Optional[float] = None  # when refit last found the view zoomed (None: it was not)
         # "open" or "strip"; "hidden" never runs a sidebar (main ends it before it draws), so it counts as open
         self.mode = "strip" if read_sidebar_state(state) == "strip" else "open"
         self.open_width = read_open_width(state)  # the open width: the last dragged one, else MMINI_WIDTH
         self.strip_width = 0  # a width the strip was dragged to, kept until the next state change (0 = none)
-        self.aimed: Optional[int] = self.width_goal()  # the goal the last resize loop ended on (None = a zoom)
-        self.zoom_seen = zoom_mark(win)  # the window's zoom mark at this pane's last key or click
+        self.aimed = -1  # the width the last sizing aimed at (-1: none yet)
         self.arrow_y = -1  # the line of "‹" (fold, or hide in the strip), for clicks
         self.open_y = -1  # the strip's line of "›" (open), for clicks
         self.menu: Optional[Menu] = None  # the open action menu
@@ -3304,6 +3437,7 @@ class Sidebar(Engine):
         # Presses are dropped until then (MOUSE_QUIET): the second press of a double click never acts on the row
         # under a menu that the first one closed.
         self.mouse_quiet = 0.0
+        self.forward_until = 0.0  # until then keys go on to the view (FORWARD_GRACE after a key closed a menu)
         self.help = False  # the list of keys ("?") is drawn over the sidebar
         self.help_x = -1  # the column of the dim "?" on the "‹" line, for clicks (-1: not drawn)
         # The separator between the upper part and the agents: where it was drawn (-1: not drawn), the line asked of
@@ -3369,7 +3503,7 @@ class Sidebar(Engine):
     def open_group(self, key: str, address: str = "", focus: bool = True) -> None:
         """show_group, then the keyboard to the view."""
         if self.show_group(key, address) and focus:
-            focus_view(True, self.win)
+            focus_view(self.win)
 
     def activate(self, item: Item) -> None:
         """Enter or a click on a row. An agent is looked up again: it may have changed space or ended meanwhile. A
@@ -3400,7 +3534,7 @@ class Sidebar(Engine):
         keeps its group."""
         show(address, self.win, self.title_for(address))
         self.sync()
-        focus_view(True, self.win)
+        focus_view(self.win)
 
     def browse(self, port: str) -> None:
         """Enter or a click on a dev server: open it in this Mac's browser, at the home machine's host."""
@@ -3721,8 +3855,9 @@ class Sidebar(Engine):
                 self.notice.say("cancelled: the name did not match", bad=False)
 
     # the action menu -------------------------------------------------------------------------------------------
-    def open_menu(self, item: Optional[Item]) -> None:
-        """a, or a right click on a row: the menu of that row. The strip opens first (the menu needs the room)."""
+    def open_menu(self, item: Optional[Item], by_mouse: bool = False) -> None:
+        """a, or a right click on a row (`by_mouse`): the menu of that row. The strip opens first (the menu needs the
+        room)."""
         if item is None:
             return
         self.expand()
@@ -3738,7 +3873,8 @@ class Sidebar(Engine):
             title = group.shown if group else item.group
         self.cursor = item
         self.menu = Menu(item, title, menu_entries(item, group, self.first(), self.servers_shown(),
-                                                   read_agents_shown(self.state), read_devs_shown(self.state)))
+                                                   read_agents_shown(self.state), read_devs_shown(self.state)),
+                         by_mouse=by_mouse)
 
     def run_entry(self, entry: Entry, item: Item) -> None:
         """What a menu entry does: the same as its direct key."""
@@ -3839,9 +3975,15 @@ class Sidebar(Engine):
     def handle_menu(self, key: int, click: Optional[Tuple[int, int, int]] = None) -> None:
         """Keys and presses while the menu is open: up/down (k/j), enter, a direct key shown in it, esc or a to
         close; a press on an entry runs it, a press outside closes the menu (and does nothing else). The release of
-        the press that opened it never gets here (on_key drops releases)."""
+        the press that opened it never gets here (on_key drops releases). A menu opened with a right click takes
+        presses only: any key closes it and gives the keyboard back to the view."""
         menu = self.menu
         if menu is None:
+            return
+        if menu.by_mouse and key != curses.KEY_MOUSE:  # typed after a right click: meant for the terminal
+            self.menu = None
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
+            self.forward_until = time.monotonic() + FORWARD_GRACE
             return
         if key in (curses.KEY_UP, ord("k")):
             menu.selected = max(0, menu.selected - 1)
@@ -3860,8 +4002,12 @@ class Sidebar(Engine):
             if what == "entry":
                 menu.selected = index
                 self.run_entry(menu.entries[index], menu.item)
+                if menu.by_mouse and self.prompt is not None:
+                    self.prompt.by_mouse = True
             elif what == "outside":
                 self.menu = None
+            if menu.by_mouse and self.menu is None and self.prompt is None and not self.help:
+                focus_view(self.win)  # a right-click menu gone without a question: the keyboard back to the view
         elif 32 <= key < 127:
             entry = next((e for e in menu.entries if e.key == chr(key).lower()), None)
             if entry is not None:
@@ -3869,7 +4015,7 @@ class Sidebar(Engine):
 
     def set_mode(self, mode: str) -> None:
         """The open sidebar or the folded strip. Kept for the next start (all windows); the pane sizes itself for
-        the new mode (refit), which MMINI_GHOSTTY=0 / MMINI_AUTOSIZE=0 skip."""
+        the new mode (refit; not outside tmux, nor with MMINI_AUTOSIZE=0)."""
         if mode == self.mode:
             return
         self.mode = mode
@@ -3890,12 +4036,11 @@ class Sidebar(Engine):
 
     def hide(self) -> bool:
         """q, or c in the strip: the sidebar goes. "hidden" is written first, so this window's tab bar takes over the
-        engine at once (tab_engine_wanted) and the next start begins hidden; then the keyboard goes to the view (a
-        script of its own, which outlives this pane), sidebar.pid goes, and False ends the program: Ghostty closes
-        its pane. tabs.json stays: the tab bar draws it until its own engine writes the next one. The same with
-        MMINI_GHOSTTY=0, without the focus script."""
+        engine at once (tab_engine_wanted) and the next start begins hidden; then the keyboard goes to the view,
+        sidebar.pid goes, and False ends the program: tmux closes its pane, and the tab bar and the view take its
+        columns. tabs.json stays: the tab bar draws it until its own engine writes the next one."""
         write_sidebar_state("hidden", self.state)
-        ghostty(focus_script(True, self.win), detach=True)
+        focus_view(self.win)
         remove_own_pid(self.win)
         return False
 
@@ -3904,7 +4049,7 @@ class Sidebar(Engine):
         self.set_mode("open")
 
     def zoom(self) -> None:
-        text = zoom_view(True, self.win)
+        text = zoom_view(self.win)
         if text:
             self.notice.say(text)
 
@@ -4063,12 +4208,15 @@ class Sidebar(Engine):
         row_y = next((y for y, item in self.rows.items() if item == menu.item), 0)
         # the arrow lines and the keychain warning stay readable
         room = next((y for y in (self.keychain_y, self.open_y, self.arrow_y) if y > row_y), height)
-        box = menu_box(row_y, len(menu.entries), menu.selected, room, width, menu_width(menu.entries))
+        # a menu opened with a right click takes clicks only: no keys shown, nothing selected
+        entries = [replace(e, key="") for e in menu.entries] if menu.by_mouse else menu.entries
+        selected = -1 if menu.by_mouse else menu.selected
+        box = menu_box(row_y, len(entries), max(0, selected), room, width, menu_width(entries))
         if box is None:
             return
         self.menu_at = box
-        for y, text, selected in menu_lines(menu.title, menu.entries, box, menu.selected):
-            self.s.put(y, box.left, text, curses.A_REVERSE if selected else 0)
+        for y, text, chosen in menu_lines(menu.title, entries, box, selected):
+            self.s.put(y, box.left, text, curses.A_REVERSE if chosen else 0)
 
     def draw_compact(self, y: int, row: Row, width: int, cursor: int, shown: str) -> None:
         """One line of the folded strip, for any width from 3 columns: marker, status dot and as much of the name as
@@ -4194,35 +4342,15 @@ class Sidebar(Engine):
     # size ------------------------------------------------------------------------------------------------------
     def width_goal(self) -> int:
         """The width of the current mode: open, the width its divider was last dragged to, else MMINI_WIDTH; the
-        folded strip, a width it was dragged to since the last state change, else MMINI_NARROW (Ghostty stops it at
-        a tenth of the window, where the loop ends by itself: a step that moves nothing ends it)."""
+        folded strip, a width it was dragged to since the last state change, else MMINI_NARROW."""
         if self.mode == "strip":
             return self.strip_width or NARROW
         return self.open_width
 
-    def zoom_held(self) -> bool:
-        """A "z" (here or in the tab bar) since this pane's last key or click: the view may still be zoomed, and a
-        resize step would be dropped or end that zoom (Ghostty facts), so the sidebar does not size itself until
-        its next key or click."""
-        return zoom_mark(self.win) != self.zoom_seen
-
-    def start_autosize(self) -> None:
-        def work() -> None:
-            self.sized_at, self.aimed = autosize("sidebar", self.win, self.width_goal)
-            # the loop moved the divider itself: the next quiet moment gives the size to compare with (refit)
-            self.layout_seen, self.sized_when = None, time.monotonic()
-
-        self.sizer = threading.Thread(target=work, daemon=True)
-        self.sizer.start()
-
-    def layout_now(self) -> Tuple[int, int]:
-        """(this pane's columns, the tab bar's columns as it last wrote them; 0 = unknown)."""
-        return self.s.size()[1], read_tabs_cols(self.win)
-
     def keep_width(self, width: int) -> None:
-        """The divider was dragged to `width` columns: that is the width now, never undone by refit. Open, it
-        is also kept for the next sidebar of every window (the file "width"); in the strip only until the next state
-        change. A width that cannot be written is still kept here."""
+        """The divider was dragged to `width` columns: that is the width now, never undone by refit. Open, it is also
+        kept for the next sidebar of every window (the file "width"); in the strip only until the next state change.
+        A width that cannot be written is still kept here."""
         if self.mode == "open":
             self.open_width = max(WIDTH_LIMITS[0], min(WIDTH_LIMITS[1], width))
             try:
@@ -4231,43 +4359,60 @@ class Sidebar(Engine):
                 pass
         else:
             self.strip_width = width
-        self.aimed, self.sized_at = self.width_goal(), width
+        self.sized_at = width
+        # dragged past the open width's limits (10-200): the next round sizes the pane to the limit it is kept at
+        self.aimed = self.width_goal() if self.width_goal() == width else -1
 
     def refit(self) -> None:
-        """Size the pane for the current mode. At once when the mode changed since the last loop ended (c; also
-        pressed again while that loop ran, as the loop reads the goal after every step). After the pane changed size,
-        once the size is quiet (REFIT_QUIET): a dragged divider (resize_kind "drag") is kept (keep_width); a window
-        that changed size brings the sidebar back to its width (refit_due). The width is the mode's, or free with
-        MMINI_AUTOSIZE=0. Never while a "z" may still hold the window (zoom_held)."""
-        if not autosize_enabled() or self.zoom_held():
-            return
-        running = self.sizer is not None and self.sizer.is_alive()
-        if running:
+        """Size the pane for the current mode, exactly (tmux). Nothing to do while curses shows the width the last
+        sizing left and the mode wants no other (no tmux call then). Else it looks at tmux's own sizes (curses learns
+        them up to 250 ms late, so its width is never taken for a drag): a new mode (c, o) or a window of another
+        width (tmux spreads that over the panes, the sidebar first) gets the mode's width, capped so the view keeps
+        MIN_VIEW columns; a new width of this pane in a window of the same width is a dragged divider, kept
+        (keep_width), at every step of the drag. Never while the view is zoomed (a resize would end the zoom):
+        looked at again every ZOOM_LOOK seconds until it is not."""
+        if not autosize_enabled():
             return
         goal = self.width_goal()
-        if self.aimed != goal:
-            self.resized = 0.0
-            self.start_autosize()
+        height, width = self.s.size()
+        if goal == self.aimed and width == self.sized_at and height == self.sized_h:
             return
         now = time.monotonic()
-        if not self.resized:
-            if self.layout_seen is None and self.sized_when and now - self.sized_when >= REFIT_QUIET:
-                self.layout_seen = self.layout_now()  # quiet since the loop ended: the size to compare with
+        if self.zoom_look is not None and now - self.zoom_look < ZOOM_LOOK:
             return
-        quiet = now - self.resized
-        if quiet < REFIT_QUIET:
+        pane = own_pane()
+        look = window_look(pane) if pane else None
+        if look is None:
             return
-        self.resized = 0.0
-        before, self.layout_seen = self.layout_seen, self.layout_now()
-        width = self.layout_seen[0]
-        what = resize_kind(before, self.layout_seen)
-        if what == "drag":
-            self.keep_width(width)
-        # in the folded strip the loop mostly ends at Ghostty's 10% limit, above its goal: sized_at keeps that width
-        # from starting the loop again and again (refit_due). It is 0 when a size change from outside stopped the
-        # loop: no limit was found, so the width is looked at again.
-        elif what == "window" and refit_due(width, goal, quiet, running, self.sized_at):
-            self.start_autosize()
+        self.zoom_look = now if look.zoomed else None
+        if look.zoomed:
+            # no drag can happen while zoomed: the first look after it sizes the pane (the window width is
+            # forgotten); until curses shows another size (the zoom's end does) nothing is asked again
+            self.window_width, self.sized_at, self.sized_h = -1, width, height
+            return
+        self.sized_h = look.pane_height
+        if goal == self.aimed and look.width == self.window_width:
+            if look.pane_width != self.sized_at:
+                self.keep_width(look.pane_width)  # the divider was dragged
+            return  # else curses has not caught up with tmux yet: nothing changed
+        self.aimed = goal
+        after = size_pane(pane, cols=max(1, min(goal, look.width - 1 - MIN_VIEW)))
+        if after is not None:
+            self.sized_at, self.window_width = after.pane_width, after.width
+        else:
+            self.sized_at, self.window_width = look.pane_width, look.width
+
+    def watch_menu(self) -> None:
+        """A menu opened with a right click, and any question, go once another pane has the keyboard (a click
+        there): they would stay on screen, with no key to reach them. One tmux call a round, only while such a menu
+        or a question is open."""
+        mouse_menu = self.menu is not None and self.menu.by_mouse
+        pane = own_pane()
+        if (mouse_menu or self.prompt is not None) and pane and pane_active(pane) is False:
+            self.menu = None  # a question too: with the keyboard elsewhere it can no longer be answered
+            if self.prompt is not None:
+                self.prompt = None
+                self.notice.say("cancelled", bad=False)
 
     # loop ------------------------------------------------------------------------------------------------------
     def handle_prompt(self, key: int) -> None:
@@ -4343,7 +4488,7 @@ class Sidebar(Engine):
             if click[2] == 3:  # the right button: the row's menu (none on the separator: it is no row)
                 if item:
                     self.mouse_quiet = time.monotonic() + MOUSE_QUIET
-                    self.open_menu(item)
+                    self.open_menu(item, by_mouse=True)
                 return True
             if what == "keychain":
                 self.mouse_quiet = time.monotonic() + MOUSE_QUIET  # a double click opens one terminal
@@ -4387,8 +4532,7 @@ class Sidebar(Engine):
         """What the loop got from getch (not -1); False to quit. A size change is no key: it keeps the notice and,
         unlike a key or a click, does not show that the pane can be seen again after a zoom."""
         if key == curses.KEY_RESIZE:
-            self.resized = time.monotonic()
-            return True
+            return True  # the next round's refit looks at the new size
         click = None
         if key == curses.KEY_MOUSE:
             event = read_mouse_event()
@@ -4408,15 +4552,28 @@ class Sidebar(Engine):
             click = (event[0], event[1], 1 if event[2] == "press" else 3)
         # a key or a right press ends a drag, the separator back where it was. So would a left press, but ncurses
         # 6.0 reads one during a drag as a move ("lost" above, after DRAG_IDLE)
+        if key == 27:
+            pasted = read_paste(self.s.scr)
+            if pasted is not None:
+                self.drag_y = None
+                self.pasted(pasted)
+                return True
+        if click is None and self.menu is None and self.prompt is None and time.monotonic() < self.forward_until:
+            # typed on after a key closed a right-click menu: meant for the terminal too
+            self.forward_until = time.monotonic() + FORWARD_GRACE
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
+            return True
         if self.drag_y is not None:
             self.drag_y = None
             if key == 27:
                 return True  # esc only ends the drag
         self.notice.clear()
-        self.zoom_seen = zoom_mark(self.win)  # before the key: a "z" now holds the refit again
         if self.help:
             self.close_help(key, click)
             return True
+        if self.prompt is not None and click is not None and time.monotonic() >= self.mouse_quiet:
+            self.prompt = None  # a press elsewhere: the question goes, the press acts (not a double click's second)
+            self.notice.say("cancelled", bad=False)
         if self.prompt is not None:
             self.handle_prompt(key)
             return True
@@ -4425,11 +4582,21 @@ class Sidebar(Engine):
             return True
         return self.handle_key(key, click)
 
+    def pasted(self, text: str) -> None:
+        """A paste reached the sidebar (a file dropped while it had the keyboard): into the open question, else to
+        the terminal in the view."""
+        if self.prompt is not None:
+            self.prompt.text = (self.prompt.text + prompt_text(text))[:200]
+            return
+        self.menu = None
+        if not paste_to_view(text, self.win):
+            self.notice.say("the paste could not be passed on to the terminal")
+
     def run(self) -> None:
         setup_curses(self.s.scr, right=True, motion=True)
         report_drags(self.s.scr, True)  # the separator follows the pointer while it is dragged
+        bracketed_paste(True)  # a paste (a dropped file) is told from typing, and goes on to the view
         write_atomic(self.win / "sidebar.pid", f"{os.getpid()}\n")  # first: the tab bar's engine stops on it
-        self.start_autosize()
         threading.Thread(target=self.refresh_forever, daemon=True).start()
         threading.Thread(target=self.extras_forever, daemon=True).start()
         try:
@@ -4440,6 +4607,7 @@ class Sidebar(Engine):
                 self.draw()
                 self.pane_title.send(self.title)  # after the refresh: curses has written all it holds
                 self.refit()
+                self.watch_menu()
                 key = wait_key(self.s.scr, self.win, seen, last_round)
                 if key is None:
                     return
@@ -4447,6 +4615,7 @@ class Sidebar(Engine):
                     return
         finally:
             report_drags(self.s.scr, False)
+            bracketed_paste(False)
             remove_own_pid(self.win)  # tabs.json stays: the tab bar takes over from it (tab_engine_wanted)
 
 
@@ -4460,16 +4629,22 @@ class TabBar:
         self.state = state
         self.notice = Notice()
         self.layout: Optional[TabLayout] = None
-        self.last_plus = 0.0
-        self.sizer: Optional[threading.Thread] = None  # the resize loop (autosize), while it runs
-        self.sized: Optional[Tuple[int, Optional[int]]] = None  # how the last one ended (resize_loop's result)
-        self.zoom_seen = zoom_mark(win)  # the window's zoom mark at this pane's last key or click
+        self.last_plus = float("-inf")  # monotonic() may start near 0: the first click must count
+        self.sized_rows = -1  # the height the pane had after its last sizing (refit); -1: not sized yet
+        self.rows_aimed = -1  # the height the last sizing aimed at (rows_goal)
+        self.zoom_look: Optional[float] = None  # when refit last found the view zoomed (None: it was not)
         self.engine: Optional[Engine] = None  # this tab bar's own engine, while the window has no sidebar
         self.missing_since: Optional[float] = None  # since when no live sidebar was seen (None: one runs)
         self.alone = False  # no sidebar: the engine runs here and "›" is drawn
-        self.opening: Optional[Tuple[float, str]] = None  # after "›": (when, the tabs id in the panes file then)
-        self.cols_written = -1  # the width last written to tabs.cols
+        self.opening: Optional[float] = None  # after "›": when the sidebar's pane was made (until it runs)
         self.pane_title = PaneTitle()  # this pane's window title (tabs_title)
+        self.menu: Optional[TabMenu] = None  # a tab's menu (a right click on it), drawn on the row below the tabs
+        self.prompt: Optional[Prompt] = None  # its rename, move or close question, on that row
+        self.menu_segs: List[Seg] = []  # the menu's pieces as last drawn (for a click on an entry)
+        self.close_cut = False  # Close's question did not fit when last drawn: y does nothing then
+        self.forward_until = 0.0  # until then keys go on to the view (FORWARD_GRACE after a key closed a menu)
+        self.mouse_quiet = 0.0  # presses until then are a double click's second, dropped while a question opens
+        self.asked_again = 0.0  # when Close last asked again (CLOSE_AGAIN)
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -4497,17 +4672,27 @@ class TabBar:
             s.put(0, 1, clip(notice, width - 3), say)
             s.scr.refresh()
             return
+        if self.prompt is not None and self.prompt.kind == "close":
+            tab_rows = min(tab_rows, TAB_ROWS - 1)  # the rows the bar grows by are the question's (rows_goal)
         layout = layout_tabs([tab_label(t) for t in tabs], active, width - 1 - lead, tab_rows)
         layout = with_opener(layout) if lead else layout
         self.layout = layout
+        marked = self.menu.address if self.menu else (self.prompt.address if self.prompt else "")
         for seg in layout.segs:
             if seg.kind == "tab":
                 attr = curses.A_REVERSE if seg.index == active else 0
+                if marked and tabs[seg.index].get("address") == marked:  # the tab the menu belongs to
+                    attr |= curses.A_UNDERLINE | curses.A_BOLD
                 status = str(tabs[seg.index].get("status") or "")
                 s.put(seg.y, seg.x, seg.text, attr)
                 s.put(seg.y, seg.dot_x, "●" if status else "○", attr | dot_attr(status))
             else:
                 s.put(seg.y, seg.x, seg.text, curses.A_DIM if seg.kind == "sep" else curses.A_BOLD)
+        self.menu_segs = []
+        if marked:
+            self.draw_tab_menu(layout.rows if layout.rows < hint_row else max(0, hint_row), hint_row, width, lead)
+            s.scr.refresh()
+            return
         if 0 <= active and layout.rows < hint_row:  # a spare row between the tabs and the hints
             s.put(layout.rows, 1 + lead, clip(tab_info(tabs[active], width - 3 - lead), width - 3 - lead),
                   curses.A_DIM)
@@ -4521,6 +4706,241 @@ class TabBar:
                 if hint:
                     s.put(hint_row, width - 2 - len(glyph(hint)), hint, curses.A_DIM)
         s.scr.refresh()
+
+    def draw_tab_menu(self, y: int, hint_row: int, width: int, lead: int) -> None:
+        """The open tab menu, or its question, on row y (the row below the tabs, else the last row), and what the
+        keys do on the hint row when that is another row."""
+        s = self.s
+        x0 = 1 + lead
+        room = max(1, width - 2 - x0)
+        s.fill(y, 0)  # on a short pane the row may hold tabs
+        if self.menu is not None:
+            self.menu_segs = [Seg(y, g.x + x0, g.text, g.kind, g.index)
+                              for g in tab_menu_segs(self.menu.label, self.menu.entries, room)]
+            for g in self.menu_segs:
+                s.put(g.y, g.x, g.text, curses.A_BOLD if g.kind == "entry" else curses.A_DIM)
+            hint = TAB_MENU_HINT
+        elif self.prompt is not None:
+            p = self.prompt
+            hint = TAB_ASK.get(p.kind, "")
+            if p.kind == "close":
+                rows = max(1, hint_row - y) if hint_row > y else 1
+                lines = wrap_words(p.title, room)
+                self.close_cut = len(lines) > rows or (hint_row <= y and len(lines) > 0 and
+                                                       text_width(f"{hint} · {p.title}") > room)
+                if self.close_cut:
+                    lines = lines[:max(1, rows)]
+                    hint = "the list is cut: widen the window, or end it in the sidebar · any key cancels"
+                for i, line in enumerate(lines if hint_row > y else [f"{hint} · {p.title}"]):
+                    s.fill(y + i, 0)
+                    s.put(y + i, x0, clip(line, room), curses.A_BOLD)
+            else:
+                typed = f"{p.title} {p.text}_"
+                s.put(y, x0, typed if text_width(typed) <= room else "…" + typed[-max(1, room - 1):], curses.A_BOLD)
+        else:
+            return
+        if 0 <= hint_row != y:
+            s.put(hint_row, x0, clip(hint, room), curses.A_DIM)
+
+    def open_tab_menu(self, snap: dict, address: str) -> None:
+        """A right click on a tab: its menu (tab_menu_entries), on the row below the tabs."""
+        tab = tab_of(snap, address)
+        if tab is None:
+            return
+        self.prompt = None
+        self.menu = TabMenu(address, tab_label(tab), tab_menu_entries(str(snap.get("kind") or "")))
+
+    def close_menu(self) -> None:
+        """The menu or its question went without an action: the keyboard back to the shown terminal."""
+        self.menu = self.prompt = None
+        focus_view(self.win)
+
+    def handle_menu(self, key: int, snap: Optional[dict], click: Optional[Tuple[int, int, int]]) -> None:
+        """While a tab's menu is open: a press on an entry runs it; a right press on a tab opens that tab's menu;
+        any other press closes the menu. A key closes it too, and goes on to the terminal with the keys typed after
+        it (they were meant for the terminal; none of them may pick an entry); esc only closes."""
+        menu = self.menu
+        if key != curses.KEY_MOUSE:  # typed after a right click: meant for the terminal
+            self.menu = self.prompt = None
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
+            self.forward_until = time.monotonic() + FORWARD_GRACE
+            return
+        if menu is None or snap is None or click is None:
+            self.close_menu()
+            return
+        hit = hit_test(self.layout, click[0], click[1]) if self.layout else None
+        index = menu_entry_at([g for g in self.menu_segs if g.y == click[1]], click[0])
+        if click[2] == 3 and hit and hit[0] == "tab" and hit[1] < len(snap["tabs"]):
+            self.open_tab_menu(snap, str(snap["tabs"][hit[1]]["address"]))
+        elif click[2] == 1 and index is not None and index < len(menu.entries):
+            self.run_tab_entry(menu.entries[index], snap)
+        else:
+            self.close_menu()
+
+    def watch_menu(self) -> None:
+        """A menu or question goes once another pane has the keyboard (a click there): it would stay on screen, with
+        no key to close it. One tmux call a round, only while one is open."""
+        pane = own_pane()
+        if (self.menu is not None or self.prompt is not None) and pane and pane_active(pane) is False:
+            if self.prompt is not None and self.prompt.kind == "close":
+                self.notice.say("not closed", bad=False)
+            self.menu = self.prompt = None
+
+    def run_tab_entry(self, entry: Entry, snap: dict) -> None:
+        """What a tab menu entry does. Rename, move and close ask first, on the menu's row; this pane takes the
+        keyboard for the answer."""
+        menu = self.menu
+        self.menu = None
+        tab = tab_of(snap, menu.address) if menu else None
+        if menu is None or tab is None:
+            self.notice.say("that terminal has ended")
+            focus_view(self.win)
+            return
+        label = str(tab.get("label") or menu.address)
+        self.mouse_quiet = time.monotonic() + MOUSE_QUIET
+        if entry.action == "new":
+            self.plus(snap)
+            focus_view(self.win)
+            return
+        if entry.action == "rename":
+            self.prompt = Prompt("rename", f"rename {label} to:", label, address=menu.address,
+                                 key="term:" + menu.address, own=str(tab.get("own") or label))
+        elif entry.action == "move":
+            self.prompt = Prompt("move", f"move {label} to space:", address=menu.address)
+        elif entry.action == "close":
+            self.prompt = close_question(tab)
+        else:
+            return
+        focus_pane("tabs", self.win)
+
+    def handle_prompt(self, key: int, snap: Optional[dict], shown: str) -> None:
+        """Keys while a tab's question is open. Close: CLOSE_YES closes, any other key or a press cancels. Rename and
+        move: typed text (plain ASCII), backspace, ctrl+U clears, enter does it, esc or a press cancels."""
+        prompt = self.prompt
+        if prompt is None:
+            return
+        if prompt.kind == "close":
+            if key not in (ord(CLOSE_YES), ord(CLOSE_YES.upper())) or snap is None:
+                self.notice.say("not closed", bad=False)
+                self.close_menu()
+                return
+            tab = tab_of(snap, prompt.address)
+            if tab is None:
+                self.notice.say("that terminal has ended")
+                self.close_menu()
+                return
+            if self.close_cut or time.monotonic() - self.asked_again < CLOSE_AGAIN:
+                return  # the list is not all on screen, or it changed a moment ago: y does nothing yet
+            again = close_question(tab)
+            if set(again.data) != set(prompt.data):  # what ends changed since the question: ask again
+                again.title = "changed: " + again.title
+                self.prompt = again
+                self.asked_again = time.monotonic()
+                return
+            self.prompt = None
+            self.close_tabs(prompt, snap)
+            return
+        if key in (curses.KEY_ENTER, 10, 13):
+            self.prompt = None
+            if prompt.kind == "rename" and snap is not None:
+                self.rename_tab(prompt, snap)
+            elif prompt.kind == "move":
+                self.move_tab(prompt)
+            focus_view(self.win)
+        elif key in (27, curses.KEY_MOUSE):
+            self.close_menu()
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            prompt.text = prompt.text[:-1]
+        elif key == 21:  # ctrl+U: clear the line (a rename starts with the current name filled in)
+            prompt.text = ""
+        elif 32 <= key < 127 and len(prompt.text) < 200:
+            prompt.text += chr(key)
+
+    def rename_tab(self, prompt: Prompt, snap: dict) -> None:
+        """A display name for the terminal (names.json), as the sidebar's rename: refused when another terminal
+        shows it already."""
+        taken = [name for address, name in snapshot_names(snap).items() if address != prompt.address]
+        what, value = plan_rename(prompt.text, prompt.own, taken)
+        if what == "bad":
+            self.notice.say("rename: " + value)
+            return
+        try:
+            change_names({prompt.key: value}, self.state)
+        except OSError as exc:
+            self.notice.say("rename: " + describe_error(exc))
+
+    def move_tab(self, prompt: Prompt) -> None:
+        """The terminal's label "space" (as the sidebar's m); the engine reads labels again at once."""
+        name = prompt.text.strip()
+        if not name:
+            return
+        if not valid_space_name(name):
+            self.notice.say("not a usable space name")
+            return
+        try:
+            run_hc("label", prompt.address, "space=" + name)
+        except Exception as exc:  # noqa: BLE001
+            self.notice.say("move: " + describe_error(exc))
+            return
+        poke_engine(self.win, full=True)
+
+    def close_tabs(self, prompt: Prompt, snap: dict) -> None:
+        """End the tab's terminal and those that end with it (end_terminal, as the sidebar's End terminal), drop
+        their display names, then show the next tab when the shown one closed (the one shown after the ends: a
+        pick meanwhile wins)."""
+        addresses = prompt.data
+        self.notice.say(f"closing {len(addresses)} terminal{'s' if len(addresses) != 1 else ''}…", bad=False)
+        self.draw(snap, current_target(self.win))
+        failed: List[str] = []
+        for address in addresses:
+            try:
+                end_terminal(address)
+            except Exception as exc:  # noqa: BLE001 - the others still end
+                failed.append(f"{address}: {describe_error(exc)}")
+        try:
+            change_names({"term:" + a: "" for a in addresses}, self.state)
+        except OSError:
+            pass
+        poke_engine(self.win)
+        order = [str(t.get("address", "")) for t in snap["tabs"]]
+        shown = current_target(self.win)
+        after = tab_after_close(order, addresses, shown)
+        if after != shown:
+            show(after, self.win, tab_title(snap, after) if after else NO_TITLE)
+        self.notice.clear()
+        if failed:
+            self.notice.say(f"close: {len(failed)} of {len(addresses)} failed, " + failed[0])
+        focus_view(self.win)
+
+    def check_ask(self, snap: Optional[dict], shown: str) -> None:
+        """A right click in the view (mmini.tmux.conf writes the file "ask"): the shown terminal's tab menu, here,
+        with the keyboard, as a right click on its tab."""
+        ask = self.win / "ask"
+        if not ask.exists():
+            return
+        word = read_text(ask)
+        try:
+            ask.unlink()
+        except OSError:
+            pass
+        if word != "menu":
+            return
+        if snap is None or tab_of(snap, shown) is None:
+            self.notice.say("nothing shown", bad=False)
+            return
+        self.notice.clear()
+        self.open_tab_menu(snap, shown)
+        focus_pane("tabs", self.win)
+
+    def rows_goal(self) -> int:
+        """TAB_ROWS; while Close's question is open, as many rows as it needs (up to CLOSE_ROWS), so the whole list
+        of what ends is on screen before y."""
+        p = self.prompt
+        if p is None or p.kind != "close":
+            return TAB_ROWS
+        room = max(1, self.s.size()[1] - 3 - (1 if self.alone else 0))
+        tab_rows = self.layout.rows if self.layout is not None else 1
+        return max(TAB_ROWS, min(CLOSE_ROWS, tab_rows + len(wrap_words(p.title, room)) + 1))
 
     def step(self, snap: dict, shown: str, delta: int) -> None:
         """Previous / next tab. At either end nothing happens: showing the shown tab again would only make the view
@@ -4551,9 +4971,22 @@ class TabBar:
         show(address, self.win, window_title(address.rsplit("/", 1)[-1], str(snap.get("server") or "")))
 
     def handle_key(self, key: int, snap: Optional[dict], shown: str,
-                   click: Optional[Tuple[int, int]] = None) -> None:
-        """One key or press (`click`: the left press on_key read already). Without a snapshot (still loading) only
-        z, enter and bringing the sidebar back work."""
+                   click: Optional[Tuple[int, int, int]] = None) -> None:
+        """One key or press (`click`: the press on_key read already, (x, y, 1 left or 3 right)). Without a snapshot
+        (still loading) only z, enter and bringing the sidebar back work. A tab's menu or question takes every key
+        while it is open."""
+        if key == curses.KEY_MOUSE and click is None:
+            click = read_mouse()
+            if click is None:
+                return
+        if self.prompt is not None:
+            if key == curses.KEY_MOUSE and time.monotonic() < self.mouse_quiet:
+                return  # the second press of the double click that opened the question
+            self.handle_prompt(key, snap, shown)
+            return
+        if self.menu is not None:
+            self.handle_menu(key, snap, click)
+            return
         if key in (curses.KEY_LEFT, ord("h")):
             if snap is not None:
                 self.step(snap, shown, -1)
@@ -4561,9 +4994,9 @@ class TabBar:
             if snap is not None:
                 self.step(snap, shown, 1)
         elif key in (curses.KEY_ENTER, 10, 13, curses.KEY_DOWN):
-            focus_view(False, self.win)
+            focus_view(self.win)
         elif key in (ord("z"), ord("Z")):
-            text = zoom_view(False, self.win)
+            text = zoom_view(self.win)
             if text:
                 self.notice.say(text)
         elif key in (ord("c"), ord("C"), ord("o"), ord("O")):
@@ -4571,18 +5004,20 @@ class TabBar:
                 self.open_sidebar(time.monotonic())
         elif key == ord(HELP_KEY):
             self.notice.say(tab_keys(self.alone), bad=False)
-        elif key == curses.KEY_MOUSE:
-            click = click if click is not None else read_click()
-            hit = hit_test(self.layout, click[0], click[1]) if click and self.layout else None
-            if hit and hit[0] == "open":
+        elif key == curses.KEY_MOUSE and click is not None:
+            hit = hit_test(self.layout, click[0], click[1]) if self.layout else None
+            if click[2] == 3:  # the right button: a tab's menu
+                if snap is not None and hit and hit[0] == "tab" and hit[1] < len(snap["tabs"]):
+                    self.open_tab_menu(snap, str(snap["tabs"][hit[1]]["address"]))
+            elif hit and hit[0] == "open":
                 self.open_sidebar(time.monotonic())
             elif snap is not None and hit and hit[0] == "tab" and hit[1] < len(snap["tabs"]):
                 address = str(snap["tabs"][hit[1]]["address"])
                 show(address, self.win, tab_title(snap, address))
-                focus_view(False, self.win)
+                focus_view(self.win)
             elif snap is not None and hit and hit[0] == "plus":
                 self.plus(snap)
-                focus_view(False, self.win)
+                focus_view(self.win)
 
     # the window without a sidebar ------------------------------------------------------------------------------
     def watch_sidebar(self, now: float) -> None:
@@ -4612,123 +5047,126 @@ class TabBar:
             self.engine = None
 
     def open_sidebar(self, now: float) -> None:
-        """c or a click on "›": the sidebar back, open and at full height. "open" is written first (the new sidebar
-        starts with it), then rebuild_script runs on its own (it outlives this pane), and this tab bar waits for the
-        new ids (check_opening). Without the view's id nothing can be split: a notice only."""
+        """c or a click on "›": the sidebar back, open and at full height (split_sidebar, one tmux call). "open" is
+        written first, so the new sidebar starts with it. Until the new sidebar runs (check_opening) another "›" does
+        nothing, so a double click makes one sidebar."""
         if self.opening is not None:
-            return  # one rebuild at a time
-        panes = read_panes(self.win)
-        vid = safe_id(panes.get("view", ""))
-        if not vid:
-            self.notice.say("could not open the sidebar")
             return
         write_sidebar_state("open", self.state)
-        self.opening = (now, panes.get("tabs", ""))
-        ghostty(rebuild_script(vid, self.win, BASE, mmini_env(os.environ)), detach=True)
-
-    def check_opening(self, now: float) -> bool:
-        """After "›": True once the panes file names a new tab bar (this one may end: its pane closes and the new
-        sidebar gets the full height). After OPEN_TIMEOUT seconds without that, this tab bar stays and says so;
-        the state goes back to "hidden" unless a sidebar did start in this window (then it is on screen)."""
-        if self.opening is None:
-            return False
-        started, tabs_before = self.opening
-        verdict = opening_verdict(tabs_before, read_panes(self.win).get("tabs", ""), now - started)
-        if verdict == "done":
-            return True
-        if verdict == "failed":
-            self.opening = None
-            if not sidebar_alive(self.win):
-                write_sidebar_state("hidden", self.state)
+        if not split_sidebar(self.win, BASE, mmini_env(os.environ), read_open_width(self.state)):
+            write_sidebar_state("hidden", self.state)
             self.notice.say("could not open the sidebar")
-        return False
+            return
+        self.opening = now
 
-    def note_width(self) -> None:
-        """Write this pane's width to tabs.cols when it changed: the sidebar compares it with its own to tell a
-        dragged divider from a resized window (resize_kind)."""
-        cols = self.s.size()[1]
-        if cols != self.cols_written:
-            try:
-                write_atomic(self.win / "tabs.cols", f"{cols}\n")
-                self.cols_written = cols
-            except OSError:
-                pass
+    def check_opening(self, now: float) -> None:
+        """After "›": done once the new sidebar runs (its pid file). A sidebar that has not started within
+        OPEN_TIMEOUT seconds is reported, and the state goes back to "hidden"."""
+        if self.opening is None:
+            return
+        if sidebar_alive(self.win):
+            self.opening = None
+        elif now - self.opening >= OPEN_TIMEOUT:
+            self.opening = None
+            write_sidebar_state("hidden", self.state)
+            self.notice.say("could not open the sidebar")
 
-    def start_autosize(self) -> None:
-        def work() -> None:
-            self.sized = autosize("tabs", self.win)
-
-        self.sizer = threading.Thread(target=work, daemon=True)
-        self.sizer.start()
-
-    def resize_again(self) -> None:
-        """The start-up resize loop once more when it was cut short (loop_cut_short): a "z" in the first seconds
-        would otherwise leave the bar at up to half the view until the next start. Not while a loop runs, nor while
-        a "z" may still hold the window (as Sidebar.zoom_held): its steps would be dropped and look like the limit."""
-        running = self.sizer is not None and self.sizer.is_alive()
-        held = zoom_mark(self.win) != self.zoom_seen
-        if autosize_enabled() and not running and not held and self.sized is not None and loop_cut_short(*self.sized):
-            self.start_autosize()
+    def refit(self) -> None:
+        """Keep the pane TAB_ROWS rows high, exactly (tmux): a resized window is spread over the panes by tmux, and a
+        dragged line under the tabs is put back. No tmux call while the height is the one the last sizing left.
+        Never while the view is zoomed (a resize would end the zoom): looked at again every ZOOM_LOOK seconds until
+        it is not."""
+        if not autosize_enabled():
+            return
+        goal = self.rows_goal()
+        if self.s.size()[0] == self.sized_rows and goal == self.rows_aimed:
+            return
+        now = time.monotonic()
+        if self.zoom_look is not None and now - self.zoom_look < ZOOM_LOOK:
+            return
+        pane = own_pane()
+        look = window_look(pane) if pane else None
+        if look is None:
+            return
+        self.zoom_look = now if look.zoomed else None
+        if look.zoomed:
+            self.sized_rows, self.rows_aimed = self.s.size()[0], goal  # nothing asked again until the size changes
+            return
+        if look.pane_height == goal:  # tmux has it right; curses has not caught up yet
+            self.sized_rows, self.rows_aimed = goal, goal
+            return
+        after = size_pane(pane, rows=goal)
+        self.sized_rows = after.pane_height if after is not None else look.pane_height
+        self.rows_aimed = goal
 
     def on_key(self, key: int, snap: Optional[dict], shown: str) -> None:
-        """What the loop got from getch (not -1). A size change is no key: it does not show that the pane can be
-        seen again after a zoom, and a loop started on it would fight a window that is still being resized."""
+        """What the loop got from getch (not -1). A size change is no key: the next round's refit looks at it. A
+        paste (a dropped file) goes into the open question, else on to the view."""
         if key == curses.KEY_RESIZE:
             self.notice.clear()
             return
+        if key == 27:
+            pasted = read_paste(self.s.scr)
+            if pasted is not None:
+                if self.prompt is not None and self.prompt.kind != "close":
+                    self.prompt.text = (self.prompt.text + prompt_text(pasted))[:200]
+                else:
+                    self.menu = self.prompt = None
+                    if not paste_to_view(pasted, self.win):
+                        self.notice.say("the paste could not be passed on to the terminal")
+                return
+        if key not in (curses.KEY_MOUSE, curses.KEY_RESIZE) and self.menu is None and self.prompt is None \
+                and time.monotonic() < self.forward_until:
+            self.forward_until = time.monotonic() + FORWARD_GRACE  # typed on after a key closed the menu
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
+            return
         click = None
         if key == curses.KEY_MOUSE:
-            click = read_click()
+            click = read_mouse()
             if click is None:
                 return  # a button let go: its press already acted, and the notice it set stays
         self.notice.clear()
-        self.zoom_seen = zoom_mark(self.win)  # before the key: a "z" now holds the loop
         self.handle_key(key, snap, shown, click)
-        self.resize_again()
 
     def run(self) -> None:
-        setup_curses(self.s.scr)
-        self.start_autosize()
+        setup_curses(self.s.scr, right=True)  # the right button: a tab's menu
+        self.s.scr.refresh()
+        bracketed_paste(True)  # a paste (a dropped file) is told from typing, and goes on to the view
         try:
             while True:
                 now = time.monotonic()
                 seen = pick_stamp(self.win)  # before reading: a pick meanwhile is not missed
                 self.watch_sidebar(now)
-                if self.check_opening(now):
-                    return  # the new tab bar is there: this pane closes (exit 0)
+                self.check_opening(now)
                 snap = read_snapshot(self.win)
                 shown = current_target(self.win)
+                self.check_ask(snap, shown)
                 self.draw(snap, shown)
                 self.pane_title.send(tabs_title(snap, shown))  # after the refresh: curses has written all it holds
-                self.note_width()
+                self.refit()
+                self.watch_menu()
                 key = wait_key(self.s.scr, self.win, seen, now)
                 if key is None:
                     return
                 if key != -1:
                     self.on_key(key, snap, shown)
         finally:
+            bracketed_paste(False)
             self.stop_engine()
 
 
-def start_hidden(win: Path = WINDOW) -> int:
-    """A sidebar started while the state is "hidden" (the launcher always makes three panes) ends at once, without
-    drawing; Ghostty closes its pane. First it waits (at most PANES_WAIT seconds) for the launcher's panes file: the
-    launcher reads this pane's id after its two splits, and a pane already gone by then would stop its script before
-    it writes the ids. The keyboard goes to the view a second later, after Ghostty's own focus moves for the new
-    splits (the launcher's last step, focus on this pane, falls back to the view as well)."""
-    if ghostty_enabled():
-        deadline = time.monotonic() + PANES_WAIT
-        while time.monotonic() < deadline and not (win / "panes").exists():
-            time.sleep(0.05)
-    ghostty("delay 1\n" + focus_script(True, win), detach=True)
+def start_hidden() -> int:
+    """A sidebar started while the state is "hidden" (start.sh always makes three panes) ends at once, without
+    drawing: tmux closes its pane, and the tab bar and the view take its columns. start.sh gives the view the
+    keyboard."""
     return 0
 
 
-# The pane's title "mmini" (OSC 2), then an empty working directory (OSC 7 with no URL). Ghostty shows the focused
-# pane's folder as an icon next to the window title (macOS proxy icon); the login shell the launcher types into
-# reported its home folder before this program started. An empty OSC 7 makes Ghostty (1.3, stream_handler
-# reportPwd) forget it, and the icon goes. The title comes first: an empty OSC 7 also clears the title while no
-# title was seen. Sent once, at the start; later titles (PaneTitle) are OSC 2 alone, so no OSC 7 ever follows them.
+# The pane's title "mmini" (OSC 2), then an empty working directory (OSC 7 with no URL), sent once at the start;
+# later titles (PaneTitle) are OSC 2 alone. In an mmini window tmux keeps both for the pane (the window shows the
+# title of the pane with the keyboard; start.sh cleared Ghostty's folder icon). Run straight in Ghostty, the empty
+# OSC 7 makes it forget the shell's folder (1.3, stream_handler reportPwd), so no folder icon shows; the title goes
+# first, as an empty OSC 7 also clears a title while none was seen.
 PANE_TITLE = f"\033]2;{NO_TITLE}\007\033]7;\007"
 
 
