@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""mmini: sidebar and tab bar for herdr-core (`hc`) terminals, in one Ghostty window.
+"""hcG-UI: sidebar and tab bar for herdr-core (`hc`) terminals, in one Ghostty window.
 
-herdr-core draws nothing itself, so the window runs a tmux of its own (start.sh, mmini.tmux.conf) with three panes:
-this file draws two of them ("python3 mmini.py sidebar" on the left, "python3 mmini.py tabs" on top), the third is
-the view: "python3 mmini.py view" (relay_view), a relay around view.sh, which runs `hc attach` on the terminal the
+herdr-core draws nothing itself, so the window runs a tmux of its own (start.sh, hcgui.tmux.conf) with three panes:
+this file draws two of them ("python3 hcgui.py sidebar" on the left, "python3 hcgui.py tabs" on top), the third is
+the view: "python3 hcgui.py view" (relay_view), a relay around view.sh, which runs `hc attach` on the terminal the
 other two picked. The relay passes every byte on unchanged, except a file dropped (a bracketed paste of paths of this
 Mac) while a terminal of another machine is shown: it sends the files there (`hc put`) and pastes their paths there
 (ViewRelay). tmux passes a click to the pane under the pointer at once, so no click is spent on moving the keyboard
@@ -12,42 +12,45 @@ first; after a pick the keyboard goes to the view (focus_view).
 The sidebar lists, top to bottom, "needs you" (agents blocked or in error, and agents done that were not shown
 since; only while there is one), "spaces" (projects on the home machine), "servers" (every machine
 `hc machine ls` knows, the home machine included, plus "this Mac" while it runs terminals; each drawn as user@host of
-its ssh target), "dev servers" (node programs, or MMINI_DEV_PROGRAM, of the home core's own account listening on
-the home machine, opened in this Mac's browser; only while there is one) and "agents". The servers section is hidden until shown (v, or "Show servers" in any row menu;
+its ssh target), "dev servers" (node programs, or HCGUI_DEV_PROGRAM, of the home core's own account listening on
+the home machine, opened in this Mac's browser; only while there is one) and "agents" (by space and server: a
+heading over two or more, an agent alone in its group on its own row with the group's name dim after its own; Claude
+Code typed in a shell counts as Claude Code, with_foreground).
+The servers section is hidden until shown (v, or "Show servers" in any row menu;
 the file "servers"); the agents (g) and the dev servers (w) are shown until hidden (the files "agents",
 "devservers"). While the home machine's login keychain is locked (checked through its core at the start, then every
-4 hours; MMINI_KEYCHAIN=0 turns the check off), a red line at the bottom says so; a click on it shows the terminal
+4 hours; HCGUI_KEYCHAIN=0 turns the check off), a red line at the bottom says so; a click on it shows the terminal
 "unlock" there (or opens one). Above it, in the open sidebar, one line per Claude subscription: how much of its
 5-hour window is used (no reset time), from the files usage.sh (Claude Code's status line command there) saves
-on the home machine, read through its core every 10 minutes (MMINI_USAGE=0 turns it off). A right click on a line
+on the home machine, read through its core every 10 minutes (HCGUI_USAGE=0 turns it off). A right click on a line
 opens that subscription's menu: Rename (a display name, names.json "account:<name>", also drawn in the "?" list's
 marks) and Hide usage. They are shown until hidden (u, or "Hide usage"; "Show usage" in any row menu then; the file
 "usagelines", as "usage" is usage.sh's folder): hidden, they are not drawn and not checked. A Claude Code agent's
-name can carry a mark for the login it bills: its label "account" looked up in MMINI_MARKS ("personal=¹,work=²"; a
-value not in it gets ³; no setting, no marks), and with no label MMINI_SHARED_MARK (³) on a server whose ssh user
-is MMINI_SHARED_USER.
+name can carry a mark for the login it bills: its label "account" looked up in HCGUI_MARKS ("personal=¹,work=²"; a
+value not in it gets ³; no setting, no marks), and with no label HCGUI_SHARED_MARK (³) on a server whose ssh user
+is HCGUI_SHARED_USER.
 The tab bar shows one tab per terminal of the current space or server. A terminal's space is its herdr-core label
 "space", else its parent's space, else the repo folder below ~/dev, else the last folder of its cwd. In the code a
 server is still a "rig" (Group.kind, names.json keys "rig:<machine>"); only what is drawn says "server".
 
-The sidebar has three states: open (MMINI_WIDTH columns), strip (folded to status dots and the start of each
+The sidebar has three states: open (HCGUI_WIDTH columns), strip (folded to status dots and the start of each
 name) and hidden (its program ends, tmux closes its pane, and the tab bar and the view take the full width). The
 data side (Engine: `hc ls`, `hc get`, the current group, last.json, the tab snapshot) runs in the sidebar; while a
 window has no live sidebar the tab bar runs it itself, so its tabs stay fresh. The tab bar brings the sidebar back
 at full height with one tmux split (split_sidebar).
 
-The panes talk through files. Per window ($MMINI_WINDOW, set by the launcher app; without it the shared folder):
+The panes talk through files. Per window ($HCGUI_WINDOW, set by the launcher app; without it the shared folder):
 target, gen, view.pid, view.loop, tabs.json, poke, poke.full (the engine asks every label again), ask (requests to
 the tab bar, one per line: "menu", a right click in the view, opens the shown terminal's menu; "notice <text>", from
 the view relay, a drop it could not send), panes (tmux pane ids: side=, tabs=, view=), sidebar.pid,
-title (the window title of the shown terminal, for view.sh), terminfo (xterm-mmini, compiled by start.sh).
-Shared by all windows ($MMINI_STATE): group, last.json, names.json (display names: {"space:dev": "Main",
+title (the window title of the shown terminal, for view.sh), terminfo (xterm-hcgui, compiled by start.sh).
+Shared by all windows ($HCGUI_STATE): group, last.json, names.json (display names: {"space:dev": "Main",
 "rig:guest": "Guest", "term:mini/t5": "web", "account:work": "Team"}), sidebar ("open", "strip" or "hidden": how
 the next sidebar starts; while it does not exist, the old file "collapsed" is read instead, 1 = strip), servers
 ("shown" or "hidden", default hidden), agents, devservers and usagelines (the same words, default shown), width (the
 open sidebar's width once its divider was dragged), split (where the separator above the agents was moved to; no
 file: the automatic layout), seen.json (address -> hc's turn at which that terminal was last shown while done:
-"needs you" drops it). So a second mmini window never switches or signals the first one's view.
+"needs you" drops it). So a second hcG-UI window never switches or signals the first one's view.
 
 Rename, create, delete. A rename is a display name kept in names.json: the space's label and folder, the machine's
 hc name and every address stay as they are (herdr-core 0.1.21 has no way to rename a terminal, so terminals get a
@@ -88,7 +91,7 @@ the new width and, when open, writes it to "width" for the next window. A resize
 brings the sidebar back to its width and the tab bar to TAB_ROWS rows. start.sh clears the login shell's folder (an
 empty OSC 7), so Ghostty shows no folder icon next to the window title. tmux shows the title of the pane with the
 keyboard (set-titles): the sidebar, the tab bar and view.sh each set it to the shown terminal and its server ("web ·
-me@mini"; nothing shown: "mmini"), each time it changes: the engine writes it to the window's file "title"
+me@mini"; nothing shown: "hcG-UI"), each time it changes: the engine writes it to the window's file "title"
 (address, then title) and to the snapshot; view.sh sets it before each attach and again after one.
 
 Switching is quick: a click acts on the press of the button (no mouse interval, so ncurses holds nothing back; the
@@ -96,10 +99,10 @@ release is dropped, unless it ends a drag of the separator), the other pane sees
 (pick_stamp), the attach to end is found by asking the kernel instead of ps (proc_info), and view.sh no longer wipes
 the pane between two attaches.
 
-Runs on Python 3.9, standard library only. Settings (environment): MMINI_HC, MMINI_STATE, MMINI_WINDOW,
-MMINI_FIRST (the home machine; unset: the only machine `hc machine ls` knows, else this Mac), MMINI_WIDTH (the open
-width until a divider is dragged), MMINI_NARROW (width of the folded strip, default 6), MMINI_MARKS, MMINI_SHARED_USER, MMINI_SHARED_MARK (account marks), MMINI_DEV_PROGRAM (default node),
-MMINI_KEYCHAIN=0, MMINI_USAGE=0, MMINI_BROWSER=0, MMINI_AUTOSIZE=0, MMINI_AUTOOPEN=0, MMINI_TMUX=0 (no tmux calls at
+Runs on Python 3.9, standard library only. Settings (environment): HCGUI_HC, HCGUI_STATE, HCGUI_WINDOW,
+HCGUI_FIRST (the home machine; unset: the only machine `hc machine ls` knows, else this Mac), HCGUI_WIDTH (the open
+width until a divider is dragged), HCGUI_NARROW (width of the folded strip, default 6), HCGUI_MARKS, HCGUI_SHARED_USER, HCGUI_SHARED_MARK (account marks), HCGUI_DEV_PROGRAM (default node),
+HCGUI_KEYCHAIN=0, HCGUI_USAGE=0, HCGUI_BROWSER=0, HCGUI_AUTOSIZE=0, HCGUI_AUTOOPEN=0, HCGUI_TMUX=0 (no tmux calls at
 all, for the tests).
 """
 
@@ -125,6 +128,7 @@ import sys
 import tempfile
 import termios
 import threading
+import traceback
 import time
 import tty
 import unicodedata
@@ -141,20 +145,27 @@ def env_int(name: str, default: int, low: int, high: int) -> int:
         return default
 
 
-HC = os.environ.get("MMINI_HC") or str(Path.home() / ".local/bin/hc")
-STATE = Path(os.environ.get("MMINI_STATE") or str(Path.home() / ".local/state/mmini"))  # shared: group, last.json
-WINDOW = Path(os.environ.get("MMINI_WINDOW") or str(STATE))  # this window's files (see the docstring)
-FIRST = (os.environ.get("MMINI_FIRST") or "").strip()  # the home machine; "" = chosen by first_machine
-WIDTH = env_int("MMINI_WIDTH", 30, 10, 200)
-NARROW = env_int("MMINI_NARROW", 6, 3, 200)  # the folded sidebar
+HC = os.environ.get("HCGUI_HC") or str(Path.home() / ".local/bin/hc")
+STATE = Path(os.environ.get("HCGUI_STATE") or str(Path.home() / ".local/state/hcgui"))  # shared: group, last.json
+WINDOW = Path(os.environ.get("HCGUI_WINDOW") or str(STATE))  # this window's files (see the docstring)
+FIRST = (os.environ.get("HCGUI_FIRST") or "").strip()  # the home machine; "" = chosen by first_machine
+WIDTH = env_int("HCGUI_WIDTH", 30, 10, 200)
+NARROW = env_int("HCGUI_NARROW", 6, 3, 200)  # the folded sidebar
 LOCAL = "this Mac"
 REFRESH_SECONDS = 2.0  # hc ls
 INFO_SECONDS = 30.0  # hc get of every terminal (labels, parents)
 NOTICE_SECONDS = 6.0
 NOTICE_LINES = 3  # a long notice (the keychain warning) wraps onto at most this many lines
 SNAPSHOT_MAX_AGE = 20.0
-SNAPSHOT_BEAT = 5.0
+SNAPSHOT_BEAT = 5.0  # wall clock, as read_snapshot ages the file by it (a slept laptop wakes with an old one)
+# The extras' timers (keychain, usage, dev servers): a clock that keeps counting while the Mac sleeps. On macOS
+# time.monotonic() stops then (mach_absolute_time), so a check due overnight came hours after waking.
+STEADY_CLOCK = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
 PLAIN_PROGRAMS = ("zsh", "bash", "sh", "fish", "login")
+# hc's word for Claude Code: only its terminals get an account mark, the tab bar names it "Claude Code", and a shell
+# with Claude Code in front (typed there: hc names the shell) counts as one (with_foreground)
+CLAUDE_AGENT = "claude-code"
+HC_CLAUDE = "claude"  # hc's word for a Claude Code it started (`hc run claude`) before its first status report
 STATUS_ORDER = ("blocked", "error", "working", "done", "idle")
 # status -> colour pair (1 red, 2 green, 3 yellow, 4 blue); anything else is dim.
 STATUS_COLOR = {"blocked": 1, "error": 1, "working": 3, "done": 2, "idle": 4}
@@ -181,7 +192,7 @@ LOOP_WAIT_MS = 50
 ROUND_SECONDS = 0.25
 OPEN_TIMEOUT = 10.0  # seconds the tab bar waits for the sidebar it brought back ("›") to run
 BASE = Path(os.path.abspath(__file__)).parent  # the folder of this file: the panes a rebuild makes start it there
-ENV_NAME = re.compile(r"MMINI_[A-Z0-9_]+")
+ENV_NAME = re.compile(r"HCGUI_[A-Z0-9_]+")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -218,13 +229,14 @@ class Term:
 @dataclass(frozen=True)
 class Info:
     """What only `hc get` knows about a terminal: its "space" label, its parent's address ("" = none), whether it
-    ends with that parent (hc's die_with_parent; unknown counts as yes, so a warning is never left out), and its
-    "account" label."""
+    ends with that parent (hc's die_with_parent; unknown counts as yes, so a warning is never left out), its
+    "account" label, and the program in front of it when hcG-UI knows that program (parse_foreground)."""
 
     space: str = ""
     parent: str = ""
     dies: bool = True
     account: str = ""  # its label "account" (which Claude subscription it runs on; account_mark)
+    foreground: str = ""  # CLAUDE_AGENT while Claude Code is in front (with_foreground), else ""
 
 
 @dataclass
@@ -281,6 +293,12 @@ def machine_of(address: str) -> str:
     return address.rsplit("/", 1)[0] if "/" in address else LOCAL
 
 
+def printable(text: str) -> str:
+    """`text` with every unprintable character (a control, escape, line break, format mark) as a space: hc passes on
+    names and folders as typed, and curses draws a line break as a jump to the next row, an escape as "^["."""
+    return text if text.isprintable() else "".join(c if c.isprintable() else " " for c in text)
+
+
 def parse(raw: str) -> List[Term]:
     """Terminals from `hc ls --json` output (name, status and cwd may be null or missing). Anything that is not
     the expected shape raises ValueError, so the caller shows one red line instead of crashing."""
@@ -295,15 +313,56 @@ def parse(raw: str) -> List[Term]:
         address = str(t.get("address") or "")
         if address:
             turn = t.get("turn")
-            terms.append(Term(address, machine_of(address), str(t.get("name") or ""), str(t.get("agent") or ""),
-                              str(t.get("status") or ""), str(t.get("cwd") or ""),
+            terms.append(Term(address, machine_of(address), printable(str(t.get("name") or "")),
+                              printable(str(t.get("agent") or "")), printable(str(t.get("status") or "")),
+                              str(t.get("cwd") or ""),
                               turn=turn if isinstance(turn, int) and not isinstance(turn, bool) and turn >= 0 else 0))
     return terms
 
 
+SCRIPT_RUNNERS = ("node", "bun")  # what runs an npm install of Claude Code (its `claude` link starts with node)
+CLAUDE_PACKAGE = ("@anthropic-ai", "claude-code")  # npm's folder of Claude Code, which holds its cli.js
+CLAUDE_SCRIPTS = ("cli.js", "cli.mjs")
+VERSION_NAME = re.compile(r"[0-9]+(\.[0-9]+)+")  # a native build's file name: its version ("2.1.331")
+
+
+def claude_argv(argv: Sequence[str]) -> bool:
+    """Is `argv` the command line of Claude Code? Its process name is its version ("2.1.331", the native build's
+    file name), so the command line decides: a program named exactly `claude` (~/.local/bin/claude, the native
+    install's link, or npm's link), a native build run by its own path (.../claude/versions/2.1.331), or node or bun
+    running npm's `claude` link or its cli.js (.../@anthropic-ai/claude-code/cli.js), after any options. Strict, so
+    no other program counts: "claude-foo", "claudette", "python3 claude.py" and a node script of another name are
+    not."""
+    if not argv or not argv[0]:
+        return False
+    program = argv[0].rsplit("/", 1)[-1]
+    if program == "claude":
+        return True
+    parts = argv[0].split("/")
+    if len(parts) >= 3 and parts[-3:-1] == ["claude", "versions"] and VERSION_NAME.fullmatch(parts[-1]):
+        return True
+    if program not in SCRIPT_RUNNERS:
+        return False
+    script = next((a for a in argv[1:] if not a.startswith("-")), "")
+    folders = script.split("/")
+    return folders[-1] == "claude" or (len(folders) >= 3 and tuple(folders[-3:-1]) == CLAUDE_PACKAGE
+                                       and folders[-1] in CLAUDE_SCRIPTS)
+
+
+def parse_foreground(value: object) -> str:
+    """The "foreground" of `hc get` ({"pid", "name", "argv", "cwd"}: the leader of the terminal's foreground process
+    group; null once it has finished) as hc's word for that program when it matters to hcG-UI: CLAUDE_AGENT for
+    Claude Code (claude_argv), else "". Junk or missing counts as "" (nothing known)."""
+    argv = value.get("argv") if isinstance(value, dict) else None
+    if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+        return ""
+    return CLAUDE_AGENT if claude_argv(argv) else ""
+
+
 def parse_info(raw: str, address: str) -> Info:
-    """Labels "space" and "account" and the parent from `hc get <address> --json`. The parent is an id on the same
-    machine ("t19"), so it gets the address's machine prefix. Junk raises ValueError; junk fields count as absent."""
+    """Labels "space" and "account", the parent and the program in front (parse_foreground) from `hc get <address>
+    --json`. The parent is an id on the same machine ("t19"), so it gets the address's machine prefix. Junk raises
+    ValueError; junk fields count as absent."""
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("unexpected hc get output")
@@ -314,8 +373,29 @@ def parse_info(raw: str, address: str) -> Info:
     parent = parent.strip() if isinstance(parent, str) else ""
     if parent and "/" not in parent and "/" in address:
         parent = address.rsplit("/", 1)[0] + "/" + parent
-    return Info(space.strip() if isinstance(space, str) else "", parent, data.get("die_with_parent") is not False,
-                account.strip() if isinstance(account, str) else "")
+    return Info(printable(space.strip()) if isinstance(space, str) else "", parent,
+                data.get("die_with_parent") is not False,
+                printable(account.strip()) if isinstance(account, str) else "", parse_foreground(data.get("foreground")))
+
+
+def with_foreground(terms: Sequence[Term], infos: Mapping[str, Info]) -> List[Term]:
+    """The terminals as hcG-UI judges their program. Claude Code started by typing `claude` in a terminal's shell:
+    `hc ls` names the program the terminal started with (the shell) and has no status for it (it never reported
+    one), but `hc get` sees Claude Code in front (Info.foreground). Such a terminal counts as Claude Code
+    (CLAUDE_AGENT) everywhere hcG-UI decides by program: listed under the agents (Term.is_agent), its account mark
+    (account_marks), "Claude Code" in the tab bar's line (tab_info) and the list of what ends. Its status stays
+    hc's (none: a hollow dot, never "needs you"). Only a plain program (PLAIN_PROGRAMS) is judged again: a program
+    hc names itself stays as hc names it. The shell in front again (Claude Code ended): a shell again at the next
+    `hc get` of it."""
+    out: List[Term] = []
+    for t in terms:
+        info = infos.get(t.address)
+        front = info.foreground if info is not None else ""
+        if t.agent == HC_CLAUDE:  # started as `hc run claude` and no report yet: hc's word is the program's name
+            out.append(replace(t, agent=CLAUDE_AGENT))
+        else:
+            out.append(replace(t, agent=front) if front and t.agent in PLAIN_PROGRAMS else t)
+    return out
 
 
 def parse_machines(raw: str) -> List[Machine]:
@@ -342,8 +422,8 @@ def cwd_space(cwd: str) -> str:
         if len(parts) == 2:
             return "home"
         if parts[2] == "dev":
-            return parts[3] if len(parts) > 3 else "dev"
-    return parts[-1] if parts else "home"
+            return printable(parts[3]) if len(parts) > 3 else "dev"
+    return printable(parts[-1]) if parts else "home"
 
 
 def resolve_space(address: str, cwds: Mapping[str, str], infos: Mapping[str, Info]) -> str:
@@ -387,7 +467,7 @@ def natural(text: str) -> List[Tuple[int, int, str]]:
 
 
 def first_machine(machines: Sequence[object] = (), setting: Optional[str] = None) -> str:
-    """The home machine's hc name: `setting` (MMINI_FIRST, read at each call) when set; else the only machine
+    """The home machine's hc name: `setting` (HCGUI_FIRST, read at each call) when set; else the only machine
     `hc machine ls` knows (`machines`); else this Mac (LOCAL)."""
     setting = (FIRST if setting is None else setting).strip()
     if setting:
@@ -447,7 +527,7 @@ def build_groups(terms: Sequence[Term], first: str = FIRST, infos: Optional[Mapp
 # ---------------------------------------------------------------------------------------------------------------
 # Window title (pure): "<shown terminal> · <server>", sent by every pane of the window (OSC 2)
 # ---------------------------------------------------------------------------------------------------------------
-NO_TITLE = "mmini"  # nothing shown
+NO_TITLE = "hcG-UI"  # nothing shown
 TITLE_SEP = " · "
 TITLE_MAX = 80  # characters
 # Ghostty 1.3 (stream_handler windowTitle) ignores a title of 256 bytes or more; an ignored title leaves its "no
@@ -559,6 +639,13 @@ def agent_groups(spaces: Sequence[Group], rigs: Sequence[Group]) -> List[Group]:
     return [g for g in list(spaces) + list(rigs) if not g.home]
 
 
+def lone_place(group: Group, term: Term) -> str:
+    """The name drawn dim after an agent that is alone in its group, in place of the group's heading ("notes¹ ·
+    docs"): the group's shown name, or "" when that is the agent's own shown name, upper and lower case aside (no
+    repetition: "api¹" in the space api)."""
+    return "" if group.shown.casefold() == term.shown.casefold() else group.shown
+
+
 def selectable_items(spaces: Sequence[Group], rigs: Sequence[Group], servers: bool = True,
                      needs: Sequence[Term] = (), devs: Sequence[DevServer] = (), agents: bool = True) -> List[Item]:
     """Cursor order, as drawn: "needs you", the spaces, "+ new space", the servers, "+ add server", the dev servers,
@@ -590,8 +677,7 @@ def fallback_group(spaces: Sequence[Group], rigs: Sequence[Group], shown: str = 
 # ---------------------------------------------------------------------------------------------------------------
 # Account marks (pure): which Claude subscription a session bills, from its label "account" in the core it runs in
 # ---------------------------------------------------------------------------------------------------------------
-CLAUDE_AGENT = "claude-code"  # hc's word for Claude Code; only its terminals get a mark
-OTHER_MARK = "³"  # an account label that MMINI_MARKS does not name
+OTHER_MARK = "³"  # an account label that HCGUI_MARKS does not name
 
 
 def valid_mark(mark: str) -> bool:
@@ -602,7 +688,7 @@ def valid_mark(mark: str) -> bool:
 
 
 def parse_marks(text: str) -> Dict[str, str]:
-    """MMINI_MARKS ("personal=¹,work=²") as label value -> mark, in the order given. An entry without "=", with
+    """HCGUI_MARKS ("personal=¹,work=²") as label value -> mark, in the order given. An entry without "=", with
     an empty label or with a mark that is not valid_mark is left out; a label given twice keeps its last mark."""
     marks: Dict[str, str] = {}
     for entry in text.split(","):
@@ -613,12 +699,12 @@ def parse_marks(text: str) -> Dict[str, str]:
     return marks
 
 
-# label account=<value> -> mark (MMINI_MARKS). No setting: no account label gives a mark. Set: a value it does not
-# name gets OTHER_MARK. An unlabelled Claude session on a server whose ssh user is SHARED_USER (MMINI_SHARED_USER,
-# no default) gets SHARED_MARK (MMINI_SHARED_MARK, default ³): that account bills its own login.
-ACCOUNT_MARKS = parse_marks(os.environ.get("MMINI_MARKS") or "")
-SHARED_USER = (os.environ.get("MMINI_SHARED_USER") or "").strip()
-SHARED_MARK = (os.environ.get("MMINI_SHARED_MARK") or "").strip()
+# label account=<value> -> mark (HCGUI_MARKS). No setting: no account label gives a mark. Set: a value it does not
+# name gets OTHER_MARK. An unlabelled Claude session on a server whose ssh user is SHARED_USER (HCGUI_SHARED_USER,
+# no default) gets SHARED_MARK (HCGUI_SHARED_MARK, default ³): that account bills its own login.
+ACCOUNT_MARKS = parse_marks(os.environ.get("HCGUI_MARKS") or "")
+SHARED_USER = (os.environ.get("HCGUI_SHARED_USER") or "").strip()
+SHARED_MARK = (os.environ.get("HCGUI_SHARED_MARK") or "").strip()
 SHARED_MARK = SHARED_MARK if valid_mark(SHARED_MARK) else OTHER_MARK
 MARK_CHARS = frozenset(ACCOUNT_MARKS.values()) | {OTHER_MARK, SHARED_MARK}
 
@@ -633,9 +719,9 @@ def ssh_user(machine: Optional[Machine]) -> str:
 
 def account_mark(agent: str, account: str, user: str = "", marks: Optional[Mapping[str, str]] = None,
                  shared_user: Optional[str] = None, shared_mark: Optional[str] = None) -> str:
-    """The mark of one terminal: only Claude Code gets one. A label `account`: its mark in `marks` (MMINI_MARKS),
+    """The mark of one terminal: only Claude Code gets one. A label `account`: its mark in `marks` (HCGUI_MARKS),
     OTHER_MARK for a value not in it, none while `marks` is empty. No label: `shared_mark` on a server whose ssh user
-    (`user`) is `shared_user` (MMINI_SHARED_USER), else none. Unset arguments: the settings, read at each call."""
+    (`user`) is `shared_user` (HCGUI_SHARED_USER), else none. Unset arguments: the settings, read at each call."""
     marks = ACCOUNT_MARKS if marks is None else marks
     shared_user = SHARED_USER if shared_user is None else shared_user
     shared_mark = SHARED_MARK if shared_mark is None else shared_mark
@@ -648,7 +734,7 @@ def account_mark(agent: str, account: str, user: str = "", marks: Optional[Mappi
 
 def mark_legend(marks: Optional[Mapping[str, str]] = None, shared_user: Optional[str] = None,
                 shared_mark: Optional[str] = None, names: Optional[Mapping[str, str]] = None) -> List[Tuple[str, str]]:
-    """The marks for the "?" list: (mark, what it stands for), one line per mark, in the order of MMINI_MARKS:
+    """The marks for the "?" list: (mark, what it stands for), one line per mark, in the order of HCGUI_MARKS:
     its labels, then "other" (OTHER_MARK, only when there are marks), then the shared ssh user. Nothing set: [].
     A label is a subscription's name (its usage file's name is the same label), so it is drawn as the usage lines
     draw it: its display name from `names` (names.json, usage_shown), else the label itself."""
@@ -735,19 +821,26 @@ def clean_seen(data: Mapping[object, object]) -> Dict[str, int]:
             if isinstance(k, str) and k and isinstance(v, int) and not isinstance(v, bool) and v >= 0}
 
 
-def needs_text(name: str, mark: str, server: str, room: int) -> str:
-    """A "needs you" row's name in `room` columns: the name with its account mark, then " · <server>" when it is not
-    on the home machine. The name keeps at least half the room; the server is cut, or left out (the name gets the
-    whole room) when under 3 of its own columns would be left."""
+def name_parts(name: str, mark: str, place: str, room: int) -> Tuple[str, str]:
+    """A name with its account mark, then " · <place>" (a server, a group), in `room` columns, as (the name and
+    mark, the place part), so the two can be drawn apart. The name keeps at least half the room; the place is cut,
+    or left out (the name gets the whole room) when under 3 of its own columns would be left. No place: ("" for
+    the second)."""
     own = name + mark
-    if not server:
-        return with_mark(name, mark, room)
-    tail = " · " + server
+    if not place:
+        return with_mark(name, mark, room), ""
+    tail = " · " + place
     if text_width(own) + text_width(tail) <= room:
-        return own + tail
+        return own, tail
     head = with_mark(name, mark, max(room // 2, room - text_width(tail)))
     rest = room - text_width(head)
-    return head + clip(tail, rest) if rest >= len(" · ") + 3 else with_mark(name, mark, room)
+    return (head, clip(tail, rest)) if rest >= len(" · ") + 3 else (with_mark(name, mark, room), "")
+
+
+def needs_text(name: str, mark: str, server: str, room: int) -> str:
+    """A "needs you" row's name in `room` columns: the name with its account mark, then " · <server>" when it is not
+    on the home machine (name_parts)."""
+    return "".join(name_parts(name, mark, server, room))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -840,14 +933,14 @@ def keychain_text(room: int) -> str:
 # ---------------------------------------------------------------------------------------------------------------
 # usage.sh, Claude Code's status line command on the home machine (one `sh usage.sh <name>` per config folder),
 # saves the rate_limits.five_hour numbers Claude Code hands it after each answer to
-# ~/.local/state/mmini/usage/<name>.json there, one line of JSON. mmini only reads those files, through the home
+# ~/.local/state/hcgui/usage/<name>.json there, one line of JSON. hcG-UI only reads those files, through the home
 # core (`hc exec`, the default folder of the account that core runs as): no login, no token, no network of its own.
 # The number is the last one a session there saw: use elsewhere (claude.ai, the phone) shows up only with the next
 # answer on that machine. At most USAGE_FILES files, USAGE_BYTES each; the script always ends with 0, so only hc's
 # own failures fail.
 USAGE_FILES = 64
 USAGE_BYTES = 4096
-USAGE_SCRIPT = ('n=0; for f in "$HOME"/.local/state/mmini/usage/*.json; do [ "$n" -lt ' + str(USAGE_FILES) +
+USAGE_SCRIPT = ('n=0; for f in "$HOME"/.local/state/hcgui/usage/*.json; do [ "$n" -lt ' + str(USAGE_FILES) +
                 ' ] || break; if [ -f "$f" ]; then /usr/bin/head -c ' + str(USAGE_BYTES) +
                 ' "$f"; echo; n=$((n + 1)); fi; done; exit 0')
 USAGE_SECONDS = 600.0  # at the start, then every 10 minutes (r: at once); every minute was too much for the owner
@@ -883,8 +976,8 @@ class Usage:
 
 
 def usage_enabled() -> bool:
-    """Is the 5-hour usage on? Not with MMINI_USAGE=0 (read at each call): no check, no lines."""
-    return os.environ.get("MMINI_USAGE", "1") != "0"
+    """Is the 5-hour usage on? Not with HCGUI_USAGE=0 (read at each call): no check, no lines."""
+    return os.environ.get("HCGUI_USAGE", "1") != "0"
 
 
 def parse_usage(out: str) -> List[Usage]:
@@ -945,7 +1038,7 @@ def usage_texts(entries: Sequence[Usage], now: float, room: int, marks: Optional
                 names: Optional[Mapping[str, str]] = None) -> List[str]:
     """One line per subscription in `room` columns, every line in the same form: the widest that fits them all.
 
-        " claude ¹  42%"    the name, its account mark (MMINI_MARKS; none: the name alone), the share used
+        " claude ¹  42%"    the name, its account mark (HCGUI_MARKS; none: the name alone), the share used
         " claude ¹ 42%"
         " Personal… ¹  42%" the names cut to fit, the mark kept (as a row's name: with_mark); only while every
                             name keeps at least USAGE_CLIP_MIN columns before its "…"
@@ -994,9 +1087,9 @@ def usage_tone(percent: int) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Dev servers (pure): node programs (MMINI_DEV_PROGRAM) listening on the home machine, opened in this Mac's browser
+# Dev servers (pure): node programs (HCGUI_DEV_PROGRAM) listening on the home machine, opened in this Mac's browser
 # ---------------------------------------------------------------------------------------------------------------
-# Only the listeners of one program name are listed (MMINI_DEV_PROGRAM, default node). lsof once for the listeners
+# Only the listeners of one program name are listed (HCGUI_DEV_PROGRAM, default node). lsof once for the listeners
 # (-a: TCP, listening, and named DEV_PROGRAM), then once for their folders (cwd), the two parts apart by a line
 # "--cwd". lsof ends with 1 when it found nothing: the script always ends with 0, so only hc's own failures fail.
 # Without admin rights lsof sees only the programs of the account the core runs as: another account's pages are not
@@ -1005,7 +1098,7 @@ DEV_PROGRAM_RE = re.compile(r"[A-Za-z0-9._+-]{1,15}")  # a macOS program name: a
 
 
 def dev_program(setting: str) -> str:
-    """The program name whose listeners are dev servers: MMINI_DEV_PROGRAM, "node" when unset or not a plain name."""
+    """The program name whose listeners are dev servers: HCGUI_DEV_PROGRAM, "node" when unset or not a plain name."""
     setting = setting.strip()
     return setting if DEV_PROGRAM_RE.fullmatch(setting) and not setting.startswith("-") else "node"
 
@@ -1018,7 +1111,7 @@ def dev_script(program: str) -> str:
             'if [ -n "$p" ]; then /usr/sbin/lsof -a -p "$p" -d cwd -Fpn 2>/dev/null; fi; exit 0')
 
 
-DEV_PROGRAM = dev_program(os.environ.get("MMINI_DEV_PROGRAM") or "")
+DEV_PROGRAM = dev_program(os.environ.get("HCGUI_DEV_PROGRAM") or "")
 DEV_SCRIPT = dev_script(DEV_PROGRAM)
 DEV_SECONDS = 60.0
 LOOPBACK_HOSTS = ("127.", "[::1]", "localhost", "[::ffff:127.")
@@ -1328,7 +1421,7 @@ def menu_entries(item: Item, group: Optional[Group], first: str = FIRST, servers
 
     The usage lines: a line's own menu (usage_item, a right click on one) has "Rename" (that subscription's display
     name) and "Hide usage" first. Once hidden (`usage` False) there is no line left to right-click, so every row
-    menu ends with "Show usage" instead; while they are shown (or off: MMINI_USAGE=0, the caller passes True) a
+    menu ends with "Show usage" instead; while they are shown (or off: HCGUI_USAGE=0, the caller passes True) a
     row's menu has no usage entry, so the menus are the same as before the switch existed."""
     switches = [servers_entry(servers), agents_entry(agents), devs_entry(devs)]
     if item.kind == USAGE_KIND:
@@ -1557,7 +1650,8 @@ def neighbour(before: Sequence[Item], index: int, after: Sequence[Item]) -> Opti
 @dataclass
 class Row:
     """One line of the sidebar. kind: header, group, plus ("+ new space", "+ add server"), blank, rule, agents,
-    agent_group, agent, more, needs (a "needs you" row), dev (a dev server)."""
+    agent_group (the heading of a group with two or more agents), agent, more, needs (a "needs you" row), dev (a dev
+    server)."""
 
     kind: str
     text: str = ""
@@ -1566,12 +1660,13 @@ class Row:
     item: int = -1  # index into selectable_items() for group, plus, agent, needs and dev rows
     count: int = 0
     dev: Optional[DevServer] = None
+    place: str = ""  # an agent alone in its group (no heading): the group's name, drawn dim after its own (lone_place)
 
 
 MENU_KEY = "a"  # opens the action menu of the row under the cursor (a right click does the same)
 HELP_KEY = "?"  # the list of keys (KEY_HELP), drawn over the sidebar until the next key or click
 # The sidebar's keys, for "?": (key, what it does). Every line fits 29 columns (a 30-column sidebar keeps its last
-# column empty). The way back from a zoom has a line of its own: while zoomed nothing of mmini can be seen.
+# column empty). The way back from a zoom has a line of its own: while zoomed nothing of hcG-UI can be seen.
 KEY_HELP = (("↑↓ j k", "move"), ("enter", "show it"), (MENU_KEY, "menu (right click)"), ("e", "rename"),
             ("d", "delete, forget, end"), ("n", "new terminal here"), ("s", "new space"), ("m", "move to a space"),
             (SERVERS_KEY, "show/hide servers"), (AGENTS_KEY, "show/hide agents"), (DEVS_KEY, "dev servers on/off"),
@@ -1792,7 +1887,9 @@ def sidebar_hit(y: int, arrow_y: int, open_y: int, rows: Mapping[int, Item], x: 
 
 def pick_agent_rows(entries: Sequence[Row], cap: int, cursor: int) -> List[Row]:
     """The agent lines that fit in `cap` lines. When they do not all fit: a window that always holds the cursor's
-    agent, with its group heading on top when there is room, and a last line "+N more"."""
+    agent, with its group heading on top when there is room (an agent alone in its group has none: its row names
+    the group), and a last line "+N more". A heading is never the last line under other rows: it stands right
+    above its own agents."""
     if cap <= 0 or not entries:
         return []
     if len(entries) <= cap:
@@ -1803,13 +1900,18 @@ def pick_agent_rows(entries: Sequence[Row], cap: int, cursor: int) -> List[Row]:
     def window(start: int) -> List[Row]:
         rows: List[Row] = []
         if body >= 2 and entries[start].kind == "agent":
-            rows.append(next(e for e in entries if e.kind == "agent_group" and e.group is entries[start].group))
+            rows += [e for e in entries if e.kind == "agent_group" and e.group is entries[start].group][:1]
         return rows + list(entries[start:start + body - len(rows)])
 
     start = 0
     while pos >= 0 and all(r is not entries[pos] for r in window(start)):
         start += 1
     shown = window(start) if body else []
+    # A window cut short can end on the next group's heading, over none of its agents (likely after a lone agent's
+    # row): dropped, never the cursor's line (an agent). A heading that is the window's only line stays: with the
+    # cursor outside the agents it names the group "+N more" counts, and ] still takes a line.
+    while len(shown) >= 2 and shown[-1].kind == "agent_group":
+        shown.pop()
     hidden = sum(1 for e in entries if e.kind == "agent") - sum(1 for e in shown if e.kind == "agent")
     if hidden and (cap >= 2 or not shown):
         shown.append(Row("more", f"+{hidden} more", count=hidden))
@@ -1902,7 +2004,10 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
 
     `needs`: the "needs you" rows, a section at the very top (none: not drawn). `devs`: the dev servers, a section
     below the servers (none: not drawn). `agents` False: the agents section is hidden: no separator, no "agents", no
-    rows; the upper part has every line (a moved separator is kept for when they come back)."""
+    rows; the upper part has every line (a moved separator is kept for when they come back).
+
+    The agents come by group (agent_groups): a group of two or more under its heading ("dev · 2"), an agent alone in
+    its group as its row only, with the group's name in Row.place (lone_place)."""
     height = max(0, height)
     manual = clamp_rule(rule, height) if rule is not None and agents else None
     top_room = height if manual is None else manual
@@ -1933,12 +2038,13 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
 
     entries: List[Row] = []
     for g in agent_groups(spaces, rigs):
-        agents = [t for t in g.terms if t.is_agent]
-        if agents:
-            entries.append(Row("agent_group", group=g, count=len(agents)))
-            for t in agents:
-                entries.append(Row("agent", group=g, term=t, item=index))
-                index += 1
+        listed = [t for t in g.terms if t.is_agent]
+        if len(listed) > 1:  # one agent alone: its row only, the group's name on it (owner, 24 Nov)
+            entries.append(Row("agent_group", group=g, count=len(listed)))
+        for t in listed:
+            entries.append(Row("agent", group=g, term=t, item=index,
+                               place=lone_place(g, t) if len(listed) == 1 else ""))
+            index += 1
     fixed = [Row("rule"), Row("agents", "agents")]
     if manual is not None:
         block = fixed + pick_agent_rows(entries, height - manual - len(fixed), cursor)
@@ -1966,7 +2072,7 @@ class Seg:
 
     @property
     def end(self) -> int:
-        return self.x + len(self.text)
+        return self.x + text_width(self.text)
 
     @property
     def dot_x(self) -> int:
@@ -2021,13 +2127,13 @@ def flow_tabs(labels: Sequence[str], width: int) -> Tuple[List[Seg], int, int]:
     y = x = 0
     for i, label in enumerate(labels):
         cell = " ● " + clip_marked(label, max(1, width - 4)) + " "
-        if x and x + 1 + len(cell) > width:
+        if x and x + 1 + text_width(cell) > width:
             y, x = y + 1, 0
         if x:
             segs.append(Seg(y, x, "│", "sep"))
             x += 1
         segs.append(Seg(y, x, cell, "tab", i))
-        x += len(cell)
+        x += text_width(cell)
     return segs, y, x
 
 
@@ -2103,7 +2209,7 @@ def tab_keys(alone: bool = False) -> str:
 
 
 def tab_bar_rows(height: int) -> Tuple[int, int]:
-    """(rows the tabs may use, row of the info row or -1) for a pane of `height` rows (TAB_ROWS in an mmini window).
+    """(rows the tabs may use, row of the info row or -1) for a pane of `height` rows (TAB_ROWS in an hcG-UI window).
     The info row (info_row) takes the last row when there are two: the line about the shown terminal; after a click
     on the bar also the space's name, hc's id and the key hints; a notice while one shows."""
     if height < 2:
@@ -2115,8 +2221,8 @@ def short_folder(cwd: str) -> str:
     """A folder with the home part written as "~"."""
     parts = [p for p in cwd.split("/") if p]
     if len(parts) >= 2 and parts[0] in HOME_ROOTS:
-        return "/".join(["~"] + parts[2:])
-    return cwd
+        return printable("/".join(["~"] + parts[2:]))
+    return printable(cwd)
 
 
 # hc's program words drawn as the product's own name in the line about the shown terminal (tab_info); others as hc
@@ -2150,22 +2256,28 @@ def info_row(space: str, tab: Optional[Mapping[str, object]], room: int, hints: 
              alone: bool = False) -> Tuple[str, str]:
     """The row below the tabs in `room` columns: (left text, key hint drawn at the right end or ""). Normally the line
     about the shown terminal only (tab_info; nothing while none is shown). After a click on the bar (`hints`): the
-    space's name first, then that line with hc's id, and the longest key hint that fits two columns after it; when
+    space's name first, then that line with hc's id and, for Claude Code, the subscription it runs on (the tab's
+    "account", as drawn, and its mark), and the longest key hint that fits two columns after it; when
     none fits beside the whole line, the folder gives way for one (then the hint goes too). Owner, 24 Nov: the name
     and the hints only on a click, one row below the tabs."""
     if not hints:
         return (clip(tab_info(tab, room), room) if tab is not None else "", "")
     prefix = space + " · " if space and tab is not None else space
-    whole = len(prefix) + (len(tab_info(tab, room, True)) if tab is not None else 0)
+    # the subscription a Claude Code tab runs on, at the end (owner, 24 Nov): its shown name and mark
+    account = " ".join(p for p in (str(tab.get("account") or ""), str(tab.get("mark") or "")) if p) \
+        if tab is not None and tab.get("account") else ""
+    suffix = " · " + account if account else ""
+    prefix_room = len(prefix) + text_width(suffix)
+    whole = prefix_room + (len(tab_info(tab, room, True)) if tab is not None else 0)
     if tab is not None:  # the line without its folder: program, status, id
         agent = str(tab.get("agent") or "")
         bare = (PROGRAM_NAMES.get(agent, agent), str(tab.get("status") or ""), str(tab.get("address") or ""))
-        least = len(prefix) + text_width(" · ".join(p for p in bare if p))
+        least = prefix_room + text_width(" · ".join(p for p in bare if p))
     else:
         least = len(prefix)
     hint = tab_hint(room - whole - 2, alone) or tab_hint(room - least - 2, alone)
     left_room = room - (len(glyph(hint)) + 2 if hint else 0)
-    left = prefix + (tab_info(tab, left_room - len(prefix), True) if tab is not None else "")
+    left = prefix + (tab_info(tab, left_room - prefix_room, True) + suffix if tab is not None else "")
     return (clip(left, max(1, left_room)), hint)
 
 
@@ -2219,13 +2331,13 @@ def tab_menu_segs(title: str, entries: Sequence[Entry], width: int) -> List[Seg]
         segs, x = [], 0
         if head != ":" and head:
             segs.append(Seg(0, 0, head, "title"))
-            x = len(head) + 1
+            x = text_width(head) + 1
         for i, label in enumerate(labels):
             if i:
                 segs.append(Seg(0, x + 1, "·", "sep"))
                 x += 3
             segs.append(Seg(0, x, label, "entry", i))
-            x += len(label)
+            x += text_width(label)
         if x <= width:
             return segs
     kept = [s for s in segs if s.end <= width]
@@ -2351,7 +2463,7 @@ def current_target(win: Path = WINDOW) -> str:
 
 def pick_stamp(win: Path = WINDOW) -> Tuple[int, int, int]:
     """What a pane's loop watches between two rounds: the times gen (each pick), tabs.json (the tabs) and ask (a
-    right click in the view, written by mmini.tmux.conf) last changed. Three stats, no read: cheap enough for every
+    right click in the view, written by hcgui.tmux.conf) last changed. Three stats, no read: cheap enough for every
     LOOP_WAIT_MS."""
     return mtime(win / "gen"), mtime(win / "tabs.json"), mtime(win / "ask")
 
@@ -2461,7 +2573,7 @@ def write_devs_shown(shown: bool, state: Path = STATE) -> None:
 
 
 # The usage lines' switch (u, Hide usage). Not "usage": that is the folder usage.sh saves its numbers in
-# (${MMINI_STATE:-~/.local/state/mmini}/usage/<name>.json), this very state folder where the sidebar runs on the home
+# (${HCGUI_STATE:-~/.local/state/hcgui}/usage/<name>.json), this very state folder where the sidebar runs on the home
 # machine itself. A file there made usage.sh's mkdir fail (nothing saved, ever); a folder there made every hide fail.
 USAGE_SWITCH = "usagelines"
 
@@ -2485,12 +2597,12 @@ def write_seen(seen: Mapping[str, int], state: Path = STATE) -> None:
     write_atomic(state / "seen.json", json.dumps(dict(seen)) + "\n")  # in order: mark_seen keeps the newest
 
 
-WIDTH_LIMITS = (10, 200)  # as MMINI_WIDTH
+WIDTH_LIMITS = (10, 200)  # as HCGUI_WIDTH
 
 
 def read_open_width(state: Path = STATE, default: int = WIDTH) -> int:
     """The open sidebar's width: the one its divider was last dragged to (the shared file "width"), else
-    MMINI_WIDTH. Junk or a width out of 10-200 counts as no file."""
+    HCGUI_WIDTH. Junk or a width out of 10-200 counts as no file."""
     try:
         width = int(read_text(state / "width"))
     except ValueError:
@@ -2559,7 +2671,7 @@ def tab_engine_wanted(alive: bool, missing_for: float, hidden: bool, grace: floa
 
 def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]] = None, shown: str = "",
                   shown_title: str = NO_TITLE, everything: Sequence[Term] = (),
-                  infos: Optional[Mapping[str, Info]] = None) -> dict:
+                  infos: Optional[Mapping[str, Info]] = None, names: Optional[Mapping[str, str]] = None) -> dict:
     """What the tab bar needs about the current group. "name" is the space's own name (the label a new shell gets),
     "title" what is drawn (the display name); a tab's "label" is the terminal's shown name, its "mark" the account
     mark drawn after it (never part of the window title). "server" (the group's,
@@ -2575,19 +2687,28 @@ def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]]
     def ends(t: Term) -> List[List[str]]:
         return [[c.address, c.shown, c.agent] for c in ending([t], everything, infos)[1:]]
 
+    names = names or {}
+
+    def account_of(t: Term) -> str:
+        """The subscription a Claude Code tab runs on, as drawn (its display name, usage_shown); "" for others."""
+        info = infos.get(t.address)
+        return usage_shown(info.account, names) if t.agent == CLAUDE_AGENT and info and info.account else ""
+
     return {"group": group.key, "name": group.name, "title": group.shown, "kind": group.kind, "machine": group.machine,
             "server": servers.get(group.machine, group.machine), "cwd": group.cwd, "ts": now, "shown": shown,
             "shown_title": shown_title, "names": {t.address: t.shown for t in everything},
             "tabs": [{"address": t.address, "label": t.shown, "status": t.status, "agent": t.agent, "cwd": t.cwd,
-                      "server": servers.get(t.machine, t.machine), "mark": t.mark, "own": t.label, "ends": ends(t)}
+                      "server": servers.get(t.machine, t.machine), "mark": t.mark, "own": t.label, "ends": ends(t),
+                      "account": account_of(t)}
                      for t in group.terms]}
 
 
 def write_snapshot(group: Optional[Group], win: Path = WINDOW, now: Optional[float] = None,
                    servers: Optional[Mapping[str, str]] = None, shown: str = "", shown_title: str = NO_TITLE,
-                   everything: Sequence[Term] = (), infos: Optional[Mapping[str, Info]] = None) -> None:
+                   everything: Sequence[Term] = (), infos: Optional[Mapping[str, Info]] = None,
+                   names: Optional[Mapping[str, str]] = None) -> None:
     now = time.time() if now is None else now
-    snap = make_snapshot(group, now, servers, shown, shown_title, everything, infos) if group else {
+    snap = make_snapshot(group, now, servers, shown, shown_title, everything, infos, names) if group else {
         "group": "", "name": "", "title": "", "kind": "", "machine": LOCAL, "server": LOCAL, "cwd": "", "ts": now,
         "shown": shown, "shown_title": shown_title, "names": {}, "tabs": []}
     write_atomic(win / "tabs.json", json.dumps(snap) + "\n")
@@ -2832,12 +2953,12 @@ def probe_folder(machine: str, folder: str, runner: Runner = None) -> Tuple[str,
     relative to that home folder; nothing is expanded by a shell on this Mac."""
     runner = runner or run_hc
     on = [] if machine == LOCAL else ["--on", machine]
-    return parse_probe(runner("exec", *on, "/bin/sh", "-c", PROBE, "mmini", folder, timeout=15.0))
+    return parse_probe(runner("exec", *on, "/bin/sh", "-c", PROBE, "hcG-UI", folder, timeout=15.0))
 
 
 def keychain_enabled() -> bool:
-    """Is the keychain check on? Not with MMINI_KEYCHAIN=0 (read at each call): no check, no red line."""
-    return os.environ.get("MMINI_KEYCHAIN", "1") != "0"
+    """Is the keychain check on? Not with HCGUI_KEYCHAIN=0 (read at each call): no check, no red line."""
+    return os.environ.get("HCGUI_KEYCHAIN", "1") != "0"
 
 
 def check_keychain(machine: str, runner: Runner = None) -> str:
@@ -2874,9 +2995,9 @@ def fetch_dev_servers(machine: str, runner: Runner = None) -> Optional[List[DevS
 
 
 def browser_enabled() -> bool:
-    """May a dev server be opened in this Mac's browser? Not with MMINI_BROWSER=0 (a Mac without a screen, the
+    """May a dev server be opened in this Mac's browser? Not with HCGUI_BROWSER=0 (a Mac without a screen, the
     tests)."""
-    return os.environ.get("MMINI_BROWSER", "1") != "0"
+    return os.environ.get("HCGUI_BROWSER", "1") != "0"
 
 
 def open_url(host: str, port: int) -> bool:
@@ -2893,11 +3014,11 @@ def open_url(host: str, port: int) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# tmux: the window's three panes run in a tmux server of the window's own (start.sh, mmini.tmux.conf), so a click
+# tmux: the window's three panes run in a tmux server of the window's own (start.sh, hcgui.tmux.conf), so a click
 # reaches the pane under the pointer at once. The panes file names them by tmux pane id. Nothing here raises.
 # ---------------------------------------------------------------------------------------------------------------
 PANE_ID = re.compile(r"%[0-9]+")
-TERM_NAME = "xterm-mmini"  # the terminal type of mmini's own panes (mmini.terminfo)
+TERM_NAME = "xterm-hcgui"  # the terminal type of hcG-UI's own panes (hcgui.terminfo)
 TAB_ROWS = 2  # the tab bar: the tabs, then one row (the line about the shown terminal, a tab's menu, or after a
 # click the space's name, that line with hc's id, and the key hints); 3 until 24 Nov (owner: more room below)
 ZOOM_LOOK = 0.25  # seconds between two looks at a zoomed window by a pane that waits to size itself (a round)
@@ -2906,8 +3027,8 @@ _TMUX: List[str] = []  # the tmux program, once found
 
 
 def tmux_enabled() -> bool:
-    """Inside the window's tmux ($TMUX, set by tmux in its panes), unless MMINI_TMUX=0 (the tests)."""
-    return bool(os.environ.get("TMUX")) and os.environ.get("MMINI_TMUX", "1") != "0"
+    """Inside the window's tmux ($TMUX, set by tmux in its panes), unless HCGUI_TMUX=0 (the tests)."""
+    return bool(os.environ.get("TMUX")) and os.environ.get("HCGUI_TMUX", "1") != "0"
 
 
 def tmux_program() -> str:
@@ -2959,7 +3080,7 @@ def focus_view(win: Path = WINDOW) -> None:
 
 def zoom_view(win: Path = WINDOW) -> str:
     """The "z" key: the whole window for the shown terminal (tmux's zoom). A line on top, "‹ back", brings the panes
-    back on a click (mmini.tmux.conf). Returns a notice instead when nothing is shown (no target, or the view is
+    back on a click (hcgui.tmux.conf). Returns a notice instead when nothing is shown (no target, or the view is
     not attached to it), "" when done."""
     if not current_target(win) or not attach_pid(win):
         return "z: nothing shown"
@@ -2969,7 +3090,7 @@ def zoom_view(win: Path = WINDOW) -> str:
     return ""
 
 
-# Keys typed in a pane of mmini that go on to the view (send_keys_to_view): bytes as they came (send-keys -H: the
+# Keys typed in a pane of hcG-UI that go on to the view (send_keys_to_view): bytes as they came (send-keys -H: the
 # exact bytes, ";" and control keys included), keys curses decoded by their tmux name.
 KEY_NAMES = {curses.KEY_ENTER: "Enter", curses.KEY_BACKSPACE: "BSpace", curses.KEY_UP: "Up", curses.KEY_DOWN: "Down",
              curses.KEY_LEFT: "Left", curses.KEY_RIGHT: "Right", curses.KEY_HOME: "Home", curses.KEY_END: "End",
@@ -3040,7 +3161,7 @@ def drain_keys(scr: "curses.window", limit: int = 4096) -> List[int]:
 
 
 def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW) -> None:
-    """Type `keys` into the view and give it the keyboard: keys typed in a pane of mmini that were meant for the
+    """Type `keys` into the view and give it the keyboard: keys typed in a pane of hcG-UI that were meant for the
     terminal (after a right click) are not lost. A lone esc (no bytes after it) only closed the menu."""
     view = pane_id("view", win)
     if not view:
@@ -3049,7 +3170,7 @@ def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW) -> None:
 
 
 PASTE_START = [ord(c) for c in "[200~"]  # after the esc that bracketed paste starts with
-PASTE_END = [27] + [ord(c) for c in "[201~"]
+PASTE_END = b"\x1b[201~"
 
 
 def read_paste(scr: "curses.window", wait: float = 1.0, limit: int = 64 * 1024 * 1024) -> Optional[str]:
@@ -3068,7 +3189,7 @@ def read_paste(scr: "curses.window", wait: float = 1.0, limit: int = 64 * 1024 *
                     unget(back)
                 return None
             got.append(key)
-        body: List[int] = []
+        body = bytearray()  # a byte each: a list of ints took ~8x the paste's size
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline and len(body) < limit:
             key = scr.getch()
@@ -3081,23 +3202,23 @@ def read_paste(scr: "curses.window", wait: float = 1.0, limit: int = 64 * 1024 *
             if body[-len(PASTE_END):] == PASTE_END:
                 del body[-len(PASTE_END):]
                 break
-        return bytes(body).decode("utf-8", "replace")
+        return body.decode("utf-8", "replace")
     finally:
         scr.nodelay(False)
         scr.timeout(LOOP_WAIT_MS)
 
 
 def paste_to_view(text: str, win: Path = WINDOW) -> bool:
-    """A paste (a dropped file) that reached a pane of mmini: into the view, as a paste (bracketed when the
+    """A paste (a dropped file) that reached a pane of hcG-UI: into the view, as a paste (bracketed when the
     program there asks for it), and the view gets the keyboard either way. Before tmux each pane got its own drops;
     now a drop goes to the pane with the keyboard. The text goes on tmux's stdin (load-buffer -): an argument over
     16 KB would be refused. False when it could not be passed on (the caller says so)."""
     view = pane_id("view", win)
     if not view:
         return False
-    loaded = bool(text) and tmux("load-buffer", "-b", "mmini-paste", "-", input=text) is not None
+    loaded = bool(text) and tmux("load-buffer", "-b", "hcgui-paste", "-", input=text) is not None
     if loaded:
-        loaded = tmux("paste-buffer", "-p", "-d", "-b", "mmini-paste", "-t", view) is not None
+        loaded = tmux("paste-buffer", "-p", "-d", "-b", "hcgui-paste", "-t", view) is not None
     tmux("select-pane", "-t", view)
     return loaded or not text
 
@@ -3164,10 +3285,10 @@ def size_pane(pane: str, cols: int = 0, rows: int = 0) -> Optional[WindowLook]:
                                   LOOK_FORMAT))
 
 
-def mmini_env(environ: Mapping[str, str]) -> List[Tuple[str, str]]:
-    """This program's MMINI_* settings, sorted, for a sidebar brought back (MMINI_WINDOW is passed apart); then its
-    TERM and TERMINFO when the terminal type is mmini's own (TERM_NAME)."""
-    pairs = sorted((k, v) for k, v in environ.items() if ENV_NAME.fullmatch(k) and k != "MMINI_WINDOW")
+def hcgui_env(environ: Mapping[str, str]) -> List[Tuple[str, str]]:
+    """This program's HCGUI_* settings, sorted, for a sidebar brought back (HCGUI_WINDOW is passed apart); then its
+    TERM and TERMINFO when the terminal type is hcG-UI's own (TERM_NAME)."""
+    pairs = sorted((k, v) for k, v in environ.items() if ENV_NAME.fullmatch(k) and k != "HCGUI_WINDOW")
     if environ.get("TERM") == TERM_NAME:
         pairs += [(k, environ[k]) for k in ("TERM", "TERMINFO") if environ.get(k)]
     return pairs
@@ -3175,12 +3296,12 @@ def mmini_env(environ: Mapping[str, str]) -> List[Tuple[str, str]]:
 
 def pane_command(mode: str, win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
     """The command of a new pane (tmux runs it with sh -c): `exec` replaces the shell, so the pane closes when the
-    program ends. MMINI_WINDOW first, then the other settings, then this pane's terminal type when it is mmini's
-    own (TERM xterm-mmini with its TERMINFO folder, see start.sh): the new pane gets the same mouse codes."""
-    pairs = [("MMINI_WINDOW", str(win))] + [(k, v) for k, v in env if k != "MMINI_WINDOW" and ENV_NAME.fullmatch(k)]
+    program ends. HCGUI_WINDOW first, then the other settings, then this pane's terminal type when it is hcG-UI's
+    own (TERM xterm-hcgui with its TERMINFO folder, see start.sh): the new pane gets the same mouse codes."""
+    pairs = [("HCGUI_WINDOW", str(win))] + [(k, v) for k, v in env if k != "HCGUI_WINDOW" and ENV_NAME.fullmatch(k)]
     pairs += [(k, v) for k, v in env if k in ("TERM", "TERMINFO") and env_get(env, "TERM") == TERM_NAME]
     assigns = " ".join(f"{k}={shlex.quote(v)}" for k, v in pairs)
-    return f"exec env {assigns} python3 {shlex.quote(str(base / 'mmini.py'))} {mode}"
+    return f"exec env {assigns} python3 {shlex.quote(str(base / 'hcgui.py'))} {mode}"
 
 
 def env_get(env: Sequence[Tuple[str, str]], name: str) -> str:
@@ -3189,7 +3310,7 @@ def env_get(env: Sequence[Tuple[str, str]], name: str) -> str:
 
 def split_sidebar(win: Path, base: Path, env: Sequence[Tuple[str, str]], width: int) -> str:
     """Bring the sidebar back: a new pane on the left of the view and the tab bar, at the window's full height
-    (split-window -f), `width` columns wide, running `mmini.py sidebar`. Its id goes into the panes file. Returns
+    (split-window -f), `width` columns wide, running `hcgui.py sidebar`. Its id goes into the panes file. Returns
     the id, "" when nothing was made (no pane to split from, tmux off or failed)."""
     target = pane_id("view", win) or own_pane()  # with -f the target only names the window
     if not target:
@@ -3205,8 +3326,8 @@ def split_sidebar(win: Path, base: Path, env: Sequence[Tuple[str, str]], width: 
 
 
 def autosize_enabled() -> bool:
-    """Do the sidebar and the tab bar size their panes? In tmux, unless MMINI_AUTOSIZE=0."""
-    return os.environ.get("MMINI_AUTOSIZE", "1") != "0" and tmux_enabled()
+    """Do the sidebar and the tab bar size their panes? In tmux, unless HCGUI_AUTOSIZE=0."""
+    return os.environ.get("HCGUI_AUTOSIZE", "1") != "0" and tmux_enabled()
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -3478,7 +3599,7 @@ class TabMenu:
 
 
 def autoopen_enabled() -> bool:
-    return os.environ.get("MMINI_AUTOOPEN", "1") != "0"
+    return os.environ.get("HCGUI_AUTOOPEN", "1") != "0"
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -3536,9 +3657,10 @@ class Engine:
         self.extras_wake = threading.Event()
 
     def refresh_once(self, full: bool = False, also: Sequence[str] = ()) -> None:
-        """`hc ls`, `hc machine ls`, then `hc get` for the home machine's terminals and the Claude Code terminals of
-        other machines (their label "account") that are new (all of them when `full` or every INFO_SECONDS, plus
-        `also`). A failed get keeps what was known; a new terminal then stays on
+        """`hc ls`, `hc machine ls`, then `hc get` for the home machine's terminals, and on other machines for the
+        Claude Code terminals (their label "account") and the shells (Claude Code typed there: with_foreground),
+        that are new (all of them when `full` or every INFO_SECONDS, plus `also`). A failed get keeps what was
+        known; a new terminal then stays on
         the folder rules until the next full round. A failed machine list keeps the last one, without a word: the
         terminals are what matters."""
         with self.refreshing:
@@ -3555,15 +3677,19 @@ class Engine:
                 infos = dict(self.infos)
             if terms is not None:
                 home = home_machine(terms, self.first(machines))
-                # the home machine's terminals (space, parent, account), and Claude Code anywhere else (its account)
-                wanted = [t.address for t in terms if t.machine == home or t.agent == CLAUDE_AGENT]
+                # the home machine's terminals (space, parent, account, the program in front), and anywhere else
+                # Claude Code (its account) and the shells (the program in front)
+                wanted = [t.address for t in terms
+                          if t.machine == home or t.agent == CLAUDE_AGENT or t.agent in PLAIN_PROGRAMS]
                 now = time.monotonic()
                 full = full or now - self.info_time >= INFO_SECONDS
                 fetch = [a for a in wanted if full or a not in infos or a in also]
                 for address, info in fetch_infos(fetch).items():
                     info = info if info is not None else infos.get(address, Info())
-                    # off the home machine only the account counts: no space, and ending() keeps to known parents
-                    infos[address] = info if machine_of(address) == home else Info(account=info.account)
+                    # off the home machine only the account and the program in front count: no space, and ending()
+                    # keeps to known parents
+                    infos[address] = info if machine_of(address) == home else Info(account=info.account,
+                                                                                   foreground=info.foreground)
                 infos = {a: infos[a] for a in wanted if a in infos}
                 if full:
                     self.info_time = now
@@ -3609,13 +3735,16 @@ class Engine:
     def groups(self) -> Tuple[List[Group], List[Group]]:
         """(spaces, servers), built again when the data, names.json or the servers switch changed (also in another
         window). While the servers section is hidden there are no servers: no row, no tab bar and no current group
-        of one, and no agent of one in the list; a current group that was a server falls back (sync)."""
+        of one, and no agent of one in the list; a current group that was a server falls back (sync). Here what `hc
+        get` knows meets what `hc ls` lists: a shell with Claude Code in front counts as Claude Code from here on
+        (with_foreground), in every group, the snapshot and "needs you"."""
         with self.lock:
             version, terms, infos, machines = self.version, self.terms, self.infos, self.machines
         shown = self.servers_shown()
         stamp = (version, mtime(self.state / "names.json"), shown)
         if self.cache[0] != stamp:
             self.names = read_names(self.state)
+            terms = with_foreground(terms, infos)
             marks = account_marks(terms, infos, machines)
             spaces, rigs = build_groups(terms, first_machine(machines), infos, machines, self.names, marks)
             self.cache, self.rigs_all = (stamp, spaces, rigs if shown else []), rigs
@@ -3703,13 +3832,13 @@ class Engine:
             self.title_written = (shown, self.title)
         # the data and names.json as groups() last built them (a rename counts), the shown terminal and its title
         stamp = (self.cache[0], self.cur, shown, self.title)
-        now = time.monotonic()
-        if stamp != self.written or now - self.written_at > SNAPSHOT_BEAT:
+        now = time.time()
+        if stamp != self.written or abs(now - self.written_at) > SNAPSHOT_BEAT:
             group = self.find_group(self.cur)
             with self.lock:
                 infos = dict(self.infos)
             write_snapshot(group, self.win, servers=self.server_names(group), shown=shown, shown_title=self.title,
-                           everything=self.all_terms(), infos=infos)
+                           everything=self.all_terms(), infos=infos, names=self.names)
             self.written, self.written_at = stamp, now
 
     def seen_now(self) -> Dict[str, int]:
@@ -3757,7 +3886,7 @@ class Engine:
         exec`). Not before a listing came back: only that says which machine is home. When another machine has
         become home (a server listed after a start without it), all are dropped and asked again at once: an answer
         of this Mac is never kept for a server. The dev servers only while their section is not hidden; the usage
-        not with MMINI_USAGE=0, and a failed usage check drops the lines (nothing drawn) until one works. Nor while
+        not with HCGUI_USAGE=0, and a failed usage check drops the lines (nothing drawn) until one works. Nor while
         the usage lines are hidden (u, the shared file "usagelines"): then no `hc exec` runs and the last lines are
         dropped, so lines shown again (in any window) are asked at once and nothing old is drawn meanwhile."""
         usage_on = usage_enabled() and read_usage_shown(self.state)
@@ -3797,9 +3926,9 @@ class Engine:
         """The sidebar's thread for refresh_extras: apart from the listing, so a slow machine never holds it up."""
         while not self.stopped.is_set():
             try:
-                self.refresh_extras(time.monotonic())
+                self.refresh_extras(time.clock_gettime(STEADY_CLOCK))
             except Exception:  # noqa: BLE001 - this thread must never end
-                pass
+                log_error("extras", self.win)
             self.extras_wake.wait(1.0)
             self.extras_wake.clear()
 
@@ -3823,7 +3952,7 @@ class Engine:
         that already shows a terminal (the sidebar came back, the tab bar took over) keeps it, and that terminal's
         group becomes the current one; also when the listing left it out (`hc ls` failed, its machine away for a
         moment): sync gives the tabs its group once it is listed. The saved group is given up only for a listing
-        (sync). With MMINI_AUTOOPEN=0 nothing is shown, and a target an earlier run left behind (not on screen) is
+        (sync). With HCGUI_AUTOOPEN=0 nothing is shown, and a target an earlier run left behind (not on screen) is
         cleared, so nothing carries the marker."""
         self.loaded.wait(timeout=8.0)
         if self.stopped.is_set():
@@ -3850,12 +3979,12 @@ class Engine:
         try:
             self.begin(autoopen)
         except Exception:  # noqa: BLE001
-            pass
+            log_error("tab engine", self.win)
         while not self.stopped.is_set():
             try:
                 self.sync()
             except Exception:  # noqa: BLE001
-                pass
+                log_error("tab engine", self.win)
             self.stopped.wait(beat)
 
     def stop(self) -> None:
@@ -3909,7 +4038,7 @@ class Sidebar(Engine):
         self.zoom_look: Optional[float] = None  # when refit last found the view zoomed (None: it was not)
         # "open" or "strip"; "hidden" never runs a sidebar (main ends it before it draws), so it counts as open
         self.mode = "strip" if read_sidebar_state(state) == "strip" else "open"
-        self.open_width = read_open_width(state)  # the open width: the last dragged one, else MMINI_WIDTH
+        self.open_width = read_open_width(state)  # the open width: the last dragged one, else HCGUI_WIDTH
         self.strip_width = 0  # a width the strip was dragged to, kept until the next state change (0 = none)
         self.aimed = -1  # the width the last sizing aimed at (-1: none yet)
         self.arrow_y = -1  # the line of "‹" (fold, or hide in the strip), for clicks
@@ -4174,8 +4303,8 @@ class Sidebar(Engine):
     def rename(self, prompt: Prompt) -> None:
         """Keep the new display name in names.json (see plan_rename). Nothing of hc changes. A subscription's name
         is refused when another usage line shows it or goes back to it (usage_taken): one drawn when it was asked
-        (prompt.data) or now, and every MMINI_MARKS label, with a line or not yet (the "?" list names it, and its
-        line may come later); also "other" and MMINI_SHARED_USER, the "?" list's other names (mark_legend). A row's
+        (prompt.data) or now, and every HCGUI_MARKS label, with a line or not yet (the "?" list names it, and its
+        line may come later); also "other" and HCGUI_SHARED_USER, the "?" list's other names (mark_legend). A row's
         name is refused when another row of its kind shows it."""
         if prompt.key.startswith(ACCOUNT_KEY):
             self.groups()  # names.json as it is now: a rename in another window counts
@@ -4432,7 +4561,7 @@ class Sidebar(Engine):
         else:
             title = group.shown if group else item.group
         self.cursor = item
-        # "Show usage" only while they are hidden (menu_entries); with MMINI_USAGE=0 there is nothing to show
+        # "Show usage" only while they are hidden (menu_entries); with HCGUI_USAGE=0 there is nothing to show
         usage = read_usage_shown(self.state) or not usage_enabled()
         self.menu = Menu(item, title, menu_entries(item, group, self.first(), self.servers_shown(),
                                                    read_agents_shown(self.state), read_devs_shown(self.state), usage),
@@ -4541,9 +4670,9 @@ class Sidebar(Engine):
         """u, "Hide usage" in the usage lines' menu (a right click on one) or "Show usage" in any row's menu: the
         5-hour usage lines come or go, for every window (the shared file "usagelines", USAGE_SWITCH). Hidden, they
         are not drawn and the check does not run (refresh_extras drops them); shown, they are asked for at once. With
-        MMINI_USAGE=0 there is nothing to show: the file stays as it is."""
+        HCGUI_USAGE=0 there is nothing to show: the file stays as it is."""
         if not usage_enabled():
-            self.notice.say("usage is off (MMINI_USAGE=0)", bad=False)
+            self.notice.say("usage is off (HCGUI_USAGE=0)", bad=False)
             return
         shown = not read_usage_shown(self.state)
         try:
@@ -4601,7 +4730,7 @@ class Sidebar(Engine):
 
     def set_mode(self, mode: str) -> None:
         """The open sidebar or the folded strip. Kept for the next start (all windows); the pane sizes itself for
-        the new mode (refit; not outside tmux, nor with MMINI_AUTOSIZE=0)."""
+        the new mode (refit; not outside tmux, nor with HCGUI_AUTOSIZE=0)."""
         if mode == self.mode:
             return
         self.mode = mode
@@ -4709,10 +4838,10 @@ class Sidebar(Engine):
             elif row.kind == "dev" and row.dev:
                 attr = curses.A_REVERSE if row.item == cursor else 0
                 s.fill(y, attr)
-                label = clip(row.dev.label, width - 5)
+                label = clip(row.dev.label, width - 3)  # from column 1, under the dots of the rows above (owner)
                 port = len(f":{row.dev.port}")
-                s.put(y, 3, label[:port], attr)
-                s.put(y, 3 + port, label[port:], attr | curses.A_DIM)
+                s.put(y, 1, label[:port], attr)
+                s.put(y, 1 + port, label[port:], attr | curses.A_DIM)
                 self.rows[y] = items[row.item]
             elif row.kind == "plus":
                 attr = curses.A_REVERSE if row.item == cursor else 0
@@ -4727,7 +4856,7 @@ class Sidebar(Engine):
             elif row.kind == "more":
                 s.put(y, 2, row.text, curses.A_DIM)
             elif row.kind == "agent_group" and row.group:
-                s.put(y, 1, clip(f"{row.group.shown} · {row.count}", width - 3))
+                s.put(y, 1, clip(row.group.shown, width - 3))  # no count (owner: read as a subscription number)
             elif row.kind == "group" and row.group:
                 g = row.group
                 attr = curses.A_REVERSE if row.item == cursor else 0
@@ -4745,8 +4874,11 @@ class Sidebar(Engine):
                 mark = t.address == shown
                 s.put(y, 0, "›" if mark else " ", attr | curses.A_BOLD)
                 s.put(y, 2, "●" if t.status else "○", attr | dot_attr(t.status))
-                s.put(y, 4, with_mark(t.shown, t.mark, max(1, width - 6 - len(t.status))),
-                      attr | (curses.A_BOLD if mark else 0))
+                # alone in its group: the group's name dim after its own, cut first (the status column stays)
+                name, place = name_parts(t.shown, t.mark, row.place, max(1, width - 6 - len(t.status)))
+                s.put(y, 4, name, attr | (curses.A_BOLD if mark else 0))
+                if place:
+                    s.put(y, 4 + text_width(glyph(name)), place, attr | curses.A_DIM)  # as put draws the name
                 s.put(y, max(5, width - 1 - len(t.status)), t.status, attr | curses.A_DIM)
                 self.rows[y] = items[row.item]
         # the keychain warning just above the arrow lines, the usage lines just above it, the prompt or message just
@@ -4852,11 +4984,11 @@ class Sidebar(Engine):
         elif row.kind == "more":
             s.put(y, 0, row.text if len(row.text) < width else f"+{row.count}", curses.A_DIM)
         elif row.kind == "agent_group" and row.group:
-            s.put(y, 0, f"{row.group.shown} · {row.count}")
+            s.put(y, 0, row.group.shown)
         elif row.kind == "group" and row.group:
             g = row.group
             self.compact_item(y, g.key == self.cur, summary_status(g.terms), g.shown, row.item == cursor)
-        elif row.kind == "agent" and row.term:
+        elif row.kind == "agent" and row.term:  # alone in its group too: the name only (no room for the group's)
             t = row.term
             name = with_mark(t.shown, t.mark, width - 3) if t.mark else t.shown  # the mark stays at the edge
             self.compact_item(y, t.address == shown, t.status, name, row.item == cursor)
@@ -4964,8 +5096,8 @@ class Sidebar(Engine):
 
     # size ------------------------------------------------------------------------------------------------------
     def width_goal(self) -> int:
-        """The width of the current mode: open, the width its divider was last dragged to, else MMINI_WIDTH; the
-        folded strip, a width it was dragged to since the last state change, else MMINI_NARROW."""
+        """The width of the current mode: open, the width its divider was last dragged to, else HCGUI_WIDTH; the
+        folded strip, a width it was dragged to since the last state change, else HCGUI_NARROW."""
         if self.mode == "strip":
             return self.strip_width or NARROW
         return self.open_width
@@ -5040,7 +5172,7 @@ class Sidebar(Engine):
         """Keys while a question is open. d's question on a space or an agent takes one key (answer_delete); the others
         take typed text (plain ASCII), backspace, ctrl+U clears, enter does it, esc cancels. A question asked from a
         right-click menu (by_mouse), once a key answered or cancelled it, gives the keyboard back to the view, as the
-        tab bar's questions do: the right click gave the sidebar the keyboard (mmini.tmux.conf), and typing on would
+        tab bar's questions do: the right click gave the sidebar the keyboard (hcgui.tmux.conf), and typing on would
         act on the sidebar, not on the terminal it looks like. Not when it is asked again ("changed: …"), nor for a
         question asked with a key (d, e, s, m: the sidebar had the keyboard on purpose); a press that cancels acts
         itself (on_key), and so does a paste (it goes to the view)."""
@@ -5230,6 +5362,12 @@ class Sidebar(Engine):
         if not paste_to_view(text, self.win):
             self.notice.say("the paste could not be passed on to the terminal")
 
+    def first_draw(self) -> None:
+        """"loading…" at once, as begin waits up to 8 s for the first listing. The cursor that draw placed (on the
+        only row then, "new space") is dropped: it goes to the current group once the listing is in."""
+        self.draw()
+        self.cursor, self.cursor_pos = None, 0
+
     def run(self) -> None:
         setup_curses(self.s.scr, right=True, motion=True)
         report_drags(self.s.scr, True)  # the separator follows the pointer while it is dragged
@@ -5238,6 +5376,7 @@ class Sidebar(Engine):
         threading.Thread(target=self.refresh_forever, daemon=True).start()
         threading.Thread(target=self.extras_forever, daemon=True).start()
         try:
+            self.first_draw()
             self.begin(autoopen_enabled())
             while True:
                 seen, last_round = pick_stamp(self.win), time.monotonic()  # before: a pick meanwhile is not missed
@@ -5553,7 +5692,7 @@ class TabBar:
 
     def check_ask(self, snap: Optional[dict], shown: str) -> None:
         """The window's request file "ask", read once (take_ask). A line "menu", a right click in the view
-        (mmini.tmux.conf writes it): the shown terminal's tab menu, here, with the keyboard, as a right click on its
+        (hcgui.tmux.conf writes it): the shown terminal's tab menu, here, with the keyboard, as a right click on its
         tab. A line "notice <text>" (the view relay, ask_notice: a drop that was not sent) or "info <text>" (a drop
         being sent, or sent after the tab bar said so): the last of them as a notice, an error or not, after the
         menu, so the menu does not clear it."""
@@ -5704,7 +5843,7 @@ class TabBar:
         if self.opening is not None:
             return
         write_sidebar_state("open", self.state)
-        if not split_sidebar(self.win, BASE, mmini_env(os.environ), read_open_width(self.state)):
+        if not split_sidebar(self.win, BASE, hcgui_env(os.environ), read_open_width(self.state)):
             write_sidebar_state("hidden", self.state)
             self.notice.say("could not open the sidebar")
             return
@@ -5813,8 +5952,8 @@ def start_hidden() -> int:
     return 0
 
 
-# The pane's title "mmini" (OSC 2), then an empty working directory (OSC 7 with no URL), sent once at the start;
-# later titles (PaneTitle) are OSC 2 alone. In an mmini window tmux keeps both for the pane (the window shows the
+# The pane's title "hcG-UI" (OSC 2), then an empty working directory (OSC 7 with no URL), sent once at the start;
+# later titles (PaneTitle) are OSC 2 alone. In an hcG-UI window tmux keeps both for the pane (the window shows the
 # title of the pane with the keyboard; start.sh cleared Ghostty's folder icon). Run straight in Ghostty, the empty
 # OSC 7 makes it forget the shell's folder (1.3, stream_handler reportPwd), so no folder icon shows; the title goes
 # first, as an empty OSC 7 also clears a title while none was seen.
@@ -5860,7 +5999,7 @@ def claim_pane(fd: int = 1) -> None:
 # before spaces and other shell signs, several files joined by spaces), bracketed (ESC[200~ ... ESC[201~) when the
 # program asked for it, and tmux passes it on to the pane with the keyboard, usually the view (a drop on the sidebar
 # or the tab bar is passed on there too: paste_to_view). A terminal on another machine cannot open that path. tmux
-# cannot filter what a pane reads, so the view pane runs `mmini.py view` (relay_view): view.sh in a pseudo terminal
+# cannot filter what a pane reads, so the view pane runs `hcgui.py view` (relay_view): view.sh in a pseudo terminal
 # of the relay's own, every byte passed on unchanged both ways, except such a paste while a terminal of another
 # machine is shown: each file is sent there with `hc put`, and the paths there are pasted instead. One relay per
 # window, around view.sh, never one per attach: view.sh's switch path (18 ms from a pick to the new attach's first
@@ -5892,7 +6031,7 @@ RELAY_CHUNK = 65536  # bytes per read, either way
 RELAY_QUEUE = 1 << 20  # typed bytes waiting for the inner terminal (or for a drop) beyond which stdin is not read
 ASK_NOTICE = "notice "  # a line of the request file "ask": the tab bar shows the rest of the line as a notice
 ASK_INFO = "info "  # the same, as a notice that is no error ("drop: sending shot.png to mini")
-ASK_LINES = 8  # lines kept in "ask" while the tab bar has not read it
+ASK_LINES = 8  # lines of "ask" taken at once (the latest)
 
 
 def held_tail(buf: bytes) -> int:
@@ -6134,7 +6273,7 @@ def put_file(path: str, address: str, runner: Callable[..., str],
     if os.path.splitext(path)[1].lower() not in IMAGE_SUFFIXES:
         raise DropError("over 8 MB")
     try:
-        folder = tempfile.mkdtemp(prefix="mmini-drop-", dir=tmp_dir)  # mode 0700
+        folder = tempfile.mkdtemp(prefix="hcgui-drop-", dir=tmp_dir)  # mode 0700
     except OSError as exc:  # tmp_dir gone: the relay is ending
         raise DropError("over 8 MB, could not be made smaller") from exc
     try:
@@ -6176,16 +6315,19 @@ def notice_line(text: str) -> str:
 def ask_notice(text: str, win: Path = WINDOW, bad: bool = True) -> None:
     """Have the tab bar show `text` as a notice: a line "notice <text>" (an error) or "info <text>" (`bad` False)
     in the window's request file "ask", which the tab bar watches (pick_stamp) and reads once (take_ask). Lines
-    already waiting there stay, a "menu" (a right click in the view) too. Written atomically (temp file and
-    rename)."""
-    old = [line for line in read_text(win / "ask").splitlines() if line.strip()]
-    line = (ASK_NOTICE if bad else ASK_INFO) + notice_line(text)
-    write_atomic(win / "ask", "\n".join(old[-(ASK_LINES - 1):] + [line]) + "\n")
+    already waiting there stay, a "menu" (a right click in the view) too: one short appended write, as tmux's own
+    (hcgui.tmux.conf), so neither writer replaces the other's line."""
+    line = (ASK_NOTICE if bad else ASK_INFO) + notice_line(text) + "\n"
+    fd = os.open(win / "ask", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, line.encode("utf-8", "replace"))
+    finally:
+        os.close(fd)
 
 
 def take_ask(win: Path = WINDOW) -> List[str]:
-    """The lines of the request file "ask", read once: it is renamed away first, so a request written meanwhile
-    is never removed unread. [] when there is none."""
+    """The last ASK_LINES lines of the request file "ask", read once: it is renamed away first, so a request
+    written meanwhile is never removed unread. [] when there is none."""
     ask = win / "ask"
     taken = ask.with_name(f".ask.{os.getpid()}.taken")
     try:
@@ -6193,7 +6335,7 @@ def take_ask(win: Path = WINDOW) -> List[str]:
     except OSError:
         return []
     try:
-        return [line.strip() for line in read_text(taken).splitlines() if line.strip()]
+        return [line.strip() for line in read_text(taken).splitlines() if line.strip()][-ASK_LINES:]
     finally:
         try:
             taken.unlink()
@@ -6238,7 +6380,7 @@ class ViewRelay:
     goes on as it came, and the tab bar says why (ask_notice). The paste goes only into the terminal it was dropped
     on: when another one is shown by then (a pick meanwhile), nothing is pasted, and the tab bar says so.
 
-    Never changed: view.sh, its traps, files and title escapes; view.pid stays a child of view.loop (mmini.py checks
+    Never changed: view.sh, its traps, files and title escapes; view.pid stays a child of view.loop (hcgui.py checks
     that before it ends an attach). The relay holds a key back only when it may start a paste marker, for at most
     MARKER_HOLD."""
 
@@ -6490,7 +6632,7 @@ class ViewRelay:
             return False
         if self.scratch is None and any(needs_copy(f) for f in files):
             try:
-                self.scratch = tempfile.mkdtemp(prefix="mmini-view-")  # mode 0700; removed by close
+                self.scratch = tempfile.mkdtemp(prefix="hcgui-view-")  # mode 0700; removed by close
             except OSError:
                 pass  # put_file makes its folder in the usual temp folder
         now = time.monotonic()
@@ -6616,14 +6758,14 @@ def start_child(argv: Sequence[str], attrs: Optional[list], size: Optional[bytes
         os.execv(argv[0], list(argv))
     except BaseException as exc:  # noqa: BLE001 - the pane says why, and this process ends
         try:
-            os.write(2, f"mmini view: cannot start {argv[0]}: {exc}\r\n".encode("utf-8", "replace"))
+            os.write(2, f"hcG-UI view: cannot start {argv[0]}: {exc}\r\n".encode("utf-8", "replace"))
         except OSError:
             pass
     os._exit(127)
 
 
 def relay_view(child: Optional[Sequence[str]] = None, win: Path = WINDOW) -> int:
-    """`mmini.py view`, the view pane's program: `child` (view.sh) in a pseudo terminal of its own behind a
+    """`hcgui.py view`, the view pane's program: `child` (view.sh) in a pseudo terminal of its own behind a
     ViewRelay, which ends with view.sh's exit code. Not in a terminal (nothing to relay), or no pseudo terminal to
     be had: view.sh runs in this process's place, as before the relay (a drop then reaches it unchanged)."""
     argv = list(child) if child else ["/bin/sh", str(BASE / "view.sh")]
@@ -6648,11 +6790,32 @@ def relay_view(child: Optional[Sequence[str]] = None, win: Path = WINDOW) -> int
     return ViewRelay(master, pid, win).run(attrs)
 
 
+ERROR_LOG_MAX = 256 * 1024  # bytes of error.log kept: past that it starts again
+_last_error = [""]
+
+
+def log_error(where: str, win: Optional[Path] = None) -> None:
+    """The exception being handled, with its traceback, at the end of the window's error.log: a pane that ends on an
+    error closes with it, and the background threads go on past theirs, so this file is the only trace. The same
+    error again in a row (a thread that fails every second) is written once."""
+    text = traceback.format_exc()
+    if text == _last_error[0]:
+        return
+    _last_error[0] = text
+    path = (win or WINDOW) / "error.log"
+    try:
+        mode = "w" if path.exists() and path.stat().st_size > ERROR_LOG_MAX else "a"
+        with open(path, mode, encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {where} (pid {os.getpid()})\n{text}\n")
+    except OSError:
+        pass
+
+
 def main(argv: Sequence[str]) -> int:
     if len(argv) == 2 and argv[1] == "view":
         return relay_view()
     if len(argv) != 2 or argv[1] not in ("sidebar", "tabs"):
-        print("usage: mmini.py sidebar|tabs|view", file=sys.stderr)
+        print("usage: hcgui.py sidebar|tabs|view", file=sys.stderr)
         return 2
     if argv[1] == "sidebar" and read_sidebar_state() == "hidden":
         return start_hidden()
@@ -6664,6 +6827,9 @@ def main(argv: Sequence[str]) -> int:
         curses.wrapper(lambda stdscr: cls(stdscr).run())
     except KeyboardInterrupt:
         pass
+    except Exception:
+        log_error(argv[1])
+        raise
     return 0
 
 

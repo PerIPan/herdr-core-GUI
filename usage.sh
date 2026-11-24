@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage.sh: a Claude Code status line command that saves the 5-hour usage of one Claude subscription for mmini's
+# usage.sh: a Claude Code status line command that saves the 5-hour usage of one Claude subscription for hcG-UI's
 # sidebar. It prints nothing, so Claude Code's status line stays empty, and it always ends with exit 0.
 #
 #   sh usage.sh <name>        (name: 1 to 32 of A-Z a-z 0-9 . _ -; the account label, e.g. claude or claude-2)
@@ -7,7 +7,7 @@
 # Put in the settings.json of each Claude Code config folder on the machine where Claude Code runs (one name per
 # subscription), for example:
 #
-#   {"statusLine": {"type": "command", "command": "sh \"$HOME/.local/share/mmini/usage.sh\" claude"}}
+#   {"statusLine": {"type": "command", "command": "sh \"$HOME/.local/share/hcgui/usage.sh\" claude"}}
 #
 # Claude Code runs it at the start of a session and again after each answer (and a few other events), with a JSON
 # object on stdin. For claude.ai subscribers, after the first answer of a session, that object holds
@@ -15,7 +15,7 @@
 # same for seven_day; Claude Code drops a window once its resets_at has passed. Only these numbers are read: no
 # login, no token, no network.
 #
-# When both numbers of five_hour are there, one line of JSON goes to ${MMINI_STATE:-$HOME/.local/state/mmini}/usage/
+# When both numbers of five_hour are there, one line of JSON goes to ${HCGUI_STATE:-$HOME/.local/state/hcgui}/usage/
 # <name>.json, written to a temporary file in that folder first and then renamed, so a reader never sees half a file:
 #
 #   {"name":"claude","five_hour":{"used_percentage":42,"resets_at":1764000000},"seven_day":{...},"at":1763990000}
@@ -34,7 +34,7 @@
 # jq: /usr/bin/jq (part of recent macOS versions), else the one in PATH, else /opt/homebrew/bin/jq.
 
 # The C locale, before the name is checked: in a UTF-8 one (Claude Code passes on the session's, e.g.
-# LANG=en_US.UTF-8) sh's [A-Za-z] can match letters such as é and ${#name} counts characters, not bytes, and mmini
+# LANG=en_US.UTF-8) sh's [A-Za-z] can match letters such as é and ${#name} counts characters, not bytes, and hcG-UI
 # reads ASCII names only (a file it would never draw). jq reads and writes UTF-8 in any locale.
 LC_ALL=C
 export LC_ALL
@@ -53,7 +53,7 @@ for j in /usr/bin/jq "$(command -v jq 2>/dev/null)" /opt/homebrew/bin/jq; do
 done
 [ -n "$jq" ] || drain
 
-dir=${MMINI_STATE:-$HOME/.local/state/mmini}/usage
+dir=${HCGUI_STATE:-$HOME/.local/state/hcgui}/usage
 file=$dir/$name.json
 mkdir -p "$dir" 2>/dev/null || drain
 old=

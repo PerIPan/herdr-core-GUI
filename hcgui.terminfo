@@ -1,6 +1,6 @@
-# The terminal type of mmini's own panes (the sidebar and the tab bar), compiled by start.sh into the window
+# The terminal type of hcG-UI's own panes (the sidebar and the tab bar), compiled by start.sh into the window
 # folder: tmux's screen-256color with SGR mouse codes, so a click keeps its column past column 223 of a wide window
 # (screen-256color's X10 codes stop there). ncurses 6.0 (macOS) reads SGR codes only for a name with "xterm" in it.
-xterm-mmini|screen-256color with SGR mouse codes for mmini,
+xterm-hcgui|screen-256color with SGR mouse codes for hcG-UI,
 	kmous=\E[<, XM=\E[?1006;1000%?%p1%{1}%=%th%el%;,
 	use=screen-256color,

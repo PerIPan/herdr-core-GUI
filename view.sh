@@ -1,13 +1,13 @@
 #!/bin/sh
-# mmini view: the main pane of the mmini window. Shows the terminal the sidebar or tab bar (mmini.py) picked, by
+# hcG-UI view: the main pane of the hcG-UI window. Shows the terminal the sidebar or tab bar (hcgui.py) picked, by
 # running `hc attach` on the address in the window's state folder. A pick writes "target" and bumps the counter
 # "gen"; this loop then attaches to the new address. ctrl+\ detaches and waits for the next pick.
 #
 # How a pick always wins, also two picks a few milliseconds apart:
-# - the attach is this script's own child; view.pid holds its pid, view.loop this script's pid. mmini.py ends the
+# - the attach is this script's own child; view.pid holds its pid, view.loop this script's pid. hcgui.py ends the
 #   attach at once (SIGTERM, only when the pid is a child of this loop and its command line is an attach);
 # - a watcher beside every attach ends it as soon as "gen" differs from the value read BEFORE "target". So when
-#   mmini.py found nothing to end (the attach was not started yet), the watcher still does it within 0.2 s.
+#   hcgui.py found nothing to end (the attach was not started yet), the watcher still does it within 0.2 s.
 # Signals only ever go to the attach this script started itself.
 #
 # How a switch stays quick (measured on one Mac, two terminals of its own core, from the pick to the new
@@ -17,13 +17,13 @@
 # attached, a pick is seen within 10 ms (idle_wait).
 set -u
 
-hc="${MMINI_HC:-$HOME/.local/bin/hc}"
-shared="${MMINI_STATE:-$HOME/.local/state/mmini}"
-state="${MMINI_WINDOW:-$shared}"
+hc="${HCGUI_HC:-$HOME/.local/bin/hc}"
+shared="${HCGUI_STATE:-$HOME/.local/state/hcgui}"
+state="${HCGUI_WINDOW:-$shared}"
 mkdir -p "$state"
 
 if [ ! -x "$hc" ]; then
-  printf 'mmini view: hc not found at %s (set MMINI_HC, or install herdr-core).\n' "$hc"
+  printf 'hcG-UI view: hc not found at %s (set HCGUI_HC, or install herdr-core).\n' "$hc"
   # On screen the message stays: in tmux the pane would close with this script.
   if [ -t 1 ]; then while :; do sleep 3600; done; fi
   exit 1
@@ -64,11 +64,11 @@ read_target() {
 target=""
 
 # The window title for the address $1 into $tt, as the sidebar or the tab bar wrote it to the file "title"
-# (mmini.py's write_title: the address, then its title, e.g. "web · me@mini"). Nothing shown, or the
-# file names another terminal: "mmini". Control characters are dropped (mmini.py writes none): none may reach the
+# (hcgui.py's write_title: the address, then its title, e.g. "web · me@mini"). Nothing shown, or the
+# file names another terminal: "hcG-UI". Control characters are dropped (hcgui.py writes none): none may reach the
 # escape. Only a title that has one costs a process (tr).
 title_of() {
-  tt=mmini
+  tt=hcG-UI
   if [ -n "$1" ] && [ -r "$state/title" ]; then
     { IFS= read -r ta; IFS= read -r tb; } <"$state/title"
     [ "$ta" = "$1" ] && [ -n "$tb" ] && tt=$tb
@@ -76,7 +76,7 @@ title_of() {
   case $tt in
     *[[:cntrl:]]*) tt=$(printf '%s' "$tt" | tr -d '\000-\037\177') ;;
   esac
-  [ -n "$tt" ] || tt=mmini
+  [ -n "$tt" ] || tt=hcG-UI
 }
 
 # The pane's title (OSC 2) for the address $1.
@@ -85,19 +85,19 @@ set_title() {
   printf '\033]2;%s\007' "$tt"
 }
 
-# The title of the address $1 ("mmini" while none), then an empty working directory (OSC 7 without a URL; as
-# mmini.py's PANE_TITLE): Ghostty shows the focused pane's folder as an icon next to the window title, and the login
+# The title of the address $1 ("hcG-UI" while none), then an empty working directory (OSC 7 without a URL; as
+# hcgui.py's PANE_TITLE): Ghostty shows the focused pane's folder as an icon next to the window title, and the login
 # shell that started this script reported its home folder. Again before and after each attach: what ran there may
 # have set them. The title comes first: Ghostty 1.3 lets an empty OSC 7 clear the title only while it has seen
-# none, and a title of under 256 bytes (mmini.py keeps it so) counts as seen.
+# none, and a title of under 256 bytes (hcgui.py keeps it so) counts as seen.
 own_title() {
   set_title "$1"
   printf '\033]7;\007'
 }
 
-# Before an attach to $1: mmini.py writes "title" before the target (show), so it is there at once. When the file
+# Before an attach to $1: hcgui.py writes "title" before the target (show), so it is there at once. When the file
 # names another terminal (an engine wrote it a moment late), wait up to 0.5 s for the right one, unless a newer
-# pick comes first ($2: the counter read before the target). No file (nothing of mmini runs): no wait.
+# pick comes first ($2: the counter read before the target). No file (nothing of hcG-UI runs): no wait.
 wait_title() {
   i=0
   while [ "$i" -lt 5 ] && [ -r "$state/title" ]; do
@@ -223,14 +223,14 @@ rm -f "$state/view.pid" "$state/view.pid.tmp"
 printf '%s\n' "$$" >"$state/view.loop.tmp" && mv -f "$state/view.loop.tmp" "$state/view.loop"
 [ "$on_tty" = 1 ] && own_title "$target"
 
-# With MMINI_AUTOOPEN=0 nothing is shown until something is picked, also when an earlier run left a target.
+# With HCGUI_AUTOOPEN=0 nothing is shown until something is picked, also when an earlier run left a target.
 first=1
 dirty=0 # the pane holds what an attach or this loop drew, and no attach replaced it yet
 while :; do
   read_gen
   gen=$now_gen # before target: a pick that lands in between costs one extra attach, never a lost pick
   read_target
-  [ "$first" = 1 ] && [ "${MMINI_AUTOOPEN:-1}" = 0 ] && target=""
+  [ "$first" = 1 ] && [ "${HCGUI_AUTOOPEN:-1}" = 0 ] && target=""
   first=0
   rc=0
   if [ -n "$target" ]; then
@@ -255,7 +255,7 @@ while :; do
   if [ "$now_gen" != "$gen" ]; then
     # A new pick: its attach starts at once and draws the whole pane itself (hc attach clears it first), so the
     # pane is not wiped here: that only showed a blank pane until then. view.pid stays until the next attach
-    # replaces it (mmini.py checks the process behind it); an rm here would cost a process on the way.
+    # replaces it (hcgui.py checks the process behind it); an rm here would cost a process on the way.
     reset_modes
     continue
   fi
