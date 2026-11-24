@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage.sh: a Claude Code status line command that saves the 5-hour usage of one Claude subscription for hcG-UI's
+# usage.sh: a Claude Code status line command that saves the 5-hour usage of one Claude subscription for hcGUI's
 # sidebar. It prints nothing, so Claude Code's status line stays empty, and it always ends with exit 0.
 #
 #   sh usage.sh <name>        (name: 1 to 32 of A-Z a-z 0-9 . _ -; the account label, e.g. claude or claude-2)
@@ -34,7 +34,7 @@
 # jq: /usr/bin/jq (part of recent macOS versions), else the one in PATH, else /opt/homebrew/bin/jq.
 
 # The C locale, before the name is checked: in a UTF-8 one (Claude Code passes on the session's, e.g.
-# LANG=en_US.UTF-8) sh's [A-Za-z] can match letters such as é and ${#name} counts characters, not bytes, and hcG-UI
+# LANG=en_US.UTF-8) sh's [A-Za-z] can match letters such as é and ${#name} counts characters, not bytes, and hcGUI
 # reads ASCII names only (a file it would never draw). jq reads and writes UTF-8 in any locale.
 LC_ALL=C
 export LC_ALL
@@ -52,6 +52,40 @@ for j in /usr/bin/jq "$(command -v jq 2>/dev/null)" /opt/homebrew/bin/jq; do
   if [ -n "$j" ] && [ -x "$j" ]; then jq=$j; break; fi
 done
 [ -n "$jq" ] || drain
+
+# The terminal's label "account": inside a herdr-core terminal (HC_TERMINAL_ID, set by hc) with no such label yet,
+# it is set to <name>, so hcGUI knows the subscription a session runs on (its mark, the row below the tabs) with no
+# label typed by hand. A label already there is never changed: one set by hand, or one another tool reads, stays.
+# Checked once per terminal and name: a small file per terminal in labels/ remembers it (HC_SCOPE in it too, so a
+# reused terminal id is checked again); a failed `hc get` or `hc label` leaves none, so the next run tries again.
+# HCGUI_ACCOUNT_LABEL=0 turns it off. hc: the one in PATH, else ~/.local/bin/hc.
+label() {
+  [ "${HCGUI_ACCOUNT_LABEL-1}" != 0 ] || return 0
+  id=${HC_TERMINAL_ID-}
+  case $id in
+    '' | *[!A-Za-z0-9._-]*) return 0 ;;
+  esac
+  [ "${#id}" -le 64 ] || return 0
+  hc=$(command -v hc 2>/dev/null) || hc=
+  case $hc in
+    /*) ;;
+    *) hc=$HOME/.local/bin/hc ;;
+  esac
+  [ -x "$hc" ] || return 0
+  seen=${HCGUI_STATE:-$HOME/.local/state/hcgui}/labels
+  want="${HC_SCOPE-} $name"
+  [ "$(/usr/bin/head -c 300 "$seen/$id" 2>/dev/null)" != "$want" ] || return 0
+  info=$("$hc" get "$id" </dev/null 2>/dev/null) || return 0
+  have=$(printf '%s' "$info" | "$jq" -r '.labels.account // "" | if type == "string" then . else "?" end' \
+    2>/dev/null) || return 0
+  if [ -z "$have" ]; then
+    "$hc" label "$id" "account=$name" </dev/null >/dev/null 2>&1 || return 0
+  fi
+  mkdir -p "$seen" 2>/dev/null && printf '%s' "$want" >"$seen/$id" 2>/dev/null
+  return 0
+}
+
+label
 
 dir=${HCGUI_STATE:-$HOME/.local/state/hcgui}/usage
 file=$dir/$name.json

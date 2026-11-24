@@ -1087,10 +1087,25 @@ class TabLayoutTests(unittest.TestCase):
         terms = [hcgui.Term("mini/t1", "mini", "", "claude-code", "idle", "/x"),
                  hcgui.Term("mini/t2", "mini", "", "zsh", "", "/x")]
         group = hcgui.Group("space:x", "x", "space", "mini", "", terms=terms)
-        infos = {"mini/t1": hcgui.Info(account="work"), "mini/t2": hcgui.Info(account="work")}
-        snap = hcgui.make_snapshot(group, 0.0, infos=infos, names={"account:work": "Team plan"})
-        self.assertEqual([tb["account"] for tb in snap["tabs"]], ["Team plan", ""])  # a shell has none
-        self.assertEqual(hcgui.make_snapshot(group, 0.0, infos=infos)["tabs"][0]["account"], "work")
+        infos = {"mini/t1": hcgui.Info(account="work"), "mini/t2": hcgui.Info(account="work"),
+                 "mini/t9": hcgui.Info(account="personal")}
+        other = hcgui.Term("mini/t9", "mini", "", "claude-code", "idle", "/y")  # in another space
+        everything = [*terms, other]
+        with mock.patch.object(hcgui, "ACCOUNT_MARKS", {}):
+            snap = hcgui.make_snapshot(group, 0.0, infos=infos, names={"account:work": "Team plan"},
+                                       everything=everything)
+            self.assertEqual([tb["account"] for tb in snap["tabs"]], ["Team plan", ""])  # a shell has none
+            self.assertEqual(hcgui.make_snapshot(group, 0.0, infos=infos, everything=everything)["tabs"][0]["account"],
+                             "work")
+            # one subscription in sight: no name (owner, 24 Nov: too much to say it everywhere)
+            self.assertEqual(hcgui.make_snapshot(group, 0.0, infos=infos, everything=terms)["tabs"][0]["account"], "")
+            # the shared server's unlabelled session (its ³ mark) is another login: the name shows
+            shared = hcgui.Term("box/t1", "box", "", "claude-code", "idle", "/z", mark="³")
+            self.assertEqual(hcgui.make_snapshot(group, 0.0, infos=infos, everything=[*terms, shared])["tabs"][0]
+                             ["account"], "work")
+        with mock.patch.object(hcgui, "ACCOUNT_MARKS", {"work": "¹", "personal": "²"}):  # marks name two
+            self.assertEqual(hcgui.make_snapshot(group, 0.0, infos=infos, everything=terms)["tabs"][0]["account"],
+                             "work")
 
     def test_hc_claude_counts_as_claude_code(self):
         term = hcgui.Term("mini/t3", "mini", "", "claude", "", "/x")  # `hc run claude` before its first report
@@ -1189,7 +1204,7 @@ class StateTests(unittest.TestCase):
         snap = hcgui.read_snapshot(self.state, now=1001.0)
         self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "names", "server", "shown",
                                         "shown_title", "tabs", "title", "ts"])
-        self.assertEqual((snap["server"], snap["shown"], snap["shown_title"]), ("mini", "", "hcG-UI"))
+        self.assertEqual((snap["server"], snap["shown"], snap["shown_title"]), ("mini", "", "hcGUI"))
         self.assertEqual(snap["group"], "space:atlas")
         self.assertEqual((snap["name"], snap["title"]), ("atlas", "atlas"))  # no display name: the name
         self.assertEqual(snap["kind"], "space")
@@ -1580,7 +1595,7 @@ class FakeHc:
 
 
 class FakeTmux:
-    """Stands in for hcgui.tmux in an hcG-UI window: records each tmux run (its arguments) and answers as tmux 3.8
+    """Stands in for hcgui.tmux in an hcGUI window: records each tmux run (its arguments) and answers as tmux 3.8
     did in the spike. `scr`: the fake screen of the pane that sizes itself; a resize-pane changes it, as tmux would.
     `zoomed`, `width`, `height`: the window's zoom flag and size; `active`: this pane has the keyboard."""
 
@@ -2522,6 +2537,24 @@ class TabBarLogicTests(unittest.TestCase):
         reversed_cells = [x for (y, x), (_, attr) in self.scr.cells.items() if attr & hcgui.curses.A_REVERSE]
         self.assertEqual((min(reversed_cells), max(reversed_cells)), (0, 8))  # the shown tab only
 
+    def test_a_newly_shown_terminal_gets_all_its_info_then_the_short_line(self):
+        """Owner, 24 Nov: the row below the tabs gives all the info once a terminal is shown, then hides it."""
+        now = time.monotonic()
+        self.bar.note_shown("t1", now)  # the window's first terminal
+        self.bar.draw(self.snap, "t1")
+        self.assertTrue(self.scr.line(4).startswith(hcgui.glyph(" app · Claude Code")), self.scr.line(4))
+        self.assertIn("· t1", self.scr.line(4))
+        self.bar.hints_until = now - 0.1  # NOTICE_SECONDS later
+        self.bar.note_shown("t1", now)  # the same terminal at the next round: nothing new
+        self.bar.draw(self.snap, "t1")
+        self.assertEqual(self.scr.line(4), hcgui.glyph(" Claude Code · ~/dev/app · idle"))
+        self.bar.note_shown("t2", now)  # a switch: all the info again
+        self.assertEqual(self.bar.hints_until, now + hcgui.NOTICE_SECONDS)
+        self.bar.hints_until = 0.0
+        self.bar.note_shown("", now)  # nothing shown: no info
+        self.bar.note_shown("t2", now)  # shown again after nothing: it is new again
+        self.assertEqual(self.bar.hints_until, now + hcgui.NOTICE_SECONDS)
+
     def test_the_row_below_the_tabs_carries_the_id_in_any_pane(self):
         """TAB_ROWS (two) rows: one row of tabs (scrolled when they do not fit), then the info row; a click shows the
         space's name, the line with its id and a hint there (review finding of the three-row bar: the id never
@@ -3327,7 +3360,7 @@ class ProgramTests(unittest.TestCase):
         for mode, drawn in (("sidebar", b"fold"), ("tabs", b" + ")):  # the tab bar: its "+" (no hints until a click)
             proc, _, output = self.start(mode)
             self.assertTrue(wait_for(lambda: drawn in output, 10), (mode, bytes(output)))  # noqa: B023
-            self.assertTrue(bytes(output).startswith(b"\x1b]2;hcG-UI\x07\x1b]7;\x07"), (mode, bytes(output[:40])))
+            self.assertTrue(bytes(output).startswith(b"\x1b]2;hcGUI\x07\x1b]7;\x07"), (mode, bytes(output[:40])))
             proc.kill()
             proc.wait(timeout=5)
 
@@ -5095,7 +5128,7 @@ class ScriptTests(unittest.TestCase):
 
     def test_build_keeps_the_install_line_and_never_edits_the_ghostty_config(self):
         text = (ROOT / "build.sh").read_text()
-        self.assertIn("git clone https://github.com/PerIPan/hcG-UI ~/.local/share/hcgui && "
+        self.assertIn("git clone https://github.com/PerIPan/herdr-core-GUI ~/.local/share/hcgui && "
                       "sh ~/.local/share/hcgui/build.sh", text)
         self.assertIn("git -C ~/.local/share/hcgui pull && sh ~/.local/share/hcgui/build.sh", text)
         self.assertNotIn("focus-follows-mouse", text)  # one click is enough without it now
@@ -5110,9 +5143,61 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('"$py sidebar"', text)
         self.assertIn('"$py tabs"', text)
 
+    def setup_report(self, machines=(), zshrc="", **env):
+        """The last part of build.sh (its setup report), run alone with a stand-in hc and HOME."""
+        text = (ROOT / "build.sh").read_text()
+        part = text[text.index("# What is set up and what is left"):]
+        with tempfile.TemporaryDirectory() as home:
+            hc = Path(home) / ".local/bin/hc"
+            hc.parent.mkdir(parents=True)
+            listing = json.dumps({"machines": [{"name": m, "target": f"me@{m}"} for m in machines]})
+            hc.write_text(f"#!/bin/sh\necho '{listing}'\n")
+            hc.chmod(0o755)
+            (Path(home) / ".zshrc").write_text(zshrc)
+            environ = {"PATH": "/usr/bin:/bin", "HOME": home, **env}
+            out = subprocess.run(["/bin/sh", "-c", part], env=environ, capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    def test_build_ends_with_what_is_set_and_what_is_left(self):
+        out = self.setup_report()
+        self.assertIn("setup (README: Setup; AI agents: AGENTS.md):", out)
+        self.assertIn("home:   this Mac (no servers", out)
+        self.assertIn("usage:  off (optional)", out)
+        self.assertIn("marks:  none; only for two or more subscriptions", out)
+        self.assertIn("start hcGUI.app", out)
+        self.assertIn("home:   box, the only server", self.setup_report(["box"]))
+        several = self.setup_report(["a", "b"])
+        self.assertIn("servers: a b. If one of them is home: export HCGUI_FIRST=<name>", several)
+        # from ~/.zshrc when the shell has none (an agent's shell may not read it), or from the shell
+        out = self.setup_report(["a", "b"], 'export HCGUI_FIRST="b"\nexport HCGUI_MARKS="x=¹,y=²"\n')
+        self.assertIn("home:   b (HCGUI_FIRST)", out)
+        self.assertIn("usage:  optional, set up on b", out)
+        self.assertNotIn("marks:", out)
+        self.assertIn("home:   a (HCGUI_FIRST)", self.setup_report(["a", "b"], "export HCGUI_FIRST=b\n",
+                                                               HCGUI_FIRST="a"))
+
+    def test_ai_agents_get_their_notes(self):
+        """Owner, 24 Nov: an AI agent installing gets notice of the setup: AGENTS.md (CLAUDE.md loads it), linked
+        from the README's install and named by build.sh's last lines; it ships in the public copy."""
+        agents = (ROOT / "AGENTS.md").read_text()
+        self.assertIn("git clone https://github.com/PerIPan/herdr-core-GUI ~/.local/share/hcgui && "
+                      "sh ~/.local/share/hcgui/build.sh", agents)
+        for words in ("Ask before setting anything", "never replace it", "HCGUI_FIRST", "HCGUI_MARKS",
+                      "Back up each `settings.json`", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"):
+            self.assertIn(words, agents)
+        self.assertEqual((ROOT / "CLAUDE.md").read_text().strip(), "@AGENTS.md")
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("[AGENTS.md](AGENTS.md)", readme)
+        self.assertIn("## Setup", readme)
+        gitattributes = ROOT / ".gitattributes"  # not in the public copy (export-ignore itself)
+        attributes = gitattributes.read_text() if gitattributes.exists() else ""
+        self.assertNotIn("AGENTS.md", attributes)
+        self.assertNotIn("CLAUDE.md", attributes)
+
     def test_build_needs_tmux_and_the_new_files(self):
         text = (ROOT / "build.sh").read_text()
-        self.assertIn('echo "hcG-UI: tmux not found (brew install tmux)" >&2; exit 1', text)
+        self.assertIn('echo "hcGUI: tmux not found (brew install tmux)" >&2; exit 1', text)
         self.assertIn("for f in hcgui.py view.sh start.sh hcgui.tmux.conf usage.sh; do", text)
 
     def test_launcher_types_start_sh_into_one_window(self):
@@ -5362,14 +5447,14 @@ class StartFailureTests(unittest.TestCase):
     def test_a_tmux_that_fails_is_said_and_leaves_nothing_behind(self):
         out, calls = self.run_start("echo 'no server: broken' >&2\nexit 1\n")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("hcG-UI: tmux could not start: no server: broken", out.stdout)
+        self.assertIn("hcGUI: tmux could not start: no server: broken", out.stdout)
         self.assertIn("(enter closes this window)", out.stdout)
         self.assertTrue(calls[-1].startswith("-L hcgui-w-") and calls[-1].endswith(" kill-server"), calls)
 
     def test_a_split_that_fails_ends_the_server_and_a_junk_width_is_30(self):
         script = 'case "$*" in *new-session*) echo %0 ;; *split-window*) echo "no space" >&2; exit 1 ;; esac\n'
         out, calls = self.run_start(script)
-        self.assertIn("hcG-UI: tmux could not make the sidebar: no space", out.stdout)
+        self.assertIn("hcGUI: tmux could not make the sidebar: no space", out.stdout)
         split = next(c for c in calls if "split-window" in c)
         self.assertIn(" -l 30 ", split)  # HCGUI_WIDTH=abc
         self.assertTrue(calls[-1].endswith(" kill-server"))
@@ -5891,7 +5976,7 @@ class PaneTitleTests(unittest.TestCase):
     """The title "mini" and no folder icon: OSC 2, then an empty OSC 7, from all three panes."""
 
     def test_the_sequence(self):
-        self.assertEqual(hcgui.PANE_TITLE, "\x1b]2;hcG-UI\x07\x1b]7;\x07")
+        self.assertEqual(hcgui.PANE_TITLE, "\x1b]2;hcGUI\x07\x1b]7;\x07")
 
     def test_claim_pane_writes_only_to_a_terminal(self):
         import pty
@@ -5915,7 +6000,7 @@ class PaneTitleTests(unittest.TestCase):
         text = (ROOT / "view.sh").read_text()
         own = text[text.index("own_title() {"):text.index("}", text.index("own_title() {"))]
         self.assertEqual(own.split("\n")[1:3], ['  set_title "$1"', "  printf '\\033]7;\\007'"])  # OSC 2 first
-        self.assertIn("tt=hcG-UI", text)  # nothing shown: "hcG-UI"
+        self.assertIn("tt=hcGUI", text)  # nothing shown: "hcGUI"
         body = text[text.index("clean_screen() {"):text.index("}", text.index("clean_screen() {"))]
         self.assertIn('own_title "$target"', body)
         self.assertIn('[ "$on_tty" = 1 ] && own_title "$target"', text)
@@ -5986,7 +6071,7 @@ class WindowTitleTests(unittest.TestCase):
         self.assertEqual(title("mini/t2", parsed, machines), "tracker · me@mini")
         self.assertEqual(title("rig/t1", parsed, machines), "harry · guest@mini")
         self.assertEqual(title("t9", parsed, machines), "t9 · this Mac")  # no hc name: its id
-        self.assertEqual(title("", parsed, machines), "hcG-UI")  # nothing shown
+        self.assertEqual(title("", parsed, machines), "hcGUI")  # nothing shown
 
     def test_display_names_win(self):
         parsed = hcgui.parse(json.dumps({"terminals": self.TERMS}))
@@ -6019,7 +6104,7 @@ class WindowTitleTests(unittest.TestCase):
             self.assertNotIn("\x1b", text)
             self.assertTrue(text.startswith("a "), repr(text))
             self.assertTrue(text.endswith(" · srv"), repr(text))
-        self.assertEqual(wt("\x1b\x07", "\n"), "hcG-UI")  # nothing printable left: as when nothing is shown
+        self.assertEqual(wt("\x1b\x07", "\n"), "hcGUI")  # nothing printable left: as when nothing is shown
         self.assertEqual(wt("  web  ", ""), "web")
         self.assertEqual(wt("", "me@mini"), "me@mini")
         long = wt("x" * 200, "me@mini")
@@ -6040,7 +6125,7 @@ class WindowTitleTests(unittest.TestCase):
         self.assertEqual(hcgui.title_escape("tracker · me@mini"),
                          "\x1b]2;tracker · me@mini\x07".encode())
         self.assertEqual(hcgui.title_escape("a\x07\x1b]7;b"), b"\x1b]2;a ]7;b\x07")
-        self.assertEqual(hcgui.title_escape(""), b"\x1b]2;hcG-UI\x07")
+        self.assertEqual(hcgui.title_escape(""), b"\x1b]2;hcGUI\x07")
 
     # sending -----------------------------------------------------------------------------------------------------
     def test_sent_only_when_it_changes_and_never_followed_by_osc_7(self):
@@ -6049,7 +6134,7 @@ class WindowTitleTests(unittest.TestCase):
         try:
             hcgui.claim_pane(slave)
             pane = hcgui.PaneTitle(slave)
-            self.assertFalse(pane.send("hcG-UI"))  # what claim_pane sent: nothing again
+            self.assertFalse(pane.send("hcGUI"))  # what claim_pane sent: nothing again
             self.assertTrue(pane.send("tracker · me@mini"))
             self.assertFalse(pane.send("tracker · me@mini"))  # every frame: once only
             self.assertFalse(pane.send(None))  # not known: the title stays
@@ -6082,7 +6167,7 @@ class WindowTitleTests(unittest.TestCase):
     # the engine: file, snapshot, hidden servers ------------------------------------------------------------------
     def test_the_engine_writes_the_title_file_and_the_snapshot(self):
         side = self.sidebar()
-        self.assertEqual(self.title_file(), ["", "hcG-UI"])
+        self.assertEqual(self.title_file(), ["", "hcGUI"])
         hcgui.write_servers_shown(False, self.state)  # hidden: changes nothing about the title
         for address, title in (("mini/t2", "tracker · me@mini"), ("rig/t1", "harry · guest@mini"),
                                ("t9", "t9 · this Mac")):
@@ -6135,7 +6220,7 @@ class WindowTitleTests(unittest.TestCase):
         self.assertEqual(snap["server"], "me@mini")
         self.assertEqual([t["server"] for t in snap["tabs"]], ["me@mini", "me@mini"])
         self.assertEqual(hcgui.tabs_title(snap, "mini/t3"), "sh · me@mini")  # a tab: from its label
-        self.assertEqual(hcgui.tabs_title(snap, ""), "hcG-UI")
+        self.assertEqual(hcgui.tabs_title(snap, ""), "hcGUI")
         self.assertIsNone(hcgui.tabs_title(None, "mini/t2"))  # no snapshot yet: the title stays
         self.assertIsNone(hcgui.tabs_title(snap, "rig/t1"))  # neither shown when written nor a tab: stays
         # the tab bar's picks write the title before the target, like the sidebar's
@@ -6216,7 +6301,7 @@ class WindowTitleTests(unittest.TestCase):
         self.assertIn(second, data[one:two])
         self.assertEqual(ghostty_title(data[:one])[0], "tracker · me@mini")
         self.assertEqual(ghostty_title(data[:two])[0], "harry · guest@mini")
-        self.assertEqual(ghostty_title(data)[0], "hcG-UI")  # nothing shown any more
+        self.assertEqual(ghostty_title(data)[0], "hcGUI")  # nothing shown any more
         # every OSC 7 comes right after a title: never one that could clear it
         osc = OSC_RE.findall(data)
         for i, (code, _) in enumerate(osc):
@@ -6242,7 +6327,7 @@ class WindowTitleTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: b"ATTACH mini/t2" in out.read_bytes()))
         self.assertGreaterEqual(time.monotonic() - started, 0.4)  # it waited for the right one
         data = out.read_bytes()
-        self.assertEqual(ghostty_title(data[:data.index(b"ATTACH")])[0], "hcG-UI")
+        self.assertEqual(ghostty_title(data[:data.index(b"ATTACH")])[0], "hcGUI")
         hcgui.write_title("mini/t3", "sh · me@mini", self.win)  # the engine, a moment late
         hcgui.show("mini/t3", self.win)
         self.assertTrue(wait_for(lambda: b"ATTACH mini/t3" in out.read_bytes()))
@@ -8336,6 +8421,66 @@ class UsageScriptTests(unittest.TestCase):
         self.run_usage(stdin, "x" * 32)
         self.run_usage(stdin, "Work_1.b-2")
         self.assertEqual(self.files(), ["Work_1.b-2.json", "x" * 32 + ".json"])
+
+    def fake_hc(self, fails=False, labels=None):
+        """A stand-in hc in a folder of its own: it logs its arguments, one call per line; `hc get` prints a
+        terminal with `labels`; `hc label` fails when asked."""
+        bin_dir = Path(self._tmp.name) / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        log = Path(self._tmp.name) / "hc.log"
+        got = Path(self._tmp.name) / "get.json"
+        got.write_text(json.dumps({"address": "t1", "labels": labels or {}}))
+        hc = bin_dir / "hc"
+        hc.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\n'
+                      f'if [ "$1" = get ]; then cat "{got}"; exit 0; fi\nexit {1 if fails else 0}\n')
+        hc.chmod(0o755)
+        return f"{bin_dir}:/usr/bin:/bin", log
+
+    def hc_calls(self, log, verb="label"):
+        return [c for c in log.read_text().splitlines() if c.startswith(verb + " ")] if log.exists() else []
+
+    def test_a_label_already_there_is_kept(self):
+        """Review, 24 Nov: a hand-set label, or one another tool resumes sessions by, is never changed."""
+        for labels in ({"account": "claude-2"}, {"account": 3}):
+            path, log = self.fake_hc(labels=labels)
+            log.unlink(missing_ok=True)
+            for _ in range(2):
+                self.run_usage(status_input(), "claude", PATH=path, HC_TERMINAL_ID="t7", HC_SCOPE=str(labels))
+            self.assertEqual(self.hc_calls(log), [], labels)
+            self.assertEqual(len(self.hc_calls(log, "get")), 1, labels)  # looked once, then remembered
+
+    def test_labels_its_terminal_with_the_name_once(self):
+        path, log = self.fake_hc()
+        stdin = status_input()  # before the first answer too: no numbers needed for the label
+        self.run_usage(stdin, "claude", PATH=path, HC_TERMINAL_ID="t49", HC_SCOPE="s1")
+        self.assertEqual(self.hc_calls(log), ["label t49 account=claude"])
+        self.run_usage(stdin, "claude", PATH=path, HC_TERMINAL_ID="t49", HC_SCOPE="s1")  # after each answer
+        self.assertEqual(len(self.hc_calls(log)), 1)  # once per terminal
+        self.run_usage(stdin, "work", PATH=path, HC_TERMINAL_ID="t49", HC_SCOPE="s1")  # another name
+        self.run_usage(stdin, "work", PATH=path, HC_TERMINAL_ID="t50", HC_SCOPE="s1")  # another terminal
+        self.run_usage(stdin, "work", PATH=path, HC_TERMINAL_ID="t50", HC_SCOPE="s2")  # another core
+        self.assertEqual(self.hc_calls(log)[1:], ["label t49 account=work", "label t50 account=work",
+                                                  "label t50 account=work"])
+        self.assertEqual(self.files(), [])  # no numbers: no usage file; the labels' notes live beside, not in it
+
+    def test_no_label_outside_hc_or_when_turned_off(self):
+        path, log = self.fake_hc()
+        stdin = status_input((42, self.now + 3600))
+        for env in ({}, {"HC_TERMINAL_ID": ""}, {"HC_TERMINAL_ID": "../x"}, {"HC_TERMINAL_ID": "a b"},
+                    {"HC_TERMINAL_ID": "t$(touch pwned)"}, {"HC_TERMINAL_ID": "x" * 65},
+                    {"HC_TERMINAL_ID": "t1", "HCGUI_ACCOUNT_LABEL": "0"}):
+            self.run_usage(stdin, "claude", PATH=path, **env)
+        self.assertEqual(self.hc_calls(log), [])
+        self.assertFalse((Path(self._tmp.name) / "pwned").exists())
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 42)  # the numbers are still saved
+
+    def test_a_failed_label_is_tried_again_and_no_hc_is_no_error(self):
+        path, log = self.fake_hc(fails=True)
+        for _ in range(2):
+            self.run_usage(status_input(), "claude", PATH=path, HC_TERMINAL_ID="t1")
+        self.assertEqual(len(self.hc_calls(log)), 2)  # no note kept after a failure
+        self.run_usage(status_input((5, self.now + 3600)), "claude", HC_TERMINAL_ID="t1")  # no hc anywhere
+        self.assertEqual(self.saved()["five_hour"]["used_percentage"], 5)
 
     def test_the_name_check_is_the_same_in_a_utf_8_locale(self):
         # Claude Code runs it with the session's locale (LANG=en_US.UTF-8 on most Macs); there sh's [A-Za-z] can

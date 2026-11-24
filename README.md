@@ -1,7 +1,7 @@
-# hcG-UI
+# hcGUI
 
 <p>
-  <img src="docs/screenshot-dark.png" width="49%" alt="An hcG-UI window in Ghostty, dark theme: sidebar, tab bar and an agent's terminal, with made-up data">
+  <img src="docs/screenshot-dark.png" width="49%" alt="An hcGUI window in Ghostty, dark theme: sidebar, tab bar and an agent's terminal, with made-up data">
   <img src="docs/screenshot-light.png" width="49%" alt="The same window in a light theme">
 </p>
 
@@ -13,9 +13,9 @@ rights asked. Machines and agents in the images are made up.
 ## What it is, and what it is not
 
 - **A front end for herdr-core.** herdr-core (`hc`) keeps terminals and coding agents running on this Mac and on
-  machines reached over SSH. hcG-UI lists them and shows one at a time, through `hc attach`.
+  machines reached over SSH. hcGUI lists them and shows one at a time, through `hc attach`.
 - **Not herdr-core.** herdr-core is a separate project, [herdrdev/herdr-core](https://github.com/herdrdev/herdr-core),
-  and hcG-UI is not made by its authors.
+  and hcGUI is not made by its authors.
 - **Not a terminal.** Ghostty draws the window; a tmux of the window's own splits it into sidebar, tab bar and view.
 - **No connection of its own.** Every machine is reached through `hc`. The only other thing opened is a dev
   server's page, in the default browser, on a click.
@@ -48,7 +48,7 @@ rights asked. Machines and agents in the images are made up.
   JPEG.
 - **One click, fast switching.** A click acts in any pane at once. 18 ms from a click to the new terminal's first
   byte on one machine; network time comes on top.
-- **Display names.** Spaces, servers, terminals and subscriptions can be renamed in hcG-UI; the names in `hc`
+- **Display names.** Spaces, servers, terminals and subscriptions can be renamed in hcGUI; the names in `hc`
   stay. Kept in `names.json`.
 
 <picture>
@@ -78,14 +78,16 @@ show a status only when they report one.
 ## Install
 
 ```sh
-git clone https://github.com/PerIPan/hcG-UI ~/.local/share/hcgui && sh ~/.local/share/hcgui/build.sh
+git clone https://github.com/PerIPan/herdr-core-GUI ~/.local/share/hcgui && sh ~/.local/share/hcgui/build.sh
 ```
 
-`build.sh` checks the requirements, then builds `hcG-UI.app` in `/Applications` (in `~/Applications` when that
+Installed by an AI agent: point it to [AGENTS.md](AGENTS.md) first.
+
+`build.sh` checks the requirements, then builds `hcGUI.app` in `/Applications` (in `~/Applications` when that
 needs admin rights). Each start of the app opens one new Ghostty window. The app runs the files in
 `~/.local/share/hcgui`, so the clone stays there.
 
-Update, then close every hcG-UI window and start the app again:
+Update, then close every hcGUI window and start the app again:
 
 ```sh
 git -C ~/.local/share/hcgui pull && sh ~/.local/share/hcgui/build.sh
@@ -94,19 +96,38 @@ git -C ~/.local/share/hcgui pull && sh ~/.local/share/hcgui/build.sh
 Remove:
 
 ```sh
-rm -rf /Applications/hcG-UI.app ~/Applications/hcG-UI.app ~/.local/share/hcgui ~/.local/state/hcgui
+rm -rf /Applications/hcGUI.app ~/Applications/hcGUI.app ~/.local/share/hcgui ~/.local/state/hcgui
 ```
 
-**From mmini.** hcG-UI was named mmini. Install as above, then remove the old folder
+**From hcG-UI.** Update as above. `build.sh` removes the old `hcG-UI.app`; folders and settings stay.
+A clone made under the old name keeps working (GitHub forwards it).
+
+**From mmini.** hcGUI was named mmini. Install as above, then remove the old folder
 (`rm -rf ~/.local/share/mmini`). `build.sh` moves `~/.local/state/mmini` to `~/.local/state/hcgui` once (names,
 widths and choices carry over), removes the old `mmini.app` and lists any `MMINI_` setting still in the shell:
 rename each to `HCGUI_`.
+
+## Setup
+
+Most setups need none. `build.sh` ends with what is set and what is left.
+
+| Case | What to set |
+|------|-------------|
+| Status dots and Needs you | Agents in herdr-core terminals (`hc`, or `claude` typed in one; `hc run` is not needed), Claude Code 2.1.295 or newer, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` unset: [Status needs agents that report it](#status-needs-agents-that-report-it) |
+| Only this Mac | Nothing |
+| This Mac and one server (`hc machine add`) | Nothing: the server is the home machine |
+| Several servers | `export HCGUI_FIRST=<name>` in `~/.zshrc`: the machine whose terminals become spaces |
+| 5-hour usage lines | A `statusLine` per Claude config folder on the home machine: [5-hour usage](#5-hour-usage) |
+| Two or more subscriptions | The same `statusLine`, one name per subscription. Marks after agent names: `export HCGUI_MARKS="personal=¹,work=²"`, same names |
+
+One subscription gets no mark and no name under the tabs: there is nothing to tell apart. Settings are read when a
+window opens: close the windows and start the app again after a change. Every setting: [Settings](#settings).
 
 ## 5-hour usage
 
 After each answer, Claude Code hands its status line command the share of the 5-hour window used and its reset
 time ([status line input](https://code.claude.com/docs/en/statusline)). `usage.sh` is such a command: it saves the
-numbers to `~/.local/state/hcgui/usage/<name>.json` and prints nothing. The status line stays empty. hcG-UI reads
+numbers to `~/.local/state/hcgui/usage/<name>.json` and prints nothing. The status line stays empty. hcGUI reads
 the files on the home machine through `hc exec`. No login, no token, no connection of its own.
 
 On the home machine:
@@ -114,7 +135,7 @@ On the home machine:
 1. Put the files there (`build.sh` is not needed there):
 
    ```sh
-   git clone https://github.com/PerIPan/hcG-UI ~/.local/share/hcgui
+   git clone https://github.com/PerIPan/herdr-core-GUI ~/.local/share/hcgui
    ```
 
    Skip this step when the home machine is this Mac.
@@ -136,9 +157,19 @@ On the home machine:
    {"statusLine": {"type": "command", "command": "case \"${CLAUDE_CONFIG_DIR:-}\" in */.claude-work | */.claude-work/) n=work ;; *) n=claude ;; esac; sh \"$HOME/.local/share/hcgui/usage.sh\" \"$n\""}}
    ```
 
+   The same line sets each terminal's label `account` to that name, once per terminal: the marks and the line
+   under the tabs then know the subscription.
+
+   A `statusLine` already there stays: run both, `usage.sh` first (it prints nothing, so the status line shows
+   the other command's output):
+
+   ```json
+   {"statusLine": {"type": "command", "command": "i=$(cat); printf '%s' \"$i\" | sh \"$HOME/.local/share/hcgui/usage.sh\" claude; printf '%s' \"$i\" | <the command already there>"}}
+   ```
+
 3. Send a message in a session of each subscription. Its line shows within 10 minutes, or at once on `r`.
 
-A right click on a line opens its menu: Rename, Hide usage. A display name changes only what hcG-UI draws.
+A right click on a line opens its menu: Rename, Hide usage. A display name changes only what hcGUI draws.
 Hidden (`u`), the files are not read. Off for good with `HCGUI_USAGE=0`.
 
 ## Keys
@@ -160,8 +191,9 @@ Sidebar (`?` shows the full list, then what the status dots mean):
 | z | The shown terminal gets the whole window; `‹ back` on top brings the panes back |
 | r | Refresh now |
 
-Tab bar: left/right or h/l between tabs, enter or down to the terminal, `?` for its keys. A click on the bar
-anywhere but a tab shows the space, the herdr-core id, the subscription and the key hints for a few seconds.
+Tab bar: left/right or h/l between tabs, enter or down to the terminal, `?` for its keys. The line below the tabs
+shows the space, the herdr-core id, the subscription and the key hints for a few seconds each time a terminal is
+shown, and again after a click on the bar anywhere but a tab.
 
 Shown terminal: no tmux keys, so ctrl+b and every other key reach it. A drag selects and copies; shift+drag is
 Ghostty's own selection; the wheel scrolls back (`q` or esc ends it). ctrl+\ detaches.
@@ -198,7 +230,8 @@ Environment variables, read at start; an `export` in `~/.zshrc` applies.
 | `HCGUI_AUTOSIZE=0`, `HCGUI_AUTOOPEN=0`, `HCGUI_BROWSER=0` | on | No pane resizing / nothing shown until picked / no browser |
 | `HCGUI_KEYCHAIN=0`, `HCGUI_USAGE=0` | on | No keychain check / no usage lines |
 
-`hc label my-server/t3 account=work` then gives that terminal's agent the mark `²`.
+`usage.sh` sets the terminal's label `account` to its name (once per terminal; `HCGUI_ACCOUNT_LABEL=0` turns this
+off). Without `usage.sh`, `hc label my-server/t3 account=work` gives that terminal's agent the mark `²`.
 
 ## How it works
 
@@ -214,7 +247,7 @@ folder's name.
 ## Limits
 
 - macOS only. Built against herdr-core 0.1.21's output; other versions untested.
-- herdr-core 0.1.21 cannot rename a terminal: a rename is a display name in hcG-UI only.
+- herdr-core 0.1.21 cannot rename a terminal: a rename is a display name in hcGUI only.
 - Keychain check and dev servers expect the home machine to be a Mac. Dev servers: only the home account's own,
   only ports reachable from other machines.
 - Drops to another machine: only programs that ask for bracketed paste (Claude Code does); others get the path on

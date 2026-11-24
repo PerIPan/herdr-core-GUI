@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds hcG-UI.app: each start opens one Ghostty window with three panes, run by a tmux of the window's own
+# Builds hcGUI.app: each start opens one Ghostty window with three panes, run by a tmux of the window's own
 # (start.sh, hcgui.tmux.conf). Sidebar on the left (needs you, spaces, servers, dev servers, agents), tab bar on top
 # (one tab per terminal of the chosen space or server), and below it the chosen terminal itself (view.sh runs
 # `hc attach`, behind `hcgui.py view`, a relay that sends a file dropped for another machine's terminal there with
@@ -7,7 +7,7 @@
 #
 # Install (clones this repo to ~/.local/share/hcgui, then builds):
 #
-#   git clone https://github.com/PerIPan/hcG-UI ~/.local/share/hcgui && sh ~/.local/share/hcgui/build.sh
+#   git clone https://github.com/PerIPan/herdr-core-GUI ~/.local/share/hcgui && sh ~/.local/share/hcgui/build.sh
 #
 # Update:
 #
@@ -18,8 +18,8 @@
 # when the compile worked.
 #
 # What to expect (the automated tests run without Ghostty; tmux was tried in a pseudo terminal):
-# - Every start of hcG-UI.app opens its own window with its own state folder (~/.local/state/hcgui/w-XXXXXX) and its
-#   own tmux server, so two hcG-UI windows never switch each other's view. The remembered space and terminals are
+# - Every start of hcGUI.app opens its own window with its own state folder (~/.local/state/hcgui/w-XXXXXX) and its
+#   own tmux server, so two hcGUI windows never switch each other's view. The remembered space and terminals are
 #   shared. Closing the window ends its tmux and the panes; the terminals in herdr-core keep running.
 # - One click acts, in any pane: tmux passes the click to the pane under the pointer at once. After a pick the
 #   keyboard goes to the shown terminal. A right click on a sidebar row or a tab, or in the shown terminal, opens
@@ -55,33 +55,33 @@ here=$(cd "$(dirname "$0")" && pwd)
 # ~/Applications.
 apps=/Applications
 [ -w "$apps" ] || { apps="$HOME/Applications"; mkdir -p "$apps"; }
-app="$apps/hcG-UI.app"
+app="$apps/hcGUI.app"
 install="$HOME/.local/share/hcgui"
 
-command -v python3 >/dev/null 2>&1 || { echo "hcG-UI: python3 not found (xcode-select --install)" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "hcGUI: python3 not found (xcode-select --install)" >&2; exit 1; }
 tmux=$(command -v tmux 2>/dev/null || true)
 for t in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do
   if [ -z "$tmux" ] && [ -x "$t" ]; then tmux=$t; fi
 done
-[ -n "$tmux" ] || { echo "hcG-UI: tmux not found (brew install tmux)" >&2; exit 1; }
+[ -n "$tmux" ] || { echo "hcGUI: tmux not found (brew install tmux)" >&2; exit 1; }
 # hcgui.tmux.conf needs tmux 3.5 (extended-keys-format). A version that cannot be read (a build from git) only gets
 # a note.
 tv=$("$tmux" -V 2>/dev/null | sed -n 's/^tmux \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p')
 case "$tv" in
-  '') echo "hcG-UI: note: could not read tmux's version ($("$tmux" -V 2>&1)); 3.5 or newer is needed" >&2 ;;
+  '') echo "hcGUI: note: could not read tmux's version ($("$tmux" -V 2>&1)); 3.5 or newer is needed" >&2 ;;
   *)
     if [ "${tv% *}" -lt 3 ] || { [ "${tv% *}" -eq 3 ] && [ "${tv#* }" -lt 5 ]; }; then
-      echo "hcG-UI: tmux 3.5 or newer needed, found $("$tmux" -V) (brew upgrade tmux)" >&2
+      echo "hcGUI: tmux 3.5 or newer needed, found $("$tmux" -V) (brew upgrade tmux)" >&2
       exit 1
     fi
     ;;
 esac
-python3 -c 'import curses' 2>/dev/null || { echo "hcG-UI: this python3 has no curses module" >&2; exit 1; }
-[ -x "$HOME/.local/bin/hc" ] || { echo "hcG-UI: $HOME/.local/bin/hc not found" >&2; exit 1; }
+python3 -c 'import curses' 2>/dev/null || { echo "hcGUI: this python3 has no curses module" >&2; exit 1; }
+[ -x "$HOME/.local/bin/hc" ] || { echo "hcGUI: $HOME/.local/bin/hc not found" >&2; exit 1; }
 for f in hcgui.py view.sh start.sh hcgui.tmux.conf usage.sh; do
-  [ -r "$install/$f" ] || { echo "hcG-UI: $install/$f missing; install: git clone https://github.com/PerIPan/hcG-UI $install && sh $install/build.sh" >&2; exit 1; }
+  [ -r "$install/$f" ] || { echo "hcGUI: $install/$f missing; install: git clone https://github.com/PerIPan/herdr-core-GUI $install && sh $install/build.sh" >&2; exit 1; }
 done
-[ "$here" = "$install" ] || echo "hcG-UI: note: build.sh runs from $here, the app starts the files in $install" >&2
+[ "$here" = "$install" ] || echo "hcGUI: note: build.sh runs from $here, the app starts the files in $install" >&2
 
 ghostty=""
 for p in /Applications/Ghostty.app "$HOME/Applications/Ghostty.app"; do
@@ -90,7 +90,7 @@ done
 if [ -z "$ghostty" ]; then
   ghostty=$(mdfind "kMDItemCFBundleIdentifier == 'com.mitchellh.ghostty'" 2>/dev/null | head -1)
 fi
-[ -n "$ghostty" ] || { echo "hcG-UI: Ghostty.app not found" >&2; exit 1; }
+[ -n "$ghostty" ] || { echo "hcGUI: Ghostty.app not found" >&2; exit 1; }
 
 # AppleScript control came with Ghostty 1.3.0. A version that cannot be read (a tip build) only gets a warning.
 version=$(defaults read "$ghostty/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)
@@ -98,10 +98,10 @@ major=${version%%.*}
 rest=${version#*.}
 minor=${rest%%.*}
 case "$major$minor" in
-  '' | *[!0-9]*) echo "hcG-UI: note: could not read Ghostty's version ('$version'); 1.3.0 or newer is needed" >&2 ;;
+  '' | *[!0-9]*) echo "hcGUI: note: could not read Ghostty's version ('$version'); 1.3.0 or newer is needed" >&2 ;;
   *)
     if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 3 ]; }; then
-      echo "hcG-UI: Ghostty 1.3.0 or newer needed, found $version ($ghostty)" >&2
+      echo "hcGUI: Ghostty 1.3.0 or newer needed, found $version ($ghostty)" >&2
       exit 1
     fi
     ;;
@@ -128,9 +128,9 @@ new="$apps/.hcgui-build-$$.app"
 trap 'rm -rf "$new"' EXIT
 rm -rf "$new"
 osacompile -o "$new" <<'EOF'
--- One folder per window, so a second hcG-UI window has its own target, view, panes and tmux.
+-- One folder per window, so a second hcGUI window has its own target, view, panes and tmux.
 -- start.sh is typed into the new window's login shell, so the settings exported in ~/.zshrc apply; exec: the
--- window closes when hcG-UI's tmux ends.
+-- window closes when hcGUI's tmux ends.
 set homeDir to POSIX path of (path to home folder)
 set base to homeDir & ".local/share/hcgui/"
 set stateDir to homeDir & ".local/state/hcgui"
@@ -146,6 +146,16 @@ EOF
 rm -rf "$app"
 mv "$new" "$app"
 trap - EXIT
+
+# From the name hcG-UI (24 Nov 2026): only the app had that name. It goes once the new app is in place (a failed
+# build keeps it: it starts the same files), and only when it is this install's launcher (it names start.sh in
+# ~/.local/share/hcgui); folders and settings stay as they are. A Dock icon of the old app needs the new one.
+for old_app in /Applications/hcG-UI.app "$HOME/Applications/hcG-UI.app"; do
+  if [ -d "$old_app" ] && osadecompile "$old_app/Contents/Resources/Scripts/main.scpt" 2>/dev/null |
+    grep -q ".local/share/hcgui"; then
+    rm -rf "$old_app" && echo "removed the old $old_app (pin $app in the Dock instead)"
+  fi
+done
 
 # Ghostty's own icon, as a custom Finder icon on the app.
 icon="icon from $ghostty"
@@ -166,3 +176,54 @@ if [ -d "$HOME/.local/share/mmini" ]; then
 fi
 echo "  starts: $install/start.sh (tmux with hcgui.py sidebar, tabs and view; view.sh runs under the view)"
 echo "  state:  $HOME/.local/state/hcgui (one w-XXXXXX folder per window)"
+
+# What is set up and what is left (README: Setup), last, so whoever runs this sees it: a person, or an AI agent
+# installing for one (AGENTS.md). Settings come from this shell, else from an export line in ~/.zshrc (an agent's
+# shell may not read it). Only reads: nothing here changes a setting.
+setting() {
+  v=$(printenv "$1" 2>/dev/null || true)
+  [ -n "$v" ] || v=$(sed -n "s/^[[:space:]]*export[[:space:]][[:space:]]*$1=[\"']\{0,1\}\([^\"' #]*\).*/\1/p" \
+    "$HOME/.zshrc" 2>/dev/null | tail -1)
+  printf '%s' "$v"
+}
+machines=$("$HOME/.local/bin/hc" machine ls --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print(" ".join(str(m.get("name", "")) for m in json.load(sys.stdin).get("machines", []) if m.get("name")))
+except Exception:
+    pass' 2>/dev/null || true)
+count=$(printf '%s' "$machines" | wc -w | tr -d ' ')
+first=$(setting HCGUI_FIRST)
+echo "setup (README: Setup; AI agents: AGENTS.md):"
+if [ -n "$first" ]; then
+  home=$first
+  echo "  home:   $first (HCGUI_FIRST)"
+elif [ "$count" = 1 ]; then
+  home=$machines
+  echo "  home:   $machines, the only server (export HCGUI_FIRST=<name> in ~/.zshrc for another)"
+elif [ "$count" = 0 ]; then
+  home=""
+  echo "  home:   this Mac (no servers; hc machine add adds one)"
+else
+  home=""
+  echo "  home:   this Mac; servers: $machines. If one of them is home: export HCGUI_FIRST=<name> in ~/.zshrc"
+fi
+if [ -z "$home" ]; then
+  # every Claude Code config folder of this account: ~/.claude, ~/.claude-*, and CLAUDE_CONFIG_DIR
+  found=""
+  for f in "$HOME/.claude/settings.json" "$HOME"/.claude-*/settings.json "${CLAUDE_CONFIG_DIR:-/nonexistent}/settings.json"; do
+    if grep -qs "hcgui/usage.sh" "$f"; then found="$found ${f#"$HOME/"}"; fi
+  done
+  if [ -n "$found" ]; then
+    echo "  usage:  on (usage.sh in$found)"
+  else
+    echo "  usage:  off (optional): a statusLine per Claude config folder, README: 5-hour usage"
+  fi
+  command -v jq >/dev/null 2>&1 || [ -x /usr/bin/jq ] || [ -x /opt/homebrew/bin/jq ] ||
+    echo "  jq:     not found; the usage lines need it"
+else
+  echo "  usage:  optional, set up on $home: README: 5-hour usage"
+fi
+[ -n "$(setting HCGUI_MARKS)" ] ||
+  echo "  marks:  none; only for two or more subscriptions: export HCGUI_MARKS=\"name=¹,other=²\" in ~/.zshrc"
+echo "  then:   close every hcGUI window, start hcGUI.app (settings are read when a window opens)"

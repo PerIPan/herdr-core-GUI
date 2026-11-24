@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hcG-UI: sidebar and tab bar for herdr-core (`hc`) terminals, in one Ghostty window.
+"""hcGUI: sidebar and tab bar for herdr-core (`hc`) terminals, in one Ghostty window.
 
 herdr-core draws nothing itself, so the window runs a tmux of its own (start.sh, hcgui.tmux.conf) with three panes:
 this file draws two of them ("python3 hcgui.py sidebar" on the left, "python3 hcgui.py tabs" on top), the third is
@@ -26,9 +26,9 @@ on the home machine, read through its core every 10 minutes (HCGUI_USAGE=0 turns
 opens that subscription's menu: Rename (a display name, names.json "account:<name>", also drawn in the "?" list's
 marks) and Hide usage. They are shown until hidden (u, or "Hide usage"; "Show usage" in any row menu then; the file
 "usagelines", as "usage" is usage.sh's folder): hidden, they are not drawn and not checked. A Claude Code agent's
-name can carry a mark for the login it bills: its label "account" looked up in HCGUI_MARKS ("personal=¹,work=²"; a
-value not in it gets ³; no setting, no marks), and with no label HCGUI_SHARED_MARK (³) on a server whose ssh user
-is HCGUI_SHARED_USER.
+name can carry a mark for the login it bills: its label "account" (set by usage.sh) looked up in HCGUI_MARKS
+("personal=¹,work=²"; a value not in it gets ³; no setting, no marks), and with no label HCGUI_SHARED_MARK (³) on a
+server whose ssh user is HCGUI_SHARED_USER.
 The tab bar shows one tab per terminal of the current space or server. A terminal's space is its herdr-core label
 "space", else its parent's space, else the repo folder below ~/dev, else the last folder of its cwd. In the code a
 server is still a "rig" (Group.kind, names.json keys "rig:<machine>"); only what is drawn says "server".
@@ -50,7 +50,7 @@ the next sidebar starts; while it does not exist, the old file "collapsed" is re
 ("shown" or "hidden", default hidden), agents, devservers and usagelines (the same words, default shown), width (the
 open sidebar's width once its divider was dragged), split (where the separator above the agents was moved to; no
 file: the automatic layout), seen.json (address -> hc's turn at which that terminal was last shown while done:
-"needs you" drops it). So a second hcG-UI window never switches or signals the first one's view.
+"needs you" drops it). So a second hcGUI window never switches or signals the first one's view.
 
 Rename, create, delete. A rename is a display name kept in names.json: the space's label and folder, the machine's
 hc name and every address stay as they are (herdr-core 0.1.21 has no way to rename a terminal, so terminals get a
@@ -71,8 +71,9 @@ the strip again (also a click on "›" on the line above), q hide (the same as h
 of keys, then the account marks and what the status dots' colours mean (also a click on the "?" at the end of the
 last line; any key or click closes it). Tab bar:
 left/right (h/l), enter, z zoom, ? its keys, a left click on the bar off the tabs the key hints and the shown
-terminal's hc id for NOTICE_SECONDS (show_hints), a right click on a tab (or in the view: the shown terminal) its menu
-(New terminal, Rename, Move to space, Close; Close asks for "y"), clicks only: keys typed then go on to the view;
+terminal's hc id for NOTICE_SECONDS (show_hints; also each time a terminal is newly shown, note_shown), a right
+click on a tab (or in the view: the shown terminal) its menu (New terminal, Rename, Move to space, Close; Close
+asks for "y"), clicks only: keys typed then go on to the view;
 a paste (a dropped file) in the sidebar or the tab bar goes on to the view too; without a sidebar, c or o (also a click on "›" at its left edge) brings the sidebar
 back, open. z gives the whole window to the shown terminal (tmux's zoom); a click on the line it shows on top
 ("‹ back") brings the panes back.
@@ -91,7 +92,7 @@ the new width and, when open, writes it to "width" for the next window. A resize
 brings the sidebar back to its width and the tab bar to TAB_ROWS rows. start.sh clears the login shell's folder (an
 empty OSC 7), so Ghostty shows no folder icon next to the window title. tmux shows the title of the pane with the
 keyboard (set-titles): the sidebar, the tab bar and view.sh each set it to the shown terminal and its server ("web ·
-me@mini"; nothing shown: "hcG-UI"), each time it changes: the engine writes it to the window's file "title"
+me@mini"; nothing shown: "hcGUI"), each time it changes: the engine writes it to the window's file "title"
 (address, then title) and to the snapshot; view.sh sets it before each attach and again after one.
 
 Switching is quick: a click acts on the press of the button (no mouse interval, so ncurses holds nothing back; the
@@ -230,7 +231,7 @@ class Term:
 class Info:
     """What only `hc get` knows about a terminal: its "space" label, its parent's address ("" = none), whether it
     ends with that parent (hc's die_with_parent; unknown counts as yes, so a warning is never left out), its
-    "account" label, and the program in front of it when hcG-UI knows that program (parse_foreground)."""
+    "account" label, and the program in front of it when hcGUI knows that program (parse_foreground)."""
 
     space: str = ""
     parent: str = ""
@@ -351,7 +352,7 @@ def claude_argv(argv: Sequence[str]) -> bool:
 
 def parse_foreground(value: object) -> str:
     """The "foreground" of `hc get` ({"pid", "name", "argv", "cwd"}: the leader of the terminal's foreground process
-    group; null once it has finished) as hc's word for that program when it matters to hcG-UI: CLAUDE_AGENT for
+    group; null once it has finished) as hc's word for that program when it matters to hcGUI: CLAUDE_AGENT for
     Claude Code (claude_argv), else "". Junk or missing counts as "" (nothing known)."""
     argv = value.get("argv") if isinstance(value, dict) else None
     if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
@@ -379,10 +380,10 @@ def parse_info(raw: str, address: str) -> Info:
 
 
 def with_foreground(terms: Sequence[Term], infos: Mapping[str, Info]) -> List[Term]:
-    """The terminals as hcG-UI judges their program. Claude Code started by typing `claude` in a terminal's shell:
+    """The terminals as hcGUI judges their program. Claude Code started by typing `claude` in a terminal's shell:
     `hc ls` names the program the terminal started with (the shell) and has no status for it (it never reported
     one), but `hc get` sees Claude Code in front (Info.foreground). Such a terminal counts as Claude Code
-    (CLAUDE_AGENT) everywhere hcG-UI decides by program: listed under the agents (Term.is_agent), its account mark
+    (CLAUDE_AGENT) everywhere hcGUI decides by program: listed under the agents (Term.is_agent), its account mark
     (account_marks), "Claude Code" in the tab bar's line (tab_info) and the list of what ends. Its status stays
     hc's (none: a hollow dot, never "needs you"). Only a plain program (PLAIN_PROGRAMS) is judged again: a program
     hc names itself stays as hc names it. The shell in front again (Claude Code ended): a shell again at the next
@@ -527,7 +528,7 @@ def build_groups(terms: Sequence[Term], first: str = FIRST, infos: Optional[Mapp
 # ---------------------------------------------------------------------------------------------------------------
 # Window title (pure): "<shown terminal> · <server>", sent by every pane of the window (OSC 2)
 # ---------------------------------------------------------------------------------------------------------------
-NO_TITLE = "hcG-UI"  # nothing shown
+NO_TITLE = "hcGUI"  # nothing shown
 TITLE_SEP = " · "
 TITLE_MAX = 80  # characters
 # Ghostty 1.3 (stream_handler windowTitle) ignores a title of 256 bytes or more; an ignored title leaves its "no
@@ -935,7 +936,7 @@ def keychain_text(room: int) -> str:
 # ---------------------------------------------------------------------------------------------------------------
 # usage.sh, Claude Code's status line command on the home machine (one `sh usage.sh <name>` per config folder),
 # saves the rate_limits.five_hour numbers Claude Code hands it after each answer to
-# ~/.local/state/hcgui/usage/<name>.json there, one line of JSON. hcG-UI only reads those files, through the home
+# ~/.local/state/hcgui/usage/<name>.json there, one line of JSON. hcGUI only reads those files, through the home
 # core (`hc exec`, the default folder of the account that core runs as): no login, no token, no network of its own.
 # The number is the last one a session there saw: use elsewhere (claude.ai, the phone) shows up only with the next
 # answer on that machine. At most USAGE_FILES files, USAGE_BYTES each; the script always ends with 0, so only hc's
@@ -1668,7 +1669,7 @@ class Row:
 MENU_KEY = "a"  # opens the action menu of the row under the cursor (a right click does the same)
 HELP_KEY = "?"  # the list of keys (KEY_HELP), drawn over the sidebar until the next key or click
 # The sidebar's keys, for "?": (key, what it does). Every line fits 29 columns (a 30-column sidebar keeps its last
-# column empty). The way back from a zoom has a line of its own: while zoomed nothing of hcG-UI can be seen.
+# column empty). The way back from a zoom has a line of its own: while zoomed nothing of hcGUI can be seen.
 KEY_HELP = (("↑↓ j k", "move"), ("enter", "show it"), (MENU_KEY, "menu (right click)"), ("e", "rename"),
             ("d", "delete, forget, end"), ("n", "new terminal here"), ("s", "new space"), ("m", "move to a space"),
             (SERVERS_KEY, "show/hide servers"), (AGENTS_KEY, "show/hide agents"), (DEVS_KEY, "dev servers on/off"),
@@ -2211,7 +2212,7 @@ def tab_keys(alone: bool = False) -> str:
 
 
 def tab_bar_rows(height: int) -> Tuple[int, int]:
-    """(rows the tabs may use, row of the info row or -1) for a pane of `height` rows (TAB_ROWS in an hcG-UI window).
+    """(rows the tabs may use, row of the info row or -1) for a pane of `height` rows (TAB_ROWS in an hcGUI window).
     The info row (info_row) takes the last row when there are two: the line about the shown terminal; after a click
     on the bar also the space's name, hc's id and the key hints; a notice while one shows."""
     if height < 2:
@@ -2691,10 +2692,23 @@ def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]]
 
     names = names or {}
 
-    def account_of(t: Term) -> str:
-        """The subscription a Claude Code tab runs on, as drawn (its display name, usage_shown); "" for others."""
+    def label_of(t: Term) -> str:
         info = infos.get(t.address)
-        return usage_shown(info.account, names) if t.agent == CLAUDE_AGENT and info and info.account else ""
+        return info.account if t.agent == CLAUDE_AGENT and info else ""
+
+    def login_of(t: Term) -> str:
+        """What tells a Claude Code terminal's login apart: its label, else its mark (the shared server's ³)."""
+        return label_of(t) or (f"mark:{t.mark}" if t.agent == CLAUDE_AGENT and t.mark else "")
+
+    # one subscription in sight (one label on every listed Claude Code terminal, no unlabelled one with a mark,
+    # HCGUI_MARKS naming at most one): no name, it tells nothing apart (owner, 24 Nov: "too much to say 1
+    # everywhere")
+    several = len({login_of(t) for t in [*everything, *group.terms]} - {""}) > 1 or len(ACCOUNT_MARKS) > 1
+
+    def account_of(t: Term) -> str:
+        """The subscription a Claude Code tab runs on, as drawn (its display name, usage_shown); "" for others, and
+        for every tab while only one subscription is in sight (`several`)."""
+        return usage_shown(label_of(t), names) if several and label_of(t) else ""
 
     return {"group": group.key, "name": group.name, "title": group.shown, "kind": group.kind, "machine": group.machine,
             "server": servers.get(group.machine, group.machine), "cwd": group.cwd, "ts": now, "shown": shown,
@@ -2955,7 +2969,7 @@ def probe_folder(machine: str, folder: str, runner: Runner = None) -> Tuple[str,
     relative to that home folder; nothing is expanded by a shell on this Mac."""
     runner = runner or run_hc
     on = [] if machine == LOCAL else ["--on", machine]
-    return parse_probe(runner("exec", *on, "/bin/sh", "-c", PROBE, "hcG-UI", folder, timeout=15.0))
+    return parse_probe(runner("exec", *on, "/bin/sh", "-c", PROBE, "hcGUI", folder, timeout=15.0))
 
 
 def keychain_enabled() -> bool:
@@ -3020,7 +3034,7 @@ def open_url(host: str, port: int) -> bool:
 # reaches the pane under the pointer at once. The panes file names them by tmux pane id. Nothing here raises.
 # ---------------------------------------------------------------------------------------------------------------
 PANE_ID = re.compile(r"%[0-9]+")
-TERM_NAME = "xterm-hcgui"  # the terminal type of hcG-UI's own panes (hcgui.terminfo)
+TERM_NAME = "xterm-hcgui"  # the terminal type of hcGUI's own panes (hcgui.terminfo)
 TAB_ROWS = 2  # the tab bar: the tabs, then one row (the line about the shown terminal, a tab's menu, or after a
 # click the space's name, that line with hc's id, and the key hints); 3 until 24 Nov (owner: more room below)
 ZOOM_LOOK = 0.25  # seconds between two looks at a zoomed window by a pane that waits to size itself (a round)
@@ -3092,7 +3106,7 @@ def zoom_view(win: Path = WINDOW) -> str:
     return ""
 
 
-# Keys typed in a pane of hcG-UI that go on to the view (send_keys_to_view): bytes as they came (send-keys -H: the
+# Keys typed in a pane of hcGUI that go on to the view (send_keys_to_view): bytes as they came (send-keys -H: the
 # exact bytes, ";" and control keys included), keys curses decoded by their tmux name.
 KEY_NAMES = {curses.KEY_ENTER: "Enter", curses.KEY_BACKSPACE: "BSpace", curses.KEY_UP: "Up", curses.KEY_DOWN: "Down",
              curses.KEY_LEFT: "Left", curses.KEY_RIGHT: "Right", curses.KEY_HOME: "Home", curses.KEY_END: "End",
@@ -3163,7 +3177,7 @@ def drain_keys(scr: "curses.window", limit: int = 4096) -> List[int]:
 
 
 def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW) -> None:
-    """Type `keys` into the view and give it the keyboard: keys typed in a pane of hcG-UI that were meant for the
+    """Type `keys` into the view and give it the keyboard: keys typed in a pane of hcGUI that were meant for the
     terminal (after a right click) are not lost. A lone esc (no bytes after it) only closed the menu."""
     view = pane_id("view", win)
     if not view:
@@ -3211,7 +3225,7 @@ def read_paste(scr: "curses.window", wait: float = 1.0, limit: int = 64 * 1024 *
 
 
 def paste_to_view(text: str, win: Path = WINDOW) -> bool:
-    """A paste (a dropped file) that reached a pane of hcG-UI: into the view, as a paste (bracketed when the
+    """A paste (a dropped file) that reached a pane of hcGUI: into the view, as a paste (bracketed when the
     program there asks for it), and the view gets the keyboard either way. Before tmux each pane got its own drops;
     now a drop goes to the pane with the keyboard. The text goes on tmux's stdin (load-buffer -): an argument over
     16 KB would be refused. False when it could not be passed on (the caller says so)."""
@@ -3289,7 +3303,7 @@ def size_pane(pane: str, cols: int = 0, rows: int = 0) -> Optional[WindowLook]:
 
 def hcgui_env(environ: Mapping[str, str]) -> List[Tuple[str, str]]:
     """This program's HCGUI_* settings, sorted, for a sidebar brought back (HCGUI_WINDOW is passed apart); then its
-    TERM and TERMINFO when the terminal type is hcG-UI's own (TERM_NAME)."""
+    TERM and TERMINFO when the terminal type is hcGUI's own (TERM_NAME)."""
     pairs = sorted((k, v) for k, v in environ.items() if ENV_NAME.fullmatch(k) and k != "HCGUI_WINDOW")
     if environ.get("TERM") == TERM_NAME:
         pairs += [(k, environ[k]) for k in ("TERM", "TERMINFO") if environ.get(k)]
@@ -3298,7 +3312,7 @@ def hcgui_env(environ: Mapping[str, str]) -> List[Tuple[str, str]]:
 
 def pane_command(mode: str, win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
     """The command of a new pane (tmux runs it with sh -c): `exec` replaces the shell, so the pane closes when the
-    program ends. HCGUI_WINDOW first, then the other settings, then this pane's terminal type when it is hcG-UI's
+    program ends. HCGUI_WINDOW first, then the other settings, then this pane's terminal type when it is hcGUI's
     own (TERM xterm-hcgui with its TERMINFO folder, see start.sh): the new pane gets the same mouse codes."""
     pairs = [("HCGUI_WINDOW", str(win))] + [(k, v) for k, v in env if k != "HCGUI_WINDOW" and ENV_NAME.fullmatch(k)]
     pairs += [(k, v) for k, v in env if k in ("TERM", "TERMINFO") and env_get(env, "TERM") == TERM_NAME]
@@ -5425,6 +5439,7 @@ class TabBar:
         self.mouse_quiet = 0.0  # presses until then are a double click's second, dropped while a question opens
         self.asked_again = float("-inf")  # when Close last asked again (CLOSE_AGAIN); not 0: see last_plus
         self.hints_until = 0.0  # until then the key hints and the hc id show (show_hints: a click on the bar)
+        self.last_shown = ""  # the terminal shown at the last round (note_shown)
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -5811,6 +5826,14 @@ class TabBar:
         self.notice.clear()
         self.hints_until = time.monotonic() + NOTICE_SECONDS
 
+    def note_shown(self, shown: str, now: float) -> None:
+        """A terminal newly shown (the window's first, a pick, a switch): the row below the tabs gives all its info
+        for NOTICE_SECONDS, as after a click on the bar, then the short line again (owner, 24 Nov: all the info once
+        it is shown, then hidden). A notice on that row still comes first (draw)."""
+        if shown and shown != self.last_shown:
+            self.hints_until = now + NOTICE_SECONDS
+        self.last_shown = shown
+
     # the window without a sidebar ------------------------------------------------------------------------------
     def watch_sidebar(self, now: float) -> None:
         """Run the engine here while this window has no live sidebar (tab_engine_wanted), stop it as soon as one
@@ -5933,6 +5956,7 @@ class TabBar:
                 snap = read_snapshot(self.win)
                 shown = current_target(self.win)
                 self.check_ask(snap, shown)
+                self.note_shown(shown, now)
                 self.draw(snap, shown)
                 self.pane_title.send(tabs_title(snap, shown))  # after the refresh: curses has written all it holds
                 self.refit()
@@ -5954,8 +5978,8 @@ def start_hidden() -> int:
     return 0
 
 
-# The pane's title "hcG-UI" (OSC 2), then an empty working directory (OSC 7 with no URL), sent once at the start;
-# later titles (PaneTitle) are OSC 2 alone. In an hcG-UI window tmux keeps both for the pane (the window shows the
+# The pane's title "hcGUI" (OSC 2), then an empty working directory (OSC 7 with no URL), sent once at the start;
+# later titles (PaneTitle) are OSC 2 alone. In an hcGUI window tmux keeps both for the pane (the window shows the
 # title of the pane with the keyboard; start.sh cleared Ghostty's folder icon). Run straight in Ghostty, the empty
 # OSC 7 makes it forget the shell's folder (1.3, stream_handler reportPwd), so no folder icon shows; the title goes
 # first, as an empty OSC 7 also clears a title while none was seen.
@@ -6760,7 +6784,7 @@ def start_child(argv: Sequence[str], attrs: Optional[list], size: Optional[bytes
         os.execv(argv[0], list(argv))
     except BaseException as exc:  # noqa: BLE001 - the pane says why, and this process ends
         try:
-            os.write(2, f"hcG-UI view: cannot start {argv[0]}: {exc}\r\n".encode("utf-8", "replace"))
+            os.write(2, f"hcGUI view: cannot start {argv[0]}: {exc}\r\n".encode("utf-8", "replace"))
         except OSError:
             pass
     os._exit(127)

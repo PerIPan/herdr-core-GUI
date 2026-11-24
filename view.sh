@@ -1,5 +1,5 @@
 #!/bin/sh
-# hcG-UI view: the main pane of the hcG-UI window. Shows the terminal the sidebar or tab bar (hcgui.py) picked, by
+# hcGUI view: the main pane of the hcGUI window. Shows the terminal the sidebar or tab bar (hcgui.py) picked, by
 # running `hc attach` on the address in the window's state folder. A pick writes "target" and bumps the counter
 # "gen"; this loop then attaches to the new address. ctrl+\ detaches and waits for the next pick.
 #
@@ -23,7 +23,7 @@ state="${HCGUI_WINDOW:-$shared}"
 mkdir -p "$state"
 
 if [ ! -x "$hc" ]; then
-  printf 'hcG-UI view: hc not found at %s (set HCGUI_HC, or install herdr-core).\n' "$hc"
+  printf 'hcGUI view: hc not found at %s (set HCGUI_HC, or install herdr-core).\n' "$hc"
   # On screen the message stays: in tmux the pane would close with this script.
   if [ -t 1 ]; then while :; do sleep 3600; done; fi
   exit 1
@@ -65,10 +65,10 @@ target=""
 
 # The window title for the address $1 into $tt, as the sidebar or the tab bar wrote it to the file "title"
 # (hcgui.py's write_title: the address, then its title, e.g. "web · me@mini"). Nothing shown, or the
-# file names another terminal: "hcG-UI". Control characters are dropped (hcgui.py writes none): none may reach the
+# file names another terminal: "hcGUI". Control characters are dropped (hcgui.py writes none): none may reach the
 # escape. Only a title that has one costs a process (tr).
 title_of() {
-  tt=hcG-UI
+  tt=hcGUI
   if [ -n "$1" ] && [ -r "$state/title" ]; then
     { IFS= read -r ta; IFS= read -r tb; } <"$state/title"
     [ "$ta" = "$1" ] && [ -n "$tb" ] && tt=$tb
@@ -76,7 +76,7 @@ title_of() {
   case $tt in
     *[[:cntrl:]]*) tt=$(printf '%s' "$tt" | tr -d '\000-\037\177') ;;
   esac
-  [ -n "$tt" ] || tt=hcG-UI
+  [ -n "$tt" ] || tt=hcGUI
 }
 
 # The pane's title (OSC 2) for the address $1.
@@ -85,7 +85,7 @@ set_title() {
   printf '\033]2;%s\007' "$tt"
 }
 
-# The title of the address $1 ("hcG-UI" while none), then an empty working directory (OSC 7 without a URL; as
+# The title of the address $1 ("hcGUI" while none), then an empty working directory (OSC 7 without a URL; as
 # hcgui.py's PANE_TITLE): Ghostty shows the focused pane's folder as an icon next to the window title, and the login
 # shell that started this script reported its home folder. Again before and after each attach: what ran there may
 # have set them. The title comes first: Ghostty 1.3 lets an empty OSC 7 clear the title only while it has seen
@@ -97,7 +97,7 @@ own_title() {
 
 # Before an attach to $1: hcgui.py writes "title" before the target (show), so it is there at once. When the file
 # names another terminal (an engine wrote it a moment late), wait up to 0.5 s for the right one, unless a newer
-# pick comes first ($2: the counter read before the target). No file (nothing of hcG-UI runs): no wait.
+# pick comes first ($2: the counter read before the target). No file (nothing of hcGUI runs): no wait.
 wait_title() {
   i=0
   while [ "$i" -lt 5 ] && [ -r "$state/title" ]; do
