@@ -640,10 +640,12 @@ def agent_groups(spaces: Sequence[Group], rigs: Sequence[Group]) -> List[Group]:
 
 
 def lone_place(group: Group, term: Term) -> str:
-    """The name drawn dim after an agent that is alone in its group, in place of the group's heading ("notes¹ ·
-    docs"): the group's shown name, or "" when that is the agent's own shown name, upper and lower case aside (no
-    repetition: "api¹" in the space api)."""
-    return "" if group.shown.casefold() == term.shown.casefold() else group.shown
+    """The name drawn dim after an agent that is alone in its space, in place of the space's heading ("notes¹ ·
+    docs"): the space's shown name, or "" when that is the agent's own shown name, upper and lower case aside (no
+    repetition: "api¹" in the space api). Never a server's name (owner, 24 Nov: "not required, too much info")."""
+    if group.kind == "rig" or group.shown.casefold() == term.shown.casefold():
+        return ""
+    return group.shown
 
 
 def selectable_items(spaces: Sequence[Group], rigs: Sequence[Group], servers: bool = True,

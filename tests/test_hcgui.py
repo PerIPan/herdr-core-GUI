@@ -459,6 +459,11 @@ class LoneAgentTests(unittest.TestCase):
         self.assertEqual(hcgui.lone_place(group, dataclasses.replace(agent, title="backend")), "")
         self.assertEqual(hcgui.lone_place(group, agent), "Backend")
 
+    def test_lone_place_never_names_a_server(self):
+        rig = hcgui.Group("rig:box", "box", "rig", "box", "", alias="me@box")
+        agent = hcgui.Term("box/t2", "box", "notes", "claude-code", "done", "")
+        self.assertEqual(hcgui.lone_place(rig, agent), "")
+
     def test_name_parts_cut_the_place_first(self):
         self.assertEqual(hcgui.name_parts("notes", "¹", "docs", 20), ("notes¹", " · docs"))
         self.assertEqual(hcgui.name_parts("notes", "¹", "", 20), ("notes¹", ""))
@@ -4679,8 +4684,8 @@ class ActionTests(unittest.TestCase):
         lines = self.scr.lines()
         self.assertTrue(any(line.startswith(hcgui.glyph(" ● Harry")) for line in lines), lines)
         self.assertTrue(any(line.startswith(hcgui.glyph("  ● web")) for line in lines), lines)
-        # the server's only agent: no "Harry · 1" heading, its row names the server by its new name
-        self.assertTrue(any(line.startswith(hcgui.glyph("  ● v1 · Harry")) for line in lines), lines)
+        # the server's only agent: no "Harry · 1" heading, and no server name on its row (owner, 24 Nov)
+        self.assertIn(hcgui.glyph("  ● v1                   idle"), lines)
         self.assertNotIn(hcgui.glyph(" Harry · 1"), lines)
         self.go(hcgui.Item("agent", "space:dev", "t1"))
         self.key("e", 21)
@@ -5461,8 +5466,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(hcgui.read_text(self.state / "servers"), "shown")
         self.assertEqual(lines[4:10], ["", " servers", hcgui.glyph(" ● me@mini"),
                                        hcgui.glyph(" ● guest@mini"), " + add server", ""])
-        # the server's agents come back: its only one names the server on its row (no "guest@mini · 1")
-        self.assertIn(hcgui.glyph("  ● harry³ · guest@mini  idle"), lines)
+        # the server's agents come back: its only one on its row alone (no "guest@mini · 1", no server name)
+        self.assertIn(hcgui.glyph("  ● harry³               idle"), lines)
         self.assertEqual(self.side.cursor, hcgui.Item("group", "rig:mini", ""))
         self.assertEqual(self.side.notice.current(), "servers shown (v hides them)")
         self.key("V")
