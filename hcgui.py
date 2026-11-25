@@ -73,7 +73,8 @@ last line; any key or click closes it). Tab bar:
 left/right (h/l), enter, z zoom, ? its keys, a left click on the bar off the tabs the key hints and the shown
 terminal's hc id for NOTICE_SECONDS (show_hints; also each time a terminal is newly shown, note_shown), a right
 click on a tab (or in the view: the shown terminal) its menu (New terminal, Rename, Move to space, Close; Close
-asks for "y"), clicks only: keys typed then go on to the view;
+asks for "y"; Sort by name while the tabs were dragged), clicks only: keys typed then go on to the view; a tab dragged
+left or right keeps its place (order.json, TabDrag);
 a paste (a dropped file) in the sidebar or the tab bar goes on to the view too; without a sidebar, c or o (also a click on "›" at its left edge) brings the sidebar
 back, open. z gives the whole window to the shown terminal (tmux's zoom); a click on the line it shows on top
 ("‹ back") brings the panes back.
@@ -253,6 +254,7 @@ class Group:
     title: str = ""  # the display name from names.json ("" = none)
     alias: str = ""  # a server's user@host (server_label), drawn when it has no display name
     home: bool = False  # the server row of the home machine: its agents are listed under their spaces only
+    ordered: bool = False  # its tabs were dragged into an order of their own (order.json), not by name
 
     @property
     def shown(self) -> str:
@@ -484,7 +486,8 @@ def home_machine(terms: Sequence[Term], first: str = FIRST) -> str:
 
 def build_groups(terms: Sequence[Term], first: str = FIRST, infos: Optional[Mapping[str, Info]] = None,
                  machines: Sequence[object] = (), names: Optional[Mapping[str, str]] = None,
-                 marks: Optional[Mapping[str, str]] = None) -> Tuple[List[Group], List[Group]]:
+                 marks: Optional[Mapping[str, str]] = None,
+                 order: Optional[Mapping[str, Sequence[str]]] = None) -> Tuple[List[Group], List[Group]]:
     """(spaces, servers). Spaces: the home machine's terminals by space. Servers: every machine as one group with
     all its terminals: each machine `hc machine ls` knows (`machines`, Machine or bare names), also one that runs no
     terminal, so a server just added shows up and an empty one can be forgotten; the home machine (its agents stay
@@ -519,6 +522,11 @@ def build_groups(terms: Sequence[Term], first: str = FIRST, infos: Optional[Mapp
     for g in list(spaces.values()) + list(rigs.values()):
         g.title = names.get(g.key, "")
         g.terms.sort(key=lambda t: (natural(t.shown), t.address))
+        saved = (order or {}).get(g.key)
+        if saved:  # dragged tabs (order.json): that order, terminals it does not name after them, by name
+            at = {address: i for i, address in enumerate(saved)}
+            g.terms.sort(key=lambda t: at.get(t.address, len(at)))
+            g.ordered = True
         if g.kind == "space":
             g.cwd = space_cwd(g.name, g.terms)
     return (sorted(spaces.values(), key=lambda g: (g.name != "home", g.shown.lower(), g.shown, g.key)),
@@ -2062,22 +2070,35 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
     room = height - len(placed)
 
     entries: List[Row] = []
+    gapped: List[Row] = []  # the same with one blank row after each group that has a heading
+    last_headed = False
     for g in agent_groups(spaces, rigs):
         listed = listed_agents(g, needs)
-        if len(listed) > 1:  # one agent alone: its row only, the group's name on it (owner, 24 Nov)
-            entries.append(Row("agent_group", group=g, count=len(listed)))
+        if not listed:
+            continue
+        rows = [Row("agent_group", group=g, count=len(listed))] if len(listed) > 1 else []  # alone: its row only
         for t in listed:
-            entries.append(Row("agent", group=g, term=t, item=index,
-                               place=lone_place(g, t) if len(listed) == 1 else ""))
+            rows.append(Row("agent", group=g, term=t, item=index, place=lone_place(g, t) if len(listed) == 1 else ""))
             index += 1
+        if last_headed:  # one blank row after a group with a heading, before what follows (owner, 25 Nov)
+            gapped.append(Row("blank"))
+        entries += rows
+        gapped += rows
+        last_headed = len(listed) > 1
     fixed = [Row("rule"), Row("agents", "agents")]
+
+    def spaced(cap: int) -> List[Row]:
+        """The agent lines for `cap` lines: with the blank rows while they all fit (owner, 25 Nov: one row of space
+        after a group, before the next agent), else without them (pick_agent_rows)."""
+        return list(gapped) if 0 < len(gapped) <= cap else pick_agent_rows(entries, cap, cursor)
+
     if manual is not None:
-        block = fixed + pick_agent_rows(entries, height - manual - len(fixed), cursor)
+        block = fixed + spaced(height - manual - len(fixed))
         return placed + [(manual + i, r) for i, r in enumerate(block)]
     want = min(len(entries), 3)
     while fixed and len(fixed) + want > room:
         fixed.pop(0)
-    block = fixed + pick_agent_rows(entries, room - len(fixed), cursor)
+    block = fixed + spaced(room - len(fixed))
     y0 = height - len(block)
     return placed + [(y0 + i, r) for i, r in enumerate(block)]
 
@@ -2335,14 +2356,15 @@ DELETE_HOLD = 0.5
 DELETE_NO = "cancelled: nothing ended"  # d's question went unanswered (any other key, a click, a paste)
 
 
-def tab_menu_entries(kind: str) -> List[Entry]:
+def tab_menu_entries(kind: str, ordered: bool = False) -> List[Entry]:
     """The menu of a tab (and of the shown terminal, a right click in the view): New terminal (in the tab bar's space
-    or server), Rename, Move to space (only in a space), Close. Clicks pick; the keys are the sidebar's for the same
-    actions, kept only to match its entries (the tab menu takes no keys)."""
+    or server), Rename, Move to space (only in a space), Close, and "Sort by name" while the tabs were dragged into
+    an order of their own (`ordered`). Clicks pick; the keys are the sidebar's for the same actions, kept only to
+    match its entries (the tab menu takes no keys)."""
     entries = [Entry("new", "New terminal", "n"), Entry("rename", "Rename", "e")]
     if kind == "space":
         entries.append(Entry("move", "Move to space", "m"))
-    return entries + [Entry("close", "Close", "d")]
+    return entries + [Entry("close", "Close", "d")] + ([Entry("sort", "Sort by name", "")] if ordered else [])
 
 
 def tab_menu_segs(title: str, entries: Sequence[Entry], width: int) -> List[Seg]:
@@ -2515,6 +2537,40 @@ def remember(key: str, address: str, state: Path = STATE) -> Dict[str, str]:
         last[key] = address
         write_last(last, state)
     return last
+
+
+# Tabs dragged into an order of their own (owner, 25 Nov): order.json in the shared state folder, {group key: [its
+# terminals' addresses in that order]}, for every window. A terminal it does not name (new since) goes after them,
+# by name; one that ended is skipped. "Sort by name" (the tab menu) removes the group's entry.
+ORDER_GROUPS_MAX = 200
+ORDER_TERMS_MAX = 200
+
+
+def read_order(state: Path = STATE) -> Dict[str, List[str]]:
+    """order.json: group key -> addresses. Junk (not a list of short strings, too many) is left out."""
+    out: Dict[str, List[str]] = {}
+    for key, value in list(read_json(state / "order.json").items())[:ORDER_GROUPS_MAX]:
+        if isinstance(key, str) and key and len(key) <= 200 and isinstance(value, list) \
+                and all(isinstance(a, str) and 0 < len(a) <= 200 for a in value) and len(value) <= ORDER_TERMS_MAX:
+            out[key] = list(dict.fromkeys(value))
+    return out
+
+
+def write_order(group: str, addresses: Optional[Sequence[str]], state: Path = STATE) -> None:
+    """Keep `addresses` as the order of the group `group` (None: its tabs by name again). Read, change, write: other
+    groups' orders, also another window's, stay."""
+    order = read_order(state)
+    order.pop(group, None)
+    if addresses:
+        order[group] = list(dict.fromkeys(addresses))[:ORDER_TERMS_MAX]
+    write_atomic(state / "order.json", json.dumps(dict(list(order.items())[-ORDER_GROUPS_MAX:])) + "\n")
+
+
+def moved(addresses: Sequence[str], address: str, to: int) -> List[str]:
+    """`addresses` with `address` taken out and put back at index `to` (clamped): a dragged tab's new order."""
+    rest = [a for a in addresses if a != address]
+    to = max(0, min(to, len(rest)))
+    return rest[:to] + [address] + rest[to:]
 
 
 def read_names(state: Path = STATE) -> Dict[str, str]:
@@ -2733,6 +2789,7 @@ def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]]
         return usage_shown(label_of(t), names) if several and label_of(t) else ""
 
     return {"group": group.key, "name": group.name, "title": group.shown, "kind": group.kind, "machine": group.machine,
+            "ordered": group.ordered,
             "server": servers.get(group.machine, group.machine), "cwd": group.cwd, "ts": now, "shown": shown,
             "shown_title": shown_title, "names": {t.address: t.shown for t in everything},
             "tabs": [{"address": t.address, "label": t.shown, "status": t.status, "agent": t.agent, "cwd": t.cwd,
@@ -3779,12 +3836,13 @@ class Engine:
         with self.lock:
             version, terms, infos, machines = self.version, self.terms, self.infos, self.machines
         shown = self.servers_shown()
-        stamp = (version, mtime(self.state / "names.json"), shown)
+        stamp = (version, mtime(self.state / "names.json"), mtime(self.state / "order.json"), shown)
         if self.cache[0] != stamp:
             self.names = read_names(self.state)
             terms = with_foreground(terms, infos)
             marks = account_marks(terms, infos, machines)
-            spaces, rigs = build_groups(terms, first_machine(machines), infos, machines, self.names, marks)
+            spaces, rigs = build_groups(terms, first_machine(machines), infos, machines, self.names, marks,
+                                        read_order(self.state))
             self.cache, self.rigs_all = (stamp, spaces, rigs if shown else []), rigs
         return self.cache[1], self.cache[2]
 
@@ -5443,6 +5501,34 @@ class Sidebar(Engine):
 # ---------------------------------------------------------------------------------------------------------------
 # Tab bar
 # ---------------------------------------------------------------------------------------------------------------
+@dataclass
+class TabDrag:
+    """A tab held with the left button (owner, 25 Nov: drag the tabs left and right): its group, its address, the
+    order it started from and the order it shows now (moved), and when the last move came (DRAG_IDLE)."""
+
+    group: str
+    address: str
+    start: List[str]
+    order: List[str]
+    seen: float
+
+
+def arranged(tabs: Sequence[dict], order: Sequence[str]) -> List[dict]:
+    """`tabs` in `order` (addresses); a tab `order` does not name keeps its place after them."""
+    at = {address: i for i, address in enumerate(order)}
+    return sorted(tabs, key=lambda t: at.get(str(t.get("address", "")), len(at)))
+
+
+def arranged_addresses(addresses: Sequence[str], order: Sequence[str]) -> List[str]:
+    """`addresses` in `order` (as arranged does for tabs)."""
+    at = {address: i for i, address in enumerate(order)}
+    return sorted(addresses, key=lambda a: at.get(a, len(at)))
+
+
+# Seconds a dropped tab keeps its new place before the engine's next snapshot shows the saved order itself
+TAB_ORDER_HOLD = 3.0
+
+
 class TabBar:
     def __init__(self, stdscr: "curses.window", win: Path = WINDOW, state: Path = STATE) -> None:
         self.s = Screen(stdscr)
@@ -5468,6 +5554,9 @@ class TabBar:
         self.asked_again = float("-inf")  # when Close last asked again (CLOSE_AGAIN); not 0: see last_plus
         self.hints_until = 0.0  # until then the key hints and the hc id show (show_hints: a click on the bar)
         self.last_shown = ""  # the terminal shown at the last round (note_shown)
+        self.tab_drag: Optional[TabDrag] = None  # a tab held with the left button (press_tab)
+        self.dropped: Optional[Tuple[str, List[str], float]] = None  # (group, order, until): a drop not in the snap yet
+        self.drawn: Optional[List[dict]] = None  # the tabs in the order last drawn (a drag or a drop shows its own)
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -5483,7 +5572,8 @@ class TabBar:
             s.put(0, 1 + lead, "loading…" if self.alone else "waiting for the sidebar…", curses.A_DIM)
             s.scr.refresh()
             return
-        tabs = snap["tabs"]
+        tabs = self.tabs_in_order(snap)
+        self.drawn = tabs
         addresses = [str(t.get("address", "")) for t in tabs]
         active = addresses.index(shown) if shown in addresses else -1
         tab_rows, hint_row = tab_bar_rows(height)
@@ -5501,6 +5591,7 @@ class TabBar:
         layout = with_opener(layout) if lead else layout
         self.layout = layout
         marked = self.menu.address if self.menu else (self.prompt.address if self.prompt else "")
+        marked = marked or (self.tab_drag.address if self.tab_drag else "")  # the held tab, as the menu's
         for seg in layout.segs:
             if seg.kind == "tab":
                 attr = curses.A_REVERSE if seg.index == active else 0
@@ -5569,7 +5660,7 @@ class TabBar:
         if tab is None:
             return
         self.prompt = None
-        self.menu = TabMenu(address, tab_label(tab), tab_menu_entries(str(snap.get("kind") or "")))
+        self.menu = TabMenu(address, tab_label(tab), tab_menu_entries(str(snap.get("kind") or ""), bool(snap.get("ordered"))))
 
     def close_menu(self) -> None:
         """The menu or its question went without an action: the keyboard back to the shown terminal."""
@@ -5622,6 +5713,15 @@ class TabBar:
         self.mouse_quiet = time.monotonic() + MOUSE_QUIET
         if entry.action == "new":
             self.plus(snap)
+            focus_view(self.win)
+            return
+        if entry.action == "sort":  # the dragged order goes: by name again, in every window
+            try:
+                write_order(str(snap.get("group") or ""), None, self.state)
+            except OSError:
+                self.notice.say("the order could not be changed")
+            self.dropped = None
+            poke_engine(self.win)
             focus_view(self.win)
             return
         if entry.action == "rename":
@@ -5830,15 +5930,17 @@ class TabBar:
             self.notice.say(tab_keys(self.alone), bad=False)
         elif key == curses.KEY_MOUSE and click is not None:
             hit = hit_test(self.layout, click[0], click[1]) if self.layout else None
+            tabs = self.drawn if self.drawn is not None else (snap["tabs"] if snap is not None else [])
             if click[2] == 3:  # the right button: a tab's menu
-                if snap is not None and hit and hit[0] == "tab" and hit[1] < len(snap["tabs"]):
-                    self.open_tab_menu(snap, str(snap["tabs"][hit[1]]["address"]))
+                if snap is not None and hit and hit[0] == "tab" and hit[1] < len(tabs):
+                    self.open_tab_menu(snap, str(tabs[hit[1]]["address"]))
             elif hit and hit[0] == "open":
                 self.open_sidebar(time.monotonic())
-            elif snap is not None and hit and hit[0] == "tab" and hit[1] < len(snap["tabs"]):
-                address = str(snap["tabs"][hit[1]]["address"])
+            elif snap is not None and hit and hit[0] == "tab" and hit[1] < len(tabs):
+                address = str(tabs[hit[1]]["address"])
                 show(address, self.win, tab_title(snap, address))
                 focus_view(self.win)
+                self.press_tab(snap, tabs, address)
             elif snap is not None and hit and hit[0] == "plus":
                 self.plus(snap)
                 focus_view(self.win)
@@ -5853,6 +5955,58 @@ class TabBar:
         terminal with its hc id, and the key hints (owner, 24 Nov). Otherwise it shows that line only."""
         self.notice.clear()
         self.hints_until = time.monotonic() + NOTICE_SECONDS
+
+    def tabs_in_order(self, snap: dict) -> List[dict]:
+        """The snapshot's tabs as they are drawn: in a held tab's order (tab_drag), or in a dropped one's until the
+        snapshot shows it (or TAB_ORDER_HOLD went by: the save did not take)."""
+        tabs = list(snap["tabs"])
+        group = str(snap.get("group") or "")
+        if self.tab_drag is not None and self.tab_drag.group == group:
+            return arranged(tabs, self.tab_drag.order)
+        if self.dropped is not None:
+            key, order, until = self.dropped
+            now_order = [str(t.get("address", "")) for t in tabs]
+            if key != group or time.monotonic() >= until or now_order == arranged_addresses(now_order, order):
+                self.dropped = None
+            else:
+                return arranged(tabs, order)
+        return tabs
+
+    def press_tab(self, snap: dict, tabs: Sequence[dict], address: str) -> None:
+        """A left press on a tab (it is shown already): a drag starts, kept only once the tab moved (drop_tab)."""
+        order = [str(t.get("address", "")) for t in tabs]
+        if len(order) > 1:
+            self.tab_drag = TabDrag(str(snap.get("group") or ""), address, order, list(order), time.monotonic())
+
+    def follow_tab(self, x: int, y: int) -> None:
+        """The pointer moved with the tab held: over another tab, the held one takes that tab's place; over "+", the
+        last place."""
+        drag = self.tab_drag
+        if drag is None:
+            return
+        drag.seen = time.monotonic()
+        hit = hit_test(self.layout, x, y) if self.layout else None
+        tabs = self.drawn or []
+        if hit and hit[0] == "tab" and hit[1] < len(tabs):
+            target = str(tabs[hit[1]].get("address", ""))
+            if target != drag.address and target in drag.order:
+                drag.order = moved(drag.order, drag.address, drag.order.index(target))
+        elif hit and hit[0] == "plus":
+            drag.order = moved(drag.order, drag.address, len(drag.order))
+
+    def drop_tab(self) -> None:
+        """The release that ends a drag: a new order is kept (order.json, for every window) and the engine asked
+        for a snapshot in it; an unmoved tab (a click) writes nothing."""
+        drag, self.tab_drag = self.tab_drag, None
+        if drag is None or drag.order == drag.start or not drag.group:
+            return
+        try:
+            write_order(drag.group, drag.order, self.state)
+        except OSError:
+            self.notice.say("the new order could not be saved")
+            return
+        self.dropped = (drag.group, drag.order, time.monotonic() + TAB_ORDER_HOLD)
+        poke_engine(self.win)
 
     def note_shown(self, shown: str, now: float) -> None:
         """A terminal newly shown (the window's first, a pick, a switch): the row below the tabs gives all its info
@@ -5964,16 +6118,31 @@ class TabBar:
             send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
             return
         click = None
+        if key == curses.KEY_MOUSE and self.tab_drag is not None:  # a tab held: its moves and its release
+            event = read_mouse_event()
+            what = event[2] if event else ""
+            if what == "release":
+                self.drop_tab()
+                return
+            if what == "motion" and time.monotonic() - self.tab_drag.seen < DRAG_IDLE:
+                self.follow_tab(event[0], event[1])
+                return
+            # a key, a new press, or a move after DRAG_IDLE (most likely a new click after a lost release: see
+            # mouse_route): the drag ends, the order as it was; the event itself is dropped
+            self.tab_drag = None
+            return
         if key == curses.KEY_MOUSE:
             click = read_mouse()
             if click is None:
                 return  # a button let go: its press already acted, and the notice it set stays
+        self.tab_drag = None
         self.notice.clear()
         self.handle_key(key, snap, shown, click)
 
     def run(self) -> None:
-        setup_curses(self.s.scr, right=True)  # the right button: a tab's menu
+        setup_curses(self.s.scr, right=True, motion=True)  # the right button: a tab's menu; moves: a dragged tab
         self.s.scr.refresh()
+        report_drags(self.s.scr, True)  # a held tab follows the pointer
         bracketed_paste(True)  # a paste (a dropped file) is told from typing, and goes on to the view
         try:
             while True:
@@ -5995,6 +6164,7 @@ class TabBar:
                 if key != -1:
                     self.on_key(key, snap, shown)
         finally:
+            report_drags(self.s.scr, False)
             bracketed_paste(False)
             self.stop_engine()
 

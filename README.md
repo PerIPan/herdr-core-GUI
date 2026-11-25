@@ -191,7 +191,9 @@ Sidebar (`?` shows the full list, then what the status dots mean):
 | z | The shown terminal gets the whole window; `‹ back` on top brings the panes back |
 | r | Refresh now |
 
-Tab bar: left/right or h/l between tabs, enter or down to the terminal, `?` for its keys. The line below the tabs
+Tab bar: left/right or h/l between tabs, enter or down to the terminal, `?` for its keys. A tab dragged left or
+right keeps its new place, in every window, per space or server; the agents list follows. "Sort by name" in a tab's
+menu goes back to the names' order. The line below the tabs
 shows the space, the herdr-core id, the subscription and the key hints for a few seconds each time a terminal is
 shown, and again after a click on the bar anywhere but a tab.
 

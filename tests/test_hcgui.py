@@ -1202,7 +1202,7 @@ class StateTests(unittest.TestCase):
         spaces, _ = hcgui.build_groups(hcgui.parse(SAMPLE), "mini")
         hcgui.write_snapshot(spaces[2], self.state, now=1000.0)
         snap = hcgui.read_snapshot(self.state, now=1001.0)
-        self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "names", "server", "shown",
+        self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "names", "ordered", "server", "shown",
                                         "shown_title", "tabs", "title", "ts"])
         self.assertEqual((snap["server"], snap["shown"], snap["shown_title"]), ("mini", "", "hcGUI"))
         self.assertEqual(snap["group"], "space:atlas")
@@ -1768,16 +1768,18 @@ class SidebarLogicTests(unittest.TestCase):
         self.assertEqual(lines[2], hcgui.glyph(" ● other"))
         self.assertEqual(lines[3:7], [" + new space", "", "", ""])  # the servers section is hidden by default
         self.assertEqual(self.scr.reversed_rows(), [1])
-        self.assertEqual(lines[-6], " agents")  # the heading alone: no "grouped" after it (owner, 24 Nov)
-        self.assertEqual(lines[-5], hcgui.glyph(" dev"))
+        self.assertEqual(lines[-7], " agents")  # the heading alone: no "grouped" after it (owner, 24 Nov)
+        self.assertEqual(lines[-6], hcgui.glyph(" dev"))
         # no status word on agent rows: the dot's colour says it (owner, 24 Nov)
-        self.assertEqual(lines[-4], hcgui.glyph("  ● atlas"))
+        self.assertEqual(lines[-5], hcgui.glyph("  ● atlas"))
+        self.assertEqual(lines[-4], hcgui.glyph("  ● tracker"))
+        self.assertEqual(lines[-3], "")  # one blank row after a group with a heading (owner, 25 Nov)
         # o1 is the only agent of "other": no "other · 1" heading, the space's name after its own (owner, 24 Nov)
         self.assertEqual(lines[-2], hcgui.glyph("  ● o1 · other"))
         self.assertFalse(any(line.endswith(("idle", "working", "done", "blocked")) for line in lines))
         self.assertNotIn(hcgui.glyph(" other · 1"), lines)
         self.assertEqual(lines[-1], fold_line("open"))  # the arrow on the last line, a dim "?" at its end
-        self.assertEqual(lines[-8:-6], ["", "─" * 29])  # no key hints above the rule
+        self.assertEqual(lines[-9:-7], ["", "─" * 29])  # no key hints above the rule
         self.assertNotIn("rig", " ".join(lines))
         self.assertNotIn("grouped", " ".join(lines))
         self.side.mode = "strip"  # the strip draws the heading too, cut at its edge
@@ -6762,6 +6764,121 @@ class ViewSwitchTests(unittest.TestCase):
 MOTION = hcgui.curses.REPORT_MOUSE_POSITION
 
 
+class TabDragTests(unittest.TestCase):
+    """Owner, 25 Nov: "is it possible to drag the Tabs, left and right?" A held tab follows the pointer; its release
+    keeps the order (order.json, every window); "Sort by name" in the tab menu gives the names' order back."""
+
+    setUp = TabBarLogicTests.setUp
+
+    def x_of(self, label):
+        seg = next(s for s in self.bar.layout.segs if s.kind == "tab" and label in s.text)
+        return seg.x + 2, seg.y
+
+    def mouse(self, x, y, bstate):
+        with mouse_at(x, y, bstate), mock.patch.object(hcgui, "focus_view"):
+            self.bar.on_key(hcgui.curses.KEY_MOUSE, self.snap, hcgui.current_target(self.win))
+        self.bar.draw(self.snap, hcgui.current_target(self.win))
+
+    def labels(self):
+        return [str(t["label"]) for t in self.bar.drawn]
+
+    def test_drag_a_tab_to_another_place_and_keep_it(self):
+        self.bar.draw(self.snap, "t1")
+        self.assertEqual(self.labels(), ["alpha", "beta", "delta", "gamma", "omega"])  # by name
+        self.mouse(*self.x_of("delta"), PRESS1)
+        self.assertEqual(hcgui.current_target(self.win), "t4")  # the press picks it, as a click does
+        self.mouse(*self.x_of("alpha"), MOTION)  # held over alpha: delta takes its place
+        self.assertEqual(self.labels(), ["delta", "alpha", "beta", "gamma", "omega"])
+        self.assertFalse((self.state / "order.json").exists())  # nothing kept before the release
+        with mock.patch.object(hcgui, "poke_engine") as poke:
+            self.mouse(*self.x_of("delta"), RELEASE1)
+        poke.assert_called_once_with(self.win)  # a snapshot in the new order, now
+        self.assertEqual(hcgui.read_order(self.state), {"space:app": ["t4", "t1", "t2", "t3", "t5"]})
+        self.assertEqual(self.labels(), ["delta", "alpha", "beta", "gamma", "omega"])  # until the snapshot shows it
+        self.assertIsNone(self.bar.tab_drag)
+
+    def test_the_saved_order_is_the_groups_order(self):
+        hcgui.write_order("space:app", ["t4", "t1", "t9"], self.state)  # t9 ended: skipped
+        terms = hcgui.parse(ls(term("t1", "/Users/x/dev/app", "claude-code", "alpha", "idle"), term("t2", name="beta"),
+                               term("t3", name="gamma"), term("t4", name="delta"), term("t5", name="omega")))
+        spaces, _ = hcgui.build_groups(terms, "mini", order=hcgui.read_order(self.state))
+        group = spaces[0]
+        # dragged ones first in their order, the rest (new since) after them by name
+        self.assertEqual([t.shown for t in group.terms], ["delta", "alpha", "beta", "gamma", "omega"])
+        self.assertTrue(group.ordered)
+        snap = hcgui.make_snapshot(group, 0.0)
+        self.assertTrue(snap["ordered"])
+        self.assertFalse(hcgui.make_snapshot(hcgui.build_groups(terms, "mini")[0][0], 0.0)["ordered"])
+
+    def test_a_click_writes_nothing_and_a_key_or_a_lost_release_drops_the_drag(self):
+        self.bar.draw(self.snap, "t1")
+        self.mouse(*self.x_of("beta"), PRESS1)
+        self.mouse(*self.x_of("beta"), RELEASE1)  # a plain click: no order
+        self.assertFalse((self.state / "order.json").exists())
+        self.mouse(*self.x_of("beta"), PRESS1)
+        self.mouse(*self.x_of("alpha"), MOTION)
+        with mock.patch.object(hcgui, "focus_view"):
+            self.bar.on_key(27, self.snap, "t2")  # esc: the drag ends, the order as it was
+        self.bar.draw(self.snap, "t2")
+        self.assertIsNone(self.bar.tab_drag)
+        self.assertEqual(self.labels(), ["alpha", "beta", "delta", "gamma", "omega"])
+        self.mouse(*self.x_of("beta"), PRESS1)
+        self.bar.tab_drag.seen -= hcgui.DRAG_IDLE  # no event for a while: the release got lost
+        self.mouse(*self.x_of("alpha"), MOTION)  # most likely a new click: dropped, the order as it was
+        self.assertIsNone(self.bar.tab_drag)
+        self.assertEqual(self.labels(), ["alpha", "beta", "delta", "gamma", "omega"])
+        self.assertFalse((self.state / "order.json").exists())
+
+    def test_over_plus_is_the_last_place(self):
+        self.bar.draw(self.snap, "t1")
+        self.mouse(*self.x_of("alpha"), PRESS1)
+        plus = next(s for s in self.bar.layout.segs if s.kind == "plus")
+        self.mouse(plus.x, plus.y, MOTION)
+        self.assertEqual(self.labels()[-1], "alpha")
+
+    def test_sort_by_name_only_while_ordered_and_it_removes_the_order(self):
+        self.assertNotIn("sort", [e.action for e in hcgui.tab_menu_entries("space")])
+        self.assertEqual(hcgui.tab_menu_entries("space", True)[-1], hcgui.Entry("sort", "Sort by name", ""))
+        hcgui.write_order("space:app", ["t4", "t1"], self.state)
+        hcgui.write_order("rig:box", ["box/t2", "box/t1"], self.state)
+        self.bar.menu = hcgui.TabMenu("t1", "alpha", hcgui.tab_menu_entries("space", True))
+        with mock.patch.object(hcgui, "poke_engine"), mock.patch.object(hcgui, "focus_view"):
+            self.bar.run_tab_entry(hcgui.Entry("sort", "Sort by name", ""), self.snap)
+        self.assertEqual(hcgui.read_order(self.state), {"rig:box": ["box/t2", "box/t1"]})  # other groups stay
+
+    def test_order_file_junk_and_moved(self):
+        hcgui.write_atomic(self.state / "order.json", json.dumps(
+            {"space:a": ["t1", "t1", "t2"], "space:b": "t1", "space:c": [1, 2], "": ["t1"], "space:d": []}))
+        self.assertEqual(hcgui.read_order(self.state), {"space:a": ["t1", "t2"], "space:d": []})
+        hcgui.write_atomic(self.state / "order.json", "not json")
+        self.assertEqual(hcgui.read_order(self.state), {})
+        self.assertEqual(hcgui.moved(["a", "b", "c", "d"], "d", 0), ["d", "a", "b", "c"])
+        self.assertEqual(hcgui.moved(["a", "b", "c", "d"], "a", 2), ["b", "c", "a", "d"])
+        self.assertEqual(hcgui.moved(["a", "b"], "a", 9), ["b", "a"])
+
+
+class AgentGapTests(unittest.TestCase):
+    """Owner, 25 Nov: one blank row after a group with a heading, before the next agent ("keep it simple")."""
+
+    def plan(self, height=30, needs=()):
+        terms = hcgui.parse(ls(term("t1", "/Users/x/dev", "claude-code", "atlas", "idle"),
+                               term("t2", "/Users/x/dev", "claude-code", "gecko", "idle"),
+                               term("t3", "/Users/x/dev/other", "claude-code", "o1", "idle"),
+                               term("t4", "/Users/x/dev/zz", "claude-code", "z1", "idle")))
+        spaces, rigs = hcgui.build_groups(terms, "mini")
+        return [r.kind for _, r in hcgui.plan_sidebar(spaces, rigs, height, servers=False, needs=needs)]
+
+    def test_one_blank_row_after_a_headed_group_only(self):
+        kinds = self.plan()
+        agents = kinds[kinds.index("agents") + 1:]
+        # dev (two agents, a heading), a blank row, then o1 and z1 alone: no blank row between those, none at the end
+        self.assertEqual(agents, ["agent_group", "agent", "agent", "blank", "agent", "agent"])
+
+    def test_no_blank_row_when_the_agents_do_not_all_fit(self):
+        kinds = self.plan(height=9)
+        self.assertNotIn("blank", kinds[kinds.index("agents") + 1:] if "agents" in kinds else kinds)
+
+
 class SeparatorPlanTests(unittest.TestCase):
     """The separator between the upper part and the agents, moved: its line from the file and the pane height."""
 
@@ -6977,9 +7094,10 @@ class ShellClaudeTests(unittest.TestCase):
 class SeparatorDragTests(unittest.TestCase):
     """The Sidebar: the separator dragged with the mouse (press, moves, release) and moved with [ ] - =."""
 
-    # dev's three agents under "dev · 3", o1 alone in other (no heading): the rule, "agents" and 5 lines, the
-    # 7 lines these tests' rows are counted with
-    TERMS = SidebarLogicTests.TERMS + [term("t5", "/Users/x/dev", "claude-code", "zed", "idle")]
+    # dev's four agents under "dev · 4" (o1 moved there: one group, so no blank row after it): the rule, "agents" and
+    # 5 lines, the 7 lines these tests' rows are counted with; "other" keeps its shell
+    TERMS = [term("t3", "/Users/x/dev", "claude-code", "o1", "done") if t["address"] == "t3" else t
+             for t in SidebarLogicTests.TERMS] + [term("t5", "/Users/x/dev", "claude-code", "zed", "idle")]
     setUp = SidebarLogicTests.setUp
     key = SidebarLogicTests.key
 
@@ -7015,7 +7133,8 @@ class SeparatorDragTests(unittest.TestCase):
         self.assertEqual(self.scr.cells[(8, 0)][1], hcgui.curses.A_DIM)
         self.assertTrue(lines[9].startswith(" agents"))
         self.assertEqual(lines[10], hcgui.glyph(" dev"))
-        self.assertEqual(lines[0:4], [" spaces", hcgui.glyph("›● dev"), hcgui.glyph(" ● other"), " + new space"])
+        # other holds only a shell here (o1 moved to dev in this class's TERMS): its dot is hollow
+        self.assertEqual(lines[0:4], [" spaces", hcgui.glyph("›● dev"), hcgui.glyph(" ○ other"), " + new space"])
         self.assertEqual(lines[-1], fold_line("open"))
 
     def test_without_moves_the_release_alone_moves_it(self):
@@ -7285,7 +7404,7 @@ class DragReportTests(unittest.TestCase):
         self.assertEqual(order, ["refresh", b"\x1b[?1002h", "refresh", b"\x1b[?1002l"])
         hcgui.report_drags(scr, True, 999)  # a closed pane: no error
 
-    def test_the_sidebar_asks_for_moves_and_the_tab_bar_does_not(self):
+    def test_the_sidebar_and_the_tab_bar_ask_for_moves(self):
         calls = []
         raw = []
         patches = {"curs_set": lambda n: None, "use_default_colors": lambda: None, "init_pair": lambda *a: None,
@@ -7301,7 +7420,12 @@ class DragReportTests(unittest.TestCase):
         run = side[side.index("    def run(self) -> None:"):]
         self.assertIn("setup_curses(self.s.scr, right=True, motion=True)\n        report_drags(self.s.scr, True)", run)
         self.assertIn("finally:\n            report_drags(self.s.scr, False)", run)
-        self.assertNotIn("report_drags", text[text.index("class TabBar:"):text.index("def start_hidden(")])
+        # the tab bar too since 25 Nov: a dragged tab follows the pointer (owner: "drag the tabs left and right")
+        bar = text[text.index("class TabBar:"):text.index("def start_hidden(")]
+        bar_run = bar[bar.index("    def run(self) -> None:"):]
+        self.assertIn("setup_curses(self.s.scr, right=True, motion=True)", bar_run)
+        self.assertIn("report_drags(self.s.scr, True)", bar_run)
+        self.assertIn("finally:\n            report_drags(self.s.scr, False)", bar_run)
 
     def terminfo(self):
         """A copy of Ghostty 1.3's mouse capabilities (src/terminfo/ghostty.zig) on top of xterm-256color."""
