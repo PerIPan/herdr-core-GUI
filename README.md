@@ -26,9 +26,9 @@ rights asked. Machines and agents in the images are made up.
 - **Servers.** Every machine `hc machine ls` knows, as `user@host`. Hidden until shown (`v`).
 - **Agents with live status.** `idle`, `working`, `done`, `blocked`, `error`, each a coloured dot (no word on the
   row), read every 2 seconds. Listed by space and server: a heading only for two or more agents; a single agent on one row, with its
-  space dim after its name (`notes² · docs`).
-- **Needs you.** A section at the top for agents `blocked`, in `error`, or `done` and not shown since. Present only
-  while it has a row. Such an agent leaves the agents list until it no longer needs you.
+  space dim after its name (`notes² · docs`). One blank row between two groups.
+- **Needs you.** A section below the dev servers for agents `blocked`, in `error`, or `done` and not shown since.
+  Present only while it has a row; the rows above it never move. Such an agent leaves the agents list until it no longer needs you.
 - **Claude Code started from a shell.** `claude` typed in a terminal's shell is listed as an agent too, named
   Claude Code in the tab bar (found as the terminal's foreground program, every 30 seconds).
 - **Account marks.** `¹ ² ³` after a Claude Code agent name the Claude login it bills, from the terminal's label
@@ -40,7 +40,10 @@ rights asked. Machines and agents in the images are made up.
   read its login and bills the API instead. Read-only: the keychain is never unlocked, no password is asked for.
 - **Dev servers.** Pages served by `node` on the home machine, one row per port. A click opens the page.
 - **Menus.** A right click on a sidebar row opens its menu. A right click on a tab, or in the shown terminal, opens
-  its menu: New terminal, Rename, Move to space, Close.
+  its menu: New terminal, Split right, Rename, Move to space, Close.
+- **Split right.** A shell in a pane right of the shown terminal, started as that terminal's child: an
+  agent there sees it (`hc ls`, `hc read`) and gets no notes from it. Shown only beside its terminal, never as a
+  tab; it ends with that terminal. A right click in it: Close, on `y`.
 - **Safe deletes.** Delete space and End terminal list everything that ends and end it on `y`, taken only after
   half a second; any other key cancels. Forget server asks for the server's name to be typed first.
 - **Drops.** A file dropped on the window reaches the shown terminal as its path. A terminal on another machine

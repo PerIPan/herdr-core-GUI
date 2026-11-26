@@ -1202,8 +1202,8 @@ class StateTests(unittest.TestCase):
         spaces, _ = hcgui.build_groups(hcgui.parse(SAMPLE), "mini")
         hcgui.write_snapshot(spaces[2], self.state, now=1000.0)
         snap = hcgui.read_snapshot(self.state, now=1001.0)
-        self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "names", "ordered", "server", "shown",
-                                        "shown_title", "tabs", "title", "ts"])
+        self.assertEqual(sorted(snap), ["cwd", "group", "kind", "machine", "name", "names", "ordered", "panes", "server",
+                                        "shown", "shown_title", "tabs", "title", "ts"])
         self.assertEqual((snap["server"], snap["shown"], snap["shown_title"]), ("mini", "", "hcGUI"))
         self.assertEqual(snap["group"], "space:atlas")
         self.assertEqual((snap["name"], snap["title"]), ("atlas", "atlas"))  # no display name: the name
@@ -3526,7 +3526,7 @@ class TabMenuTests(unittest.TestCase):
         self.assertEqual(self.bar.menu.address, "mini/t2")
         self.assertEqual(hcgui.current_target(self.win), "")  # a right click shows nothing
         lines = self.scr.lines()
-        self.assertEqual(lines[1], " beta: New terminal · Rename · Move to space · Close")
+        self.assertEqual(lines[1], " beta: New terminal · Split right · Rename · Move to space · Close")
         self.assertEqual(lines[4], " " + hcgui.TAB_MENU_HINT)
         beta = [attr for (y, x), (c, attr) in self.scr.cells.items() if y == 0 and x == self.tab_x("beta") + 3]
         self.assertTrue(beta[0] & hcgui.curses.A_UNDERLINE)  # the tab the menu belongs to
@@ -6858,7 +6858,8 @@ class TabDragTests(unittest.TestCase):
 
 
 class AgentGapTests(unittest.TestCase):
-    """Owner, 25 Nov: one blank row after a group with a heading, before the next agent ("keep it simple")."""
+    """Owner, 25 Nov: one blank row after a group with a heading, before the next agent ("keep it simple"); 26 Nov:
+    after an agent alone in its group too."""
 
     def plan(self, height=30, needs=()):
         terms = hcgui.parse(ls(term("t1", "/Users/x/dev", "claude-code", "atlas", "idle"),
@@ -6868,11 +6869,11 @@ class AgentGapTests(unittest.TestCase):
         spaces, rigs = hcgui.build_groups(terms, "mini")
         return [r.kind for _, r in hcgui.plan_sidebar(spaces, rigs, height, servers=False, needs=needs)]
 
-    def test_one_blank_row_after_a_headed_group_only(self):
+    def test_one_blank_row_after_every_group(self):
         kinds = self.plan()
         agents = kinds[kinds.index("agents") + 1:]
-        # dev (two agents, a heading), a blank row, then o1 and z1 alone: no blank row between those, none at the end
-        self.assertEqual(agents, ["agent_group", "agent", "agent", "blank", "agent", "agent"])
+        # dev (two agents, a heading), a blank row, o1 alone, a blank row, z1 alone; none at the end
+        self.assertEqual(agents, ["agent_group", "agent", "agent", "blank", "agent", "blank", "agent"])
 
     def test_no_blank_row_when_the_agents_do_not_all_fit(self):
         kinds = self.plan(height=9)
@@ -7904,11 +7905,13 @@ class SectionsLayoutTests(unittest.TestCase):
         plan = sec.plan(40)
         kinds = [r.kind for _, r in plan]
         heads = [r.text for _, r in plan if r.kind == "header"]
-        self.assertEqual(heads, ["needs you", "spaces", "servers", "dev servers"])
-        self.assertLess(kinds.index("dev"), kinds.index("rule"))
-        self.assertEqual(kinds[:2], ["header", "needs"])
+        # "needs you" last of the top part (owner, 26 Nov: at the top it moved every row as it came and went)
+        self.assertEqual(heads, ["spaces", "servers", "dev servers", "needs you"])
+        self.assertLess(kinds.index("dev"), kinds.index("needs"))
+        self.assertLess(kinds.index("needs"), kinds.index("rule"))
+        self.assertEqual(kinds[:2], ["header", "group"])
         items = sec.items()
-        self.assertEqual([i.kind for i in items[:2]], ["needs", "needs"])
+        self.assertEqual([i.kind for i in items if i.kind in ("dev", "needs")], ["dev", "dev", "needs", "needs"])
         self.assertEqual([i for i in items if i.kind == "dev"], [hcgui.Item("dev", "", "3917"),
                                                                   hcgui.Item("dev", "", "3918")])
         for _, row in plan:  # every row's item index names its own item
@@ -8015,30 +8018,44 @@ class ExtrasSidebarTests(unittest.TestCase):
         self.side.refresh_extras(self.now)
         self.side.draw()
 
-    def test_needs_you_at_the_very_top(self):
+    def needs_lines(self):
+        """The "needs you" section's lines, its heading first ([] when it is not drawn)."""
         lines = self.lines()
-        self.assertEqual(lines[0], " needs you")
-        self.assertTrue(lines[1].startswith(hcgui.glyph(" ● o1³")) and lines[1].endswith("blocked"), lines[1])
-        self.assertTrue(lines[2].startswith(hcgui.glyph(" ● harry³ · guest@mini")) and lines[2].endswith("done"),
-                        lines[2])  # not on the home machine: its server too
-        self.assertTrue(lines[3].startswith(hcgui.glyph(" ● tracker²")) and lines[3].endswith("done"), lines[3])
-        self.assertEqual(lines[4:6], ["", " spaces"])
+        if " needs you" not in lines:
+            return []
+        at = lines.index(" needs you")
+        end = next((i for i in range(at + 1, len(lines)) if not lines[i].strip()), len(lines))
+        return lines[at:end]
+
+    def test_needs_you_below_the_dev_servers(self):
+        # owner, 26 Nov: at the top it moved every row below it as it came and went
+        lines = self.lines()
+        self.assertEqual(lines[0], " spaces")
+        at = lines.index(" needs you")
+        self.assertLess(lines.index(" dev servers"), at)
+        self.assertEqual(lines[at - 1], "")
+        self.assertTrue(lines[at + 1].startswith(hcgui.glyph(" ● o1³")) and lines[at + 1].endswith("blocked"),
+                        lines[at + 1])
+        self.assertTrue(lines[at + 2].startswith(hcgui.glyph(" ● harry³ · guest@mini")) and
+                        lines[at + 2].endswith("done"), lines[at + 2])  # not on the home machine: its server too
+        self.assertTrue(lines[at + 3].startswith(hcgui.glyph(" ● tracker²")) and lines[at + 3].endswith("done"),
+                        lines[at + 3])
 
     def test_enter_on_a_needs_row_shows_it_and_clears_a_done(self):
-        self.key("k")  # the cursor starts on the current group: up to the needs rows
+        self.key("j")  # the cursor starts on the current group: down to the needs rows
         while self.side.cursor_item().kind != "needs" or self.side.cursor_item().address != "mini/t2":
-            self.key("k")
+            self.key("j")
         self.key(10)
         self.assertEqual(hcgui.current_target(self.win), "mini/t2")
         self.assertEqual(hcgui.read_seen(self.state), {"mini/t2": 2})
-        self.assertNotIn("tracker", " ".join(self.lines()[:4]))  # looked at: gone from "needs you"
+        self.assertNotIn("tracker", " ".join(self.needs_lines()))  # looked at: gone from "needs you"
         hcgui.show("mini/t1", self.win)  # another terminal shown: tracker stays seen until its next done
         self.key(-1)
-        self.assertNotIn("tracker", " ".join(self.lines()[:4]))
+        self.assertNotIn("tracker", " ".join(self.needs_lines()))
         self.hc.find("mini/t2")["turn"] = 3  # it worked again and is done again
         self.side.refresh_once()
         self.key(-1)
-        self.assertIn("tracker", " ".join(self.lines()[:5]))
+        self.assertIn("tracker", " ".join(self.needs_lines()))
 
     def test_a_click_on_a_needs_row_of_a_hidden_server_shows_it(self):
         self.assertFalse(self.side.servers_shown())
@@ -8046,16 +8063,16 @@ class ExtrasSidebarTests(unittest.TestCase):
         self.mouse(5, y)
         self.assertEqual(hcgui.current_target(self.win), "guest/t1")
         self.assertEqual(hcgui.read_seen(self.state), {"guest/t1": 1})
-        self.assertNotIn("harry", " ".join(self.lines()[:4]))
+        self.assertNotIn("harry", " ".join(self.needs_lines()))
 
     def test_blocked_stays_until_it_is_no_longer_blocked(self):
         y = next(i for i, line in enumerate(self.lines()) if " o1" in line and "blocked" in line)
         self.mouse(5, y)
         self.assertEqual(hcgui.current_target(self.win), "mini/t3")
-        self.assertNotIn("o1", " ".join(self.lines()[:4]))  # shown here: left out
+        self.assertNotIn("o1", " ".join(self.needs_lines()))  # shown here: left out
         hcgui.show("mini/t1", self.win)
         self.key(-1)
-        self.assertIn("o1", " ".join(self.lines()[:4]))
+        self.assertIn("o1", " ".join(self.needs_lines()))
 
     def test_marks_on_agent_rows_and_tabs(self):
         lines = self.lines()
@@ -8193,7 +8210,7 @@ class ExtrasSidebarTests(unittest.TestCase):
         self.key("g")  # the entry's letter
         self.assertIsNone(self.side.menu)
         self.assertFalse(hcgui.read_agents_shown(self.state))
-        self.assertEqual(self.lines()[0], " needs you")
+        self.assertIn(" needs you", self.lines())
 
     def test_agents_hidden_drops_a_drag(self):
         y = self.side.rule_y
@@ -8304,8 +8321,8 @@ class ExtrasSidebarTests(unittest.TestCase):
     def test_the_whole_sidebar_at_30x40(self):
         self.lock()
         lines = self.lines()
-        self.assertEqual(lines[0], " needs you")
-        self.assertIn(" spaces", lines)
+        self.assertEqual(lines[0], " spaces")
+        self.assertIn(" needs you", lines)
         self.assertIn(" dev servers", lines)
         self.assertTrue(any(line.startswith(" agents") for line in lines))
         self.assertEqual(lines[38], " keychain locked: API billing")
@@ -10610,6 +10627,123 @@ exit 0
         self.assertTrue(wait_for(lambda: notice in self.t("capture-pane", "-p", "-t", tabs), 10),
                         self.t("capture-pane", "-p", "-t", tabs))
         self.assertEqual(put_log.read_text(), f"rig/t1 {shot}\n")  # never put: over 8 MB and no image
+
+
+class RightPaneTests(unittest.TestCase):
+    """Owner, 26 Nov: herdr's small pane on the right, a shell the session can see. "Split right" in a
+    tab's menu starts a child shell of that tab's terminal (label pane=right); it shows right of the view while its
+    parent is shown, is no tab of its own, and its pane's right click offers Close (y ends it)."""
+
+    setUp = TabBarLogicTests.setUp
+
+    def group(self):
+        terms = [hcgui.Term("mini/t1", "mini", "alpha", "claude-code", "idle", "/x"),
+                 hcgui.Term("mini/t2", "mini", "", "zsh", "", "/x"),
+                 hcgui.Term("mini/t3", "mini", "beta", "zsh", "", "/x")]
+        infos = {"mini/t2": hcgui.Info(parent="mini/t1", pane="right"),
+                 "mini/t3": hcgui.Info(parent="mini/t9", pane="right")}  # its parent is not listed: a tab
+        return hcgui.Group("space:x", "x", "space", "mini", "", terms=terms), terms, infos
+
+    def snapshot(self):
+        group, terms, infos = self.group()
+        hcgui.write_snapshot(group, self.win, everything=terms, infos=infos)
+        return hcgui.read_snapshot(self.win)
+
+    def test_parse_info_reads_the_pane_label(self):
+        raw = json.dumps({"labels": {"pane": "right"}, "parent": "t1"})
+        self.assertEqual(hcgui.parse_info(raw, "rig/t2"), hcgui.Info(parent="rig/t1", pane="right"))
+        self.assertEqual(hcgui.parse_info(json.dumps({"labels": {"pane": "left"}}), "t2").pane, "")
+
+    def test_the_shell_is_no_tab_and_its_parent_names_it(self):
+        snap = self.snapshot()
+        self.assertEqual([t["address"] for t in snap["tabs"]], ["mini/t1", "mini/t3"])
+        self.assertEqual([t["address"] for t in snap["panes"]], ["mini/t2"])
+        self.assertEqual(hcgui.right_of(snap, "mini/t1"), "mini/t2")
+        self.assertEqual(hcgui.right_of(snap, "mini/t3"), "")
+        self.assertEqual(hcgui.tab_of(snap, "mini/t2")["address"], "mini/t2")  # its menu finds it
+        self.assertEqual(hcgui.tab_title(snap, "mini/t2"), hcgui.window_title("t2", "mini"))
+        # Close of the parent lists the shell: it ends with it
+        self.assertIn("mini/t2", [a for a, _, _ in hcgui.tab_ends(hcgui.tab_of(snap, "mini/t1"))])
+
+    def test_menu_entries(self):
+        labels = [e.label for e in hcgui.tab_menu_entries("space", right=True)]
+        self.assertEqual(labels, ["New terminal", "Split right", "Rename", "Move to space", "Close"])
+        self.assertEqual([e.action for e in hcgui.tab_menu_entries("space", pane=True)], ["close"])
+        segs = hcgui.tab_menu_segs("x", hcgui.tab_menu_entries("space", right=True), 40)  # short: first words
+        self.assertEqual([g.text for g in segs if g.kind == "entry"][:2], ["new", "split"])
+
+    def test_menus_of_a_tab_and_of_the_right_pane(self):
+        snap = self.snapshot()
+        self.bar.open_tab_menu(snap, "mini/t3")
+        self.assertIn("right", [e.action for e in self.bar.menu.entries])
+        self.bar.open_tab_menu(snap, "mini/t1")  # it has one already
+        self.assertNotIn("right", [e.action for e in self.bar.menu.entries])
+        self.bar.menu = None
+        hcgui.write_atomic(self.win / "ask", hcgui.ASK_RIGHT + "\n")
+        with mock.patch.object(hcgui, "focus_pane"), mock.patch.object(hcgui, "right_pane", return_value="%9"):
+            self.bar.check_ask(snap, "mini/t1")
+        self.assertEqual(self.bar.menu.address, "mini/t2")
+        self.assertEqual([e.action for e in self.bar.menu.entries], ["close"])
+        self.assertEqual(self.bar.menu_pane, "%9")
+        with mock.patch.object(hcgui, "send_keys_to_view") as keys:  # a key typed after it goes to that pane
+            self.bar.handle_menu(ord("l"), snap, None)
+        self.assertEqual(keys.call_args[0][2], "%9")
+        self.assertEqual(self.bar.menu_pane, "")
+
+    def test_new_right_shell_asks_hc_for_a_child(self):
+        calls = []
+
+        def runner(*args, timeout=0.0):
+            calls.append(args)
+            return json.dumps({"address": "t8"})
+
+        with mock.patch.object(hcgui, "poke_engine"):
+            self.assertEqual(hcgui.new_right_shell("t1", "/x", self.win, runner), "t8")
+            self.assertEqual(hcgui.new_right_shell("rig/t4", "", self.win, runner), "rig/t8")
+        self.assertEqual(calls[0], ("run", "--bg", "--json", "--parent", "t1", "--no-notify", "--rm",
+                                    "--label", "pane=right", "--cwd", "/x"))
+        self.assertEqual(calls[1], ("run", "--bg", "--json", "--parent", "t4", "--no-notify", "--rm",
+                                    "--label", "pane=right", "--on", "rig"))
+
+    def test_view_pane_command(self):
+        cmd = hcgui.view_pane_command(Path("/w/right"), Path("/w"), Path("/app"),
+                                      [("HCGUI_HC", "/b/hc"), ("TERM", "xterm-hcgui"), ("HCGUI_WINDOW", "/x")])
+        self.assertEqual(cmd, "exec env HCGUI_WINDOW=/w HCGUI_VIEW_DIR=/w/right HCGUI_HC=/b/hc python3 /app/hcgui.py view")
+
+    def sync(self, snap, shown, pane="", zoomed=False):
+        calls = []
+
+        def tmux(*args, input=None):
+            calls.append(args)
+            return None
+
+        look = hcgui.WindowLook(zoomed, 100, 40, 70, 38)
+        with mock.patch.object(hcgui, "tmux_enabled", return_value=True), \
+                mock.patch.object(hcgui, "pane_id", return_value="%1"), \
+                mock.patch.object(hcgui, "window_look", return_value=look), \
+                mock.patch.object(hcgui, "right_pane", return_value=pane), \
+                mock.patch.object(hcgui, "open_right_pane", return_value="%7") as opened, \
+                mock.patch.object(hcgui, "tmux", tmux), mock.patch.object(hcgui, "end_current_attach"):
+            self.bar.sync_right(snap, shown, 1000.0)
+        return calls, opened.called
+
+    def test_sync_opens_switches_and_closes_the_pane(self):
+        snap = self.snapshot()
+        self.bar.right_focus, self.bar.right_since = "mini/t2", time.monotonic()
+        calls, opened = self.sync(snap, "mini/t1")
+        self.assertTrue(opened)
+        self.assertEqual(hcgui.current_target(self.win / hcgui.RIGHT_DIR), "mini/t2")
+        self.assertIn(("select-pane", "-t", "%7"), calls)  # just started: it takes the keyboard
+        self.assertEqual(self.bar.right_focus, "")
+        calls, opened = self.sync(snap, "mini/t1", pane="%7")  # nothing changed: no tmux call before RIGHT_LOOK
+        self.assertEqual((calls, opened), ([], False))
+        calls, opened = self.sync(snap, "mini/t3", pane="%7")  # a tab without one: the pane goes
+        self.assertEqual(calls, [("kill-pane", "-t", "%7")])
+        self.bar.right_look = 0.0
+        calls, opened = self.sync(snap, "mini/t1", pane="", zoomed=True)  # zoomed: nothing until it is not
+        self.assertEqual((calls, opened), ([], False))
+        calls, opened = self.sync(None, "mini/t3", pane="%7")  # no snapshot: the pane stays
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

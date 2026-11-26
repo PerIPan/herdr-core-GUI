@@ -9,11 +9,11 @@ Mac) while a terminal of another machine is shown: it sends the files there (`hc
 (ViewRelay). tmux passes a click to the pane under the pointer at once, so no click is spent on moving the keyboard
 first; after a pick the keyboard goes to the view (focus_view).
 
-The sidebar lists, top to bottom, "needs you" (agents blocked or in error, and agents done that were not shown
-since; only while there is one), "spaces" (projects on the home machine), "servers" (every machine
+The sidebar lists, top to bottom, "spaces" (projects on the home machine), "servers" (every machine
 `hc machine ls` knows, the home machine included, plus "this Mac" while it runs terminals; each drawn as user@host of
 its ssh target), "dev servers" (node programs, or HCGUI_DEV_PROGRAM, of the home core's own account listening on
-the home machine, opened in this Mac's browser; only while there is one) and "agents" (by space and server, not those in "needs you": a
+the home machine, opened in this Mac's browser; only while there is one), "needs you" (agents blocked or in
+error, and agents done that were not shown since; only while there is one) and "agents" (by space and server, not those in "needs you": a
 heading over two or more, an agent alone in its group on its own row with the group's name dim after its own; Claude
 Code typed in a shell counts as Claude Code, with_foreground).
 The servers section is hidden until shown (v, or "Show servers" in any row menu;
@@ -167,6 +167,15 @@ PLAIN_PROGRAMS = ("zsh", "bash", "sh", "fish", "login")
 # hc's word for Claude Code: only its terminals get an account mark, the tab bar names it "Claude Code", and a shell
 # with Claude Code in front (typed there: hc names the shell) counts as one (with_foreground)
 CLAUDE_AGENT = "claude-code"
+# A shell started from a tab's "New terminal on the right": a child of that tab's terminal with the label pane=right,
+# shown in a pane right of the view while its parent is shown, never as a tab of its own (owner, 26 Nov: herdr's
+# small pane beside an agent, a terminal the agent can see). Its pane: tmux's @hcgui_role "right", RIGHT_SHARE of
+# the view's width, with a view.sh of its own in the window's folder RIGHT_DIR.
+RIGHT_PANE = "right"
+RIGHT_DIR = "right"
+RIGHT_SHARE = "40%"
+RIGHT_LOOK = 5.0  # seconds: the tab bar looks at the right pane again with nothing changed (TabBar.sync_right)
+RIGHT_WAIT = 10.0  # seconds a shell just started on the right may take to be listed and still get the keyboard
 HC_CLAUDE = "claude"  # hc's word for a Claude Code it started (`hc run claude`) before its first status report
 STATUS_ORDER = ("blocked", "error", "working", "done", "idle")
 # status -> colour pair (1 red, 2 green, 3 yellow, 4 blue); anything else is dim.
@@ -239,6 +248,7 @@ class Info:
     dies: bool = True
     account: str = ""  # its label "account" (which Claude subscription it runs on; account_mark)
     foreground: str = ""  # CLAUDE_AGENT while Claude Code is in front (with_foreground), else ""
+    pane: str = ""  # its label "pane": RIGHT_PANE for a shell shown in the pane right of its parent's view
 
 
 @dataclass
@@ -372,13 +382,15 @@ def parse_info(raw: str, address: str) -> Info:
     labels = data.get("labels")
     space = labels.get("space") if isinstance(labels, dict) else None
     account = labels.get("account") if isinstance(labels, dict) else None
+    pane = labels.get("pane") if isinstance(labels, dict) else None
     parent = data.get("parent")
     parent = parent.strip() if isinstance(parent, str) else ""
     if parent and "/" not in parent and "/" in address:
         parent = address.rsplit("/", 1)[0] + "/" + parent
     return Info(printable(space.strip()) if isinstance(space, str) else "", parent,
                 data.get("die_with_parent") is not False,
-                printable(account.strip()) if isinstance(account, str) else "", parse_foreground(data.get("foreground")))
+                printable(account.strip()) if isinstance(account, str) else "", parse_foreground(data.get("foreground")),
+                pane.strip() if isinstance(pane, str) and pane.strip() == RIGHT_PANE else "")
 
 
 def with_foreground(terms: Sequence[Term], infos: Mapping[str, Info]) -> List[Term]:
@@ -594,12 +606,13 @@ def shown_title(address: str, terms: Sequence[Term], machines: Sequence[object] 
 
 
 def tab_title(snap: Optional[dict], address: str) -> Optional[str]:
-    """The window title for a tab of the snapshot (its label and server), None when `address` is no tab of it."""
-    for t in (snap or {}).get("tabs") or []:
-        if isinstance(t, dict) and t.get("address") == address:
-            server = str(t.get("server") or (snap or {}).get("server") or machine_of(address))
-            return window_title(str(t.get("label") or address.rsplit("/", 1)[-1]), server)
-    return None
+    """The window title for a tab of the snapshot, or a right pane's shell (its label and server), None when
+    `address` is neither."""
+    t = tab_of(snap, address)
+    if t is None:
+        return None
+    server = str(t.get("server") or (snap or {}).get("server") or machine_of(address))
+    return window_title(str(t.get("label") or address.rsplit("/", 1)[-1]), server)
 
 
 def tabs_title(snap: Optional[dict], shown: str) -> Optional[str]:
@@ -666,15 +679,15 @@ def lone_place(group: Group, term: Term) -> str:
 
 def selectable_items(spaces: Sequence[Group], rigs: Sequence[Group], servers: bool = True,
                      needs: Sequence[Term] = (), devs: Sequence[DevServer] = (), agents: bool = True) -> List[Item]:
-    """Cursor order, as drawn: "needs you", the spaces, "+ new space", the servers, "+ add server", the dev servers,
+    """Cursor order, as drawn: the spaces, "+ new space", the servers, "+ add server", the dev servers, "needs you",
     then the agents of each group (not those in "needs you": listed_agents). `servers` False: the servers section is
     hidden (no server rows, no "+ add server", no agents of servers). `needs`, `devs`: those sections' rows (empty:
     not drawn). `agents` False: the agents section is hidden."""
     rigs = rigs if servers else []
-    items = [Item("needs", "", t.address) for t in needs]
-    items += [Item("group", g.key, "") for g in spaces] + [NEW_SPACE]
+    items = [Item("group", g.key, "") for g in spaces] + [NEW_SPACE]
     items += [Item("group", g.key, "") for g in rigs] + [ADD_RIG] if servers else []
     items += [Item("dev", "", str(d.port)) for d in devs]
+    items += [Item("needs", "", t.address) for t in needs]
     if agents:
         items += [Item("agent", g.key, t.address) for g in agent_groups(spaces, rigs) for t in listed_agents(g, needs)]
     return items
@@ -2023,7 +2036,7 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
                  compact: bool = False, servers: bool = True, rule: Optional[int] = None,
                  needs: Sequence[Term] = (), devs: Sequence[DevServer] = (),
                  agents: bool = True) -> List[Tuple[int, Row]]:
-    """Rows with their screen line. The top part ("needs you", spaces, servers, dev servers) always wins. The
+    """Rows with their screen line. The top part (spaces, servers, dev servers, "needs you") always wins. The
     bottom block (rule, agents) is anchored to the last line; when the screen is short the rule and the header go
     first, so the agents keep at least a heading, the cursor's agent and "+N more". No key hints: "?" lists the keys. `compact`: the folded
     strip (drawn narrower, same rows). `servers` False: the servers section is hidden (no heading, no server rows,
@@ -2035,26 +2048,26 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
     the cursor's row, the agents the lines from it down (the line, "agents", then the rows, with "+N more" and the
     cursor's agent as above).
 
-    `needs`: the "needs you" rows, a section at the very top (none: not drawn). `devs`: the dev servers, a section
+    `needs`: the "needs you" rows, a section below the dev servers, last of the top part (none: not drawn). `devs`: the dev servers, a section
     below the servers (none: not drawn). `agents` False: the agents section is hidden: no separator, no "agents", no
     rows; the upper part has every line (a moved separator is kept for when they come back).
 
     The agents come by group (agent_groups): a group of two or more under its heading ("dev · 2"), an agent alone in
-    its group as its row only, with the group's name in Row.place (lone_place)."""
+    its group as its row only, with the group's name in Row.place (lone_place); one blank row between two groups
+    while every agent line fits."""
     height = max(0, height)
     manual = clamp_rule(rule, height) if rule is not None and agents else None
     top_room = height if manual is None else manual
     rigs = rigs if servers else []
     # while shown, the servers section is always there: "+ add server" lives in it. Rows in selectable_items' order.
-    top: List[Row] = []
-    if needs:
-        top += [Row("header", "needs you")] + [Row("needs", term=t) for t in needs] + [Row("blank")]
-    top += [Row("header", "spaces")] + [Row("group", group=g) for g in spaces] + [Row("plus", "new_space")]
+    top: List[Row] = [Row("header", "spaces")] + [Row("group", group=g) for g in spaces] + [Row("plus", "new_space")]
     if servers:
         top += [Row("blank"), Row("header", "servers")] + [Row("group", group=g) for g in rigs]
         top += [Row("plus", "add_rig")]
     if devs:
         top += [Row("blank"), Row("header", "dev servers")] + [Row("dev", dev=d) for d in devs]
+    if needs:  # last of the top part (owner, 26 Nov: at the top it moved every row below it as it came and went)
+        top += [Row("blank"), Row("header", "needs you")] + [Row("needs", term=t) for t in needs]
     index = 0
     for row in top:
         if row.kind in ("group", "plus", "needs", "dev"):
@@ -2070,8 +2083,7 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
     room = height - len(placed)
 
     entries: List[Row] = []
-    gapped: List[Row] = []  # the same with one blank row after each group that has a heading
-    last_headed = False
+    gapped: List[Row] = []  # the same with one blank row between two groups
     for g in agent_groups(spaces, rigs):
         listed = listed_agents(g, needs)
         if not listed:
@@ -2080,11 +2092,10 @@ def plan_sidebar(spaces: Sequence[Group], rigs: Sequence[Group], height: int, cu
         for t in listed:
             rows.append(Row("agent", group=g, term=t, item=index, place=lone_place(g, t) if len(listed) == 1 else ""))
             index += 1
-        if last_headed:  # one blank row after a group with a heading, before what follows (owner, 25 Nov)
+        if gapped:  # one blank row after a group, also an agent alone in its group (owner, 25 and 26 Nov)
             gapped.append(Row("blank"))
         entries += rows
         gapped += rows
-        last_headed = len(listed) > 1
     fixed = [Row("rule"), Row("agents", "agents")]
 
     def spaced(cap: int) -> List[Row]:
@@ -2356,12 +2367,16 @@ DELETE_HOLD = 0.5
 DELETE_NO = "cancelled: nothing ended"  # d's question went unanswered (any other key, a click, a paste)
 
 
-def tab_menu_entries(kind: str, ordered: bool = False) -> List[Entry]:
+def tab_menu_entries(kind: str, ordered: bool = False, right: bool = False, pane: bool = False) -> List[Entry]:
     """The menu of a tab (and of the shown terminal, a right click in the view): New terminal (in the tab bar's space
-    or server), Rename, Move to space (only in a space), Close, and "Sort by name" while the tabs were dragged into
-    an order of their own (`ordered`). Clicks pick; the keys are the sidebar's for the same actions, kept only to
-    match its entries (the tab menu takes no keys)."""
-    entries = [Entry("new", "New terminal", "n"), Entry("rename", "Rename", "e")]
+    or server), "Split right" (`right`: the tab has no right pane yet, RIGHT_PANE), Rename, Move to space
+    (only in a space), Close, and "Sort by name" while the tabs were dragged into an order of their own
+    (`ordered`). The right pane's own shell (`pane`, a right click in that pane): Close only. Clicks pick; the keys
+    are the sidebar's for the same actions, kept only to match its entries (the tab menu takes no keys)."""
+    if pane:
+        return [Entry("close", "Close", "d")]
+    entries = [Entry("new", "New terminal", "n")] + ([Entry("right", "Split right", "")] if right else [])
+    entries.append(Entry("rename", "Rename", "e"))
     if kind == "space":
         entries.append(Entry("move", "Move to space", "m"))
     return entries + [Entry("close", "Close", "d")] + ([Entry("sort", "Sort by name", "")] if ordered else [])
@@ -2397,9 +2412,24 @@ def menu_entry_at(segs: Sequence[Seg], x: int) -> Optional[int]:
 
 
 def tab_of(snap: Optional[Mapping[str, object]], address: str) -> Optional[Mapping[str, object]]:
-    """The tab of `address` in the snapshot, None when it is not there (any more)."""
+    """The tab of `address` in the snapshot, also a right pane's shell ("panes"), None when it is not there (any
+    more)."""
+    for key in ("tabs", "panes"):
+        tabs = snap.get(key) if snap else None
+        found = next((t for t in tabs if t.get("address") == address), None) if isinstance(tabs, list) else None
+        if found is not None:
+            return found
+    return None
+
+
+def right_of(snap: Optional[Mapping[str, object]], address: str) -> str:
+    """The shell shown right of `address` (its tab's "right", while that shell is in the snapshot's "panes"), ""
+    for none."""
     tabs = snap.get("tabs") if snap else None
-    return next((t for t in tabs if t.get("address") == address), None) if isinstance(tabs, list) else None
+    tab = next((t for t in tabs if t.get("address") == address), None) if isinstance(tabs, list) and address else None
+    child = str(tab.get("right") or "") if tab is not None else ""
+    panes = snap.get("panes") if snap else None
+    return child if child and isinstance(panes, list) and any(p.get("address") == child for p in panes) else ""
 
 
 def tab_ends(tab: Mapping[str, object]) -> List[Tuple[str, str, str]]:
@@ -2764,6 +2794,9 @@ def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]]
     the child terminals that end with it ([address, shown name, program], from `everything` and `infos`, see
     ending); "names" is the shown name of every listed terminal (`everything`), so a rename can refuse a taken one."""
     servers, infos = servers or {}, infos or {}
+    # a right pane's shell (right_children) is no tab: its parent's tab names it ("right"), its own tab is in "panes"
+    right = right_children(group.terms, infos)
+    in_pane = set(right.values())
 
     def ends(t: Term) -> List[List[str]]:
         return [[c.address, c.shown, c.agent] for c in ending([t], everything, infos)[1:]]
@@ -2788,14 +2821,33 @@ def make_snapshot(group: Group, now: float, servers: Optional[Mapping[str, str]]
         for every tab while only one subscription is in sight (`several`)."""
         return usage_shown(label_of(t), names) if several and label_of(t) else ""
 
+    def tab(t: Term) -> dict:
+        out = {"address": t.address, "label": t.shown, "status": t.status, "agent": t.agent, "cwd": t.cwd,
+               "server": servers.get(t.machine, t.machine), "mark": t.mark, "own": t.label, "ends": ends(t),
+               "account": account_of(t)}
+        if t.address in right:
+            out["right"] = right[t.address]
+        return out
+
     return {"group": group.key, "name": group.name, "title": group.shown, "kind": group.kind, "machine": group.machine,
             "ordered": group.ordered,
             "server": servers.get(group.machine, group.machine), "cwd": group.cwd, "ts": now, "shown": shown,
             "shown_title": shown_title, "names": {t.address: t.shown for t in everything},
-            "tabs": [{"address": t.address, "label": t.shown, "status": t.status, "agent": t.agent, "cwd": t.cwd,
-                      "server": servers.get(t.machine, t.machine), "mark": t.mark, "own": t.label, "ends": ends(t),
-                      "account": account_of(t)}
-                     for t in group.terms]}
+            "tabs": [tab(t) for t in group.terms if t.address not in in_pane],
+            "panes": [tab(t) for t in group.terms if t.address in in_pane]}
+
+
+def right_children(terms: Sequence[Term], infos: Mapping[str, Info]) -> Dict[str, str]:
+    """parent address -> the shell of its right pane: a terminal of `terms` labelled pane=right (Info.pane) whose
+    parent is in `terms` too (else it is a tab like any other: its parent has gone, or is in another group). The
+    first one listed when a parent has several."""
+    listed = {t.address for t in terms}
+    out: Dict[str, str] = {}
+    for t in terms:
+        info = infos.get(t.address)
+        if info is not None and info.pane == RIGHT_PANE and info.parent in listed and info.parent != t.address:
+            out.setdefault(info.parent, t.address)
+    return out
 
 
 def write_snapshot(group: Optional[Group], win: Path = WINDOW, now: Optional[float] = None,
@@ -2805,7 +2857,7 @@ def write_snapshot(group: Optional[Group], win: Path = WINDOW, now: Optional[flo
     now = time.time() if now is None else now
     snap = make_snapshot(group, now, servers, shown, shown_title, everything, infos, names) if group else {
         "group": "", "name": "", "title": "", "kind": "", "machine": LOCAL, "server": LOCAL, "cwd": "", "ts": now,
-        "shown": shown, "shown_title": shown_title, "names": {}, "tabs": []}
+        "shown": shown, "shown_title": shown_title, "names": {}, "tabs": [], "panes": []}
     write_atomic(win / "tabs.json", json.dumps(snap) + "\n")
 
 
@@ -2828,6 +2880,8 @@ def read_snapshot(win: Path = WINDOW, now: Optional[float] = None) -> Optional[d
     if not isinstance(tabs, list):
         return None
     snap["tabs"] = [t for t in tabs if isinstance(t, dict) and t.get("address")]
+    panes = snap.get("panes")
+    snap["panes"] = [t for t in panes if isinstance(t, dict) and t.get("address")] if isinstance(panes, list) else []
     return snap
 
 
@@ -2964,6 +3018,19 @@ def new_shell(machine: str, cwd: str, win: Path = WINDOW, space: str = "", runne
     args += ["--name", name] if name else []
     args += ["--cwd", cwd] if cwd else []
     args += ["--label", "space=" + space] if space else []
+    return started(runner(*args, timeout=30.0), machine, win)
+
+
+def new_right_shell(parent: str, cwd: str, win: Path = WINDOW, runner: Runner = None) -> str:
+    """The shell of a right pane (RIGHT_PANE): a child of the terminal at `parent`, on its machine, in `cwd`, that
+    types no notes into it (--no-notify), ends with it and is removed once it ends (--rm). The parent sees it as
+    its own (`hc ls`, `hc read`). Returns its full address and pokes the engine."""
+    runner = runner or run_hc
+    machine = machine_of(parent)
+    args = ["run", "--bg", "--json", "--parent", parent.rsplit("/", 1)[-1], "--no-notify", "--rm",
+            "--label", "pane=" + RIGHT_PANE]
+    args += [] if machine == LOCAL else ["--on", machine]
+    args += ["--cwd", cwd] if cwd else []
     return started(runner(*args, timeout=30.0), machine, win)
 
 
@@ -3255,10 +3322,11 @@ def drain_keys(scr: "curses.window", limit: int = 4096) -> List[int]:
     return keys
 
 
-def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW) -> None:
-    """Type `keys` into the view and give it the keyboard: keys typed in a pane of hcGUI that were meant for the
-    terminal (after a right click) are not lost. A lone esc (no bytes after it) only closed the menu."""
-    view = pane_id("view", win)
+def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW, pane: str = "") -> None:
+    """Type `keys` into the view (or `pane`: the right pane, whose right click opened the menu) and give it the
+    keyboard: keys typed in a pane of hcGUI that were meant for the terminal (after a right click) are not lost. A
+    lone esc (no bytes after it) only closed the menu."""
+    view = pane or pane_id("view", win)
     if not view:
         return
     tmux(*view_key_args([] if list(keys) == [27] else keys, view), "select-pane", "-t", view)
@@ -3417,6 +3485,42 @@ def split_sidebar(win: Path, base: Path, env: Sequence[Tuple[str, str]], width: 
         return ""
     panes = dict(read_panes(win), side=new)
     write_atomic(win / "panes", "".join(f"{k}={v}\n" for k, v in panes.items()))
+    return new
+
+
+def right_pane(win: Path = WINDOW) -> str:
+    """The tmux id of the right pane (@hcgui_role RIGHT_PANE), "" when there is none (or tmux cannot tell)."""
+    target = pane_id("view", win) or own_pane()
+    if not target:
+        return ""
+    for line in (tmux("list-panes", "-t", target, "-F", "#{pane_id} #{@hcgui_role}") or "").splitlines():
+        pane, _, role = line.partition(" ")
+        if role.strip() == RIGHT_PANE and PANE_ID.fullmatch(pane):
+            return pane
+    return ""
+
+
+def view_pane_command(view: Path, win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
+    """The command of the right pane: `hcgui.py view` (the relay and view.sh) with HCGUI_VIEW_DIR, its own folder.
+    tmux's terminal type, as the view (no TERM of hcGUI's own: what it shows is hc attach's output)."""
+    pairs = [("HCGUI_WINDOW", str(win)), ("HCGUI_VIEW_DIR", str(view))]
+    pairs += [(k, v) for k, v in env if k not in ("HCGUI_WINDOW", "HCGUI_VIEW_DIR") and ENV_NAME.fullmatch(k)]
+    assigns = " ".join(f"{k}={shlex.quote(v)}" for k, v in pairs)
+    return f"exec env {assigns} python3 {shlex.quote(str(base / 'hcgui.py'))} view"
+
+
+def open_right_pane(win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
+    """The right pane: split off the view on its right (RIGHT_SHARE of its width, below the tab bar), showing what
+    the folder RIGHT_DIR's target names (show it there first). Returns its id, "" when nothing was made."""
+    view = pane_id("view", win)
+    if not view:
+        return ""
+    out = tmux("split-window", "-h", "-d", "-l", RIGHT_SHARE, "-t", view, "-P", "-F", "#{pane_id}",
+               view_pane_command(win / RIGHT_DIR, win, base, env))
+    new = (out or "").strip()
+    if not PANE_ID.fullmatch(new):
+        return ""
+    tmux("set", "-p", "-t", new, "@hcgui_role", RIGHT_PANE)  # a right click there: its menu (hcgui.tmux.conf)
     return new
 
 
@@ -3782,9 +3886,10 @@ class Engine:
                 for address, info in fetch_infos(fetch).items():
                     info = info if info is not None else infos.get(address, Info())
                     # off the home machine only the account and the program in front count: no space, and ending()
-                    # keeps to known parents
-                    infos[address] = info if machine_of(address) == home else Info(account=info.account,
-                                                                                   foreground=info.foreground)
+                    # keeps to known parents; a shell of the right pane keeps its parent (the tab it belongs to)
+                    infos[address] = info if machine_of(address) == home else Info(
+                        account=info.account, foreground=info.foreground, pane=info.pane,
+                        parent=info.parent if info.pane else "", dies=info.dies)
                 infos = {a: infos[a] for a in wanted if a in infos}
                 if full:
                     self.info_time = now
@@ -5557,6 +5662,12 @@ class TabBar:
         self.tab_drag: Optional[TabDrag] = None  # a tab held with the left button (press_tab)
         self.dropped: Optional[Tuple[str, List[str], float]] = None  # (group, order, until): a drop not in the snap yet
         self.drawn: Optional[List[dict]] = None  # the tabs in the order last drawn (a drag or a drop shows its own)
+        self.right_want: Optional[str] = None  # the right pane's shell at the last sync_right ("": none; None: not yet)
+        self.right_look = 0.0  # when sync_right asks tmux again with nothing changed
+        self.right_focus = ""  # a shell just started on the right: its pane takes the keyboard when it comes
+        self.right_since = 0.0  # when right_focus was set (it is given up after RIGHT_WAIT)
+        self.menu_pane = ""  # the right pane's id while its right click's menu or question is open, else ""
+        self.forward_pane = ""  # where keys go until forward_until: the right pane's id, "" for the view
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -5655,17 +5766,26 @@ class TabBar:
             s.put(hint_row, x0, clip(hint, room), curses.A_DIM)
 
     def open_tab_menu(self, snap: dict, address: str) -> None:
-        """A right click on a tab: its menu (tab_menu_entries), on the row below the tabs."""
+        """A right click on a tab, or in the right pane: its menu (tab_menu_entries), on the row below the tabs."""
         tab = tab_of(snap, address)
         if tab is None:
             return
+        pane = any(p.get("address") == address for p in snap.get("panes") or [])
         self.prompt = None
-        self.menu = TabMenu(address, tab_label(tab), tab_menu_entries(str(snap.get("kind") or ""), bool(snap.get("ordered"))))
+        self.menu_pane = ""  # check_ask sets it again for a right click in the right pane
+        self.menu = TabMenu(address, tab_label(tab), tab_menu_entries(
+            str(snap.get("kind") or ""), bool(snap.get("ordered")), right=not pane and not right_of(snap, address),
+            pane=pane))
 
     def close_menu(self) -> None:
-        """The menu or its question went without an action: the keyboard back to the shown terminal."""
+        """The menu or its question went without an action: the keyboard back to the shown terminal (the right
+        pane's, when its right click opened the menu)."""
         self.menu = self.prompt = None
-        focus_view(self.win)
+        pane, self.menu_pane = self.menu_pane, ""
+        if pane:
+            tmux("select-pane", "-t", pane)
+        else:
+            focus_view(self.win)
 
     def handle_menu(self, key: int, snap: Optional[dict], click: Optional[Tuple[int, int, int]]) -> None:
         """While a tab's menu is open: a press on an entry runs it; a right press on a tab opens that tab's menu;
@@ -5674,8 +5794,9 @@ class TabBar:
         menu = self.menu
         if key != curses.KEY_MOUSE:  # typed after a right click: meant for the terminal
             self.menu = self.prompt = None
-            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win, self.menu_pane)
             self.forward_until = time.monotonic() + FORWARD_GRACE
+            self.forward_pane, self.menu_pane = self.menu_pane, ""
             return
         if menu is None or snap is None or click is None:
             self.close_menu()
@@ -5698,6 +5819,7 @@ class TabBar:
             if self.prompt is not None and self.prompt.kind == "close":
                 self.notice.say("not closed", bad=False)
             self.menu = self.prompt = None
+            self.menu_pane = ""
 
     def run_tab_entry(self, entry: Entry, snap: dict) -> None:
         """What a tab menu entry does. Rename, move and close ask first, on the menu's row; this pane takes the
@@ -5714,6 +5836,9 @@ class TabBar:
         if entry.action == "new":
             self.plus(snap)
             focus_view(self.win)
+            return
+        if entry.action == "right":
+            self.open_right(snap, menu.address, tab)
             return
         if entry.action == "sort":  # the dragged order goes: by name again, in every window
             try:
@@ -5812,6 +5937,7 @@ class TabBar:
         their display names, then show the next tab when the shown one closed (the one shown after the ends: a
         pick meanwhile wins)."""
         addresses = prompt.data
+        self.menu_pane = ""  # the right pane's shell closes: its pane goes (sync_right), the keyboard to the view
         self.notice.say(f"closing {len(addresses)} terminal{'s' if len(addresses) != 1 else ''}…", bad=False)
         self.draw(snap, current_target(self.win))
         failed: List[str] = []
@@ -5844,12 +5970,14 @@ class TabBar:
         if not (self.win / "ask").exists():
             return
         lines = take_ask(self.win)
-        if "menu" in lines:
-            if snap is None or tab_of(snap, shown) is None:
+        if "menu" in lines or ASK_RIGHT in lines:
+            address = right_of(snap, shown) if ASK_RIGHT in lines else shown  # the click's pane, else the view
+            if snap is None or tab_of(snap, address) is None:
                 self.notice.say("nothing shown", bad=False)
             else:
                 self.notice.clear()
-                self.open_tab_menu(snap, shown)
+                self.open_tab_menu(snap, address)
+                self.menu_pane = right_pane(self.win) if ASK_RIGHT in lines else ""
                 focus_pane("tabs", self.win)
         notices = [(line.startswith(ASK_NOTICE), line.split(" ", 1)[1].strip()) for line in lines
                    if line.startswith((ASK_NOTICE, ASK_INFO))]
@@ -5879,6 +6007,56 @@ class TabBar:
         else:
             index = 0 if delta > 0 else len(addresses) - 1
         show(addresses[index], self.win, tab_title(snap, addresses[index]))
+
+    def open_right(self, snap: dict, address: str, tab: Mapping[str, object]) -> None:
+        """"Split right": a shell beside the terminal at `address` (new_right_shell), shown in the right
+        pane once the engine lists it (sync_right), with the keyboard. The tab is shown first when it is not."""
+        if address != current_target(self.win):
+            show(address, self.win, tab_title(snap, address))
+        try:
+            child = new_right_shell(address, str(tab.get("cwd") or ""), self.win)
+        except Exception as exc:  # noqa: BLE001
+            self.notice.say("new: " + describe_error(exc))
+            focus_view(self.win)
+            return
+        self.right_focus, self.right_since = child, time.monotonic()
+        self.right_look = 0.0
+        focus_view(self.win)
+
+    def sync_right(self, snap: Optional[dict], shown: str, now: float) -> None:
+        """The right pane follows the shown tab: its shell (right_of) shown there, the pane made when missing, and
+        closed when the shown tab has none. tmux is asked only when that changed, else every RIGHT_LOOK seconds (a
+        pane closed meanwhile comes back). Nothing while the snapshot is missing (loading: it would close the pane)
+        or the view is zoomed (a new or closed pane would end the zoom)."""
+        if snap is None or not tmux_enabled():
+            return
+        want = right_of(snap, shown)
+        if want == self.right_want and now < self.right_look:
+            return
+        self.right_want, self.right_look = want, now + RIGHT_LOOK
+        view = pane_id("view", self.win)
+        look = window_look(view) if view else None
+        if look is None or look.zoomed:  # looked at again after ZOOM_LOOK, or when the shown tab changes
+            self.right_look = now + ZOOM_LOOK
+            return
+        pane = right_pane(self.win)
+        if not want:
+            if pane:
+                tmux("kill-pane", "-t", pane)
+            return
+        folder = self.win / RIGHT_DIR
+        if not pane or current_target(folder) != want:
+            try:
+                folder.mkdir(exist_ok=True)
+            except OSError:
+                return
+            show(want, folder, tab_title(snap, want))
+        if not pane:
+            pane = open_right_pane(self.win, BASE, hcgui_env(os.environ))
+        if self.right_focus and (pane and self.right_focus == want or now - self.right_since > RIGHT_WAIT):
+            if pane and self.right_focus == want:
+                tmux("select-pane", "-t", pane)
+            self.right_focus = ""
 
     def plus(self, snap: dict) -> None:
         """A new shell in the current group (the same helper as the sidebar's n), then show it."""
@@ -6115,7 +6293,7 @@ class TabBar:
         if key not in (curses.KEY_MOUSE, curses.KEY_RESIZE) and self.menu is None and self.prompt is None \
                 and time.monotonic() < self.forward_until:
             self.forward_until = time.monotonic() + FORWARD_GRACE  # typed on after a key closed the menu
-            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win, self.forward_pane)
             return
         click = None
         if key == curses.KEY_MOUSE and self.tab_drag is not None:  # a tab held: its moves and its release
@@ -6153,6 +6331,7 @@ class TabBar:
                 snap = read_snapshot(self.win)
                 shown = current_target(self.win)
                 self.check_ask(snap, shown)
+                self.sync_right(snap, shown, now)
                 self.note_shown(shown, now)
                 self.draw(snap, shown)
                 self.pane_title.send(tabs_title(snap, shown))  # after the refresh: curses has written all it holds
@@ -6255,6 +6434,7 @@ RELAY_CHUNK = 65536  # bytes per read, either way
 RELAY_QUEUE = 1 << 20  # typed bytes waiting for the inner terminal (or for a drop) beyond which stdin is not read
 ASK_NOTICE = "notice "  # a line of the request file "ask": the tab bar shows the rest of the line as a notice
 ASK_INFO = "info "  # the same, as a notice that is no error ("drop: sending shot.png to mini")
+ASK_RIGHT = "menu right"  # a right click in the right pane (hcgui.tmux.conf): the menu of its shell
 ASK_LINES = 8  # lines of "ask" taken at once (the latest)
 
 
@@ -6609,8 +6789,10 @@ class ViewRelay:
     MARKER_HOLD."""
 
     def __init__(self, master: int, child: int, win: Path = WINDOW, fd_in: int = 0, fd_out: int = 1,
-                 runner: Runner = None, shrink: Optional[Callable[[str, str], bool]] = None) -> None:
+                 runner: Runner = None, shrink: Optional[Callable[[str, str], bool]] = None,
+                 asks: Optional[Path] = None) -> None:
         self.master, self.child, self.win = master, child, win
+        self.asks = asks or win  # the window's folder: notices go to its tab bar (the right pane's view has its own)
         self.fd_in, self.fd_out = fd_in, fd_out
         self.runner, self.shrink = runner, shrink
         self.parser = PasteParser()
@@ -6764,7 +6946,7 @@ class ViewRelay:
     def tell(self, text: str, bad: bool = True) -> None:
         """A notice in the tab bar (ask_notice); a window folder that cannot be written is no reason to stop."""
         try:
-            ask_notice(text, self.win, bad)
+            ask_notice(text, self.asks, bad)
         except Exception:  # noqa: BLE001 - the relay goes on without the notice
             pass
 
@@ -7011,7 +7193,14 @@ def relay_view(child: Optional[Sequence[str]] = None, win: Path = WINDOW) -> int
         start_child(argv, attrs, size)
     os.set_inheritable(master, False)
     os.set_blocking(master, False)
-    return ViewRelay(master, pid, win).run(attrs)
+    return ViewRelay(master, pid, view_dir(win), asks=win).run(attrs)
+
+
+def view_dir(win: Path = WINDOW) -> Path:
+    """The folder of this view's own files (target, gen, title, view.pid): the window's, or for the right pane's view
+    HCGUI_VIEW_DIR (view.sh reads the same setting)."""
+    value = os.environ.get("HCGUI_VIEW_DIR", "")
+    return Path(value) if value else win
 
 
 ERROR_LOG_MAX = 256 * 1024  # bytes of error.log kept: past that it starts again

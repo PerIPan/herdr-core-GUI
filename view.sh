@@ -19,7 +19,8 @@ set -u
 
 hc="${HCGUI_HC:-$HOME/.local/bin/hc}"
 shared="${HCGUI_STATE:-$HOME/.local/state/hcgui}"
-state="${HCGUI_WINDOW:-$shared}"
+# The right pane's view (a shell beside the shown terminal) has a folder of its own inside the window's: HCGUI_VIEW_DIR.
+state="${HCGUI_VIEW_DIR:-${HCGUI_WINDOW:-$shared}}"
 mkdir -p "$state"
 
 if [ ! -x "$hc" ]; then
