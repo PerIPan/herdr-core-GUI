@@ -41,9 +41,13 @@ rights asked. Machines and agents in the images are made up.
 - **Dev servers.** Pages served by `node` on the home machine, one row per port. A click opens the page.
 - **Menus.** A right click on a sidebar row opens its menu. A right click on a tab, or in the shown terminal, opens
   its menu: New terminal, Split right, Rename, Move to space, Close.
-- **Split right.** A shell in a pane right of the shown terminal, started as that terminal's child: an
-  agent there sees it (`hc ls`, `hc read`) and gets no notes from it. Shown only beside its terminal, never as a
-  tab; it ends with that terminal. A right click in it: Close, on `y`.
+- **Split right.** A shell in a pane right of the shown terminal, started as that terminal's child: the agent
+  there finds it in `hc ls` (its `parent`), reads it (`hc read`), types into it (`hc send`, `hc keys`) and gets
+  no notes from it. One per terminal. Shown only beside its terminal, never as a
+  tab; it ends with that terminal. A right click in it: Close, on `y`. An agent opens one itself:
+  `hc run --bg --label pane=right zsh`, or `hc label <child> pane=right` for a child it started already.
+- **Questions in orange.** What a key does (`y closes`, `enter saves`) and the answer being typed; a new space's
+  or server's name also on its `+` row.
 - **Safe deletes.** Delete space and End terminal list everything that ends and end it on `y`, taken only after
   half a second; any other key cancels. Forget server asks for the server's name to be typed first.
 - **Drops.** A file dropped on the window reaches the shown terminal as its path. A terminal on another machine

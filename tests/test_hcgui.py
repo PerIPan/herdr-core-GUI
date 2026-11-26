@@ -1984,6 +1984,17 @@ class SidebarLogicTests(unittest.TestCase):
         self.key("k")
         self.assertEqual(self.side.notice.current(), "")
 
+    def test_a_new_space_name_shows_on_its_plus_row_in_orange(self):
+        # owner, 26 Nov: the question opens at the bottom and is hard to see
+        self.side.ask_new_space()
+        for c in "web":
+            self.key(c)
+        y = next(y for y, item in self.side.rows.items() if item.kind == "new_space")
+        self.assertEqual(self.scr.line(y).rstrip(), " + web_")
+        self.assertEqual(self.scr.cells[(y, 3)][1], hcgui.ask_attr())
+        self.key(27)  # esc: the row says "new space" again
+        self.assertIn("new space", self.scr.line(y))
+
     def test_cursor_never_rests_on_a_row_without_a_line(self):
         self.scr.height = 6  # the 4 top lines (servers hidden) + 1 line + the arrow: one agent row at most
         self.side.draw()
@@ -4780,8 +4791,8 @@ class ActionTests(unittest.TestCase):
         lines = self.scr.lines()  # the whole question, then its keys (no typed line); the list keeps the rest
         self.assertEqual(lines[-6:-1], ["delete space dev? ends 3:", "atlas (claude-code), t1f",
                                         "(zsh), tracker (claude-code).", "y deletes · any other key", "cancels"])
-        self.assertEqual(self.scr.cells[(len(lines) - 2, 0)][1], hcgui.curses.A_BOLD)  # the keys bold, the list dim
-        self.assertEqual(self.scr.cells[(len(lines) - 6, 0)][1], hcgui.curses.A_DIM)
+        self.assertEqual(self.scr.cells[(len(lines) - 2, 0)][1], hcgui.ask_attr())  # the keys orange and bold
+        self.assertEqual(self.scr.cells[(len(lines) - 6, 0)][1], 0)  # what ends: plain, not dim (owner, 26 Nov)
         self.key("n")  # any other key: nothing ends
         self.assertIsNone(self.side.prompt)
         self.assertEqual(self.side.notice.current(), hcgui.DELETE_NO)

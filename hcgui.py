@@ -653,6 +653,7 @@ class Item:
 NEW_SPACE = Item("new_space", "", "")
 ADD_RIG = Item("add_rig", "", "")
 PLUS_TEXT = {"new_space": "new space", "add_rig": "add server"}
+PLUS_PROMPTS = {"space": "new_space", "rig_target": "add_rig", "rig_name": "add_rig"}  # a typed answer -> its "+" row
 
 
 def agent_groups(spaces: Sequence[Group], rigs: Sequence[Group]) -> List[Group]:
@@ -3599,7 +3600,8 @@ def setup_curses(scr: "curses.window", right: bool = False, motion: bool = False
     try:
         curses.use_default_colors()
         for pair, color in ((1, curses.COLOR_RED), (2, curses.COLOR_GREEN), (3, curses.COLOR_YELLOW),
-                            (4, curses.COLOR_BLUE)):
+                            (4, curses.COLOR_BLUE),
+                            (ASK_PAIR, ORANGE if getattr(curses, "COLORS", 8) >= 256 else curses.COLOR_YELLOW)):
             curses.init_pair(pair, color, -1)
     except curses.error:
         pass
@@ -3668,6 +3670,15 @@ def terminal_gone() -> bool:
         return False
     except OSError:
         return True
+
+
+ASK_PAIR = 5  # a question's text: what a key does, what is typed (owner, 26 Nov: "in orange, hard to see")
+ORANGE = 208  # the 256-colour palette's orange; yellow where the terminal has 8 colours
+
+
+def ask_attr() -> int:
+    """How a question shows: what its keys do (y closes, enter saves) and the answer being typed, in orange, bold."""
+    return curses.color_pair(ASK_PAIR) | curses.A_BOLD
 
 
 def dot_attr(status: str) -> int:
@@ -5057,7 +5068,13 @@ class Sidebar(Engine):
                 attr = curses.A_REVERSE if row.item == cursor else 0
                 s.fill(y, attr)
                 s.put(y, 1, "+", attr | curses.A_BOLD)
-                s.put(y, 3, clip(PLUS_TEXT[row.text], width - 5), attr | curses.A_DIM)
+                typing = self.prompt is not None and PLUS_PROMPTS.get(self.prompt.kind) == row.text
+                if typing:  # the name being typed shows on its own row too, not only at the bottom (owner, 26 Nov)
+                    typed = self.prompt.text + "_"
+                    room = max(1, width - 5)
+                    s.put(y, 3, typed if text_width(typed) <= room else "…" + typed[-max(1, room - 1):], ask_attr())
+                else:
+                    s.put(y, 3, clip(PLUS_TEXT[row.text], width - 5), attr | curses.A_DIM)
                 self.rows[y] = items[row.item]
             elif row.kind in ("header", "agents"):
                 s.put(y, 1, row.text, curses.A_DIM)
@@ -5109,13 +5126,13 @@ class Sidebar(Engine):
             lines, self.yes_cut = yes_lines(self.prompt.title, self.prompt.ask, max(1, width - 1), reserved)
             keys = len(wrap_words(DELETE_CUT if self.yes_cut else self.prompt.ask, max(1, width - 1)))
             for i, line in enumerate(lines):
-                s.put(last - len(lines) + i, 0, line, curses.A_BOLD if i >= len(lines) - keys else curses.A_DIM)
+                s.put(last - len(lines) + i, 0, line, ask_attr() if i >= len(lines) - keys else 0)
         elif self.prompt and reserved:
             question = prompt_lines(self.prompt.title, self.prompt.ask, max(1, width - 1), reserved - 1)
             for i, line in enumerate(question):
-                s.put(last - reserved + i, 0, line, curses.A_DIM)
+                s.put(last - reserved + i, 0, line, curses.color_pair(ASK_PAIR))
             typed = "> " + self.prompt.text + "_"
-            s.put(last - 1, 0, typed if len(typed) < width else "…" + typed[-(width - 2):], curses.A_BOLD)
+            s.put(last - 1, 0, typed if len(typed) < width else "…" + typed[-(width - 2):], ask_attr())
         elif notice and reserved:
             lines = said if len(said) <= reserved else prompt_lines(notice, "", max(1, width - 1), reserved)
             for i, line in enumerate(lines):
@@ -5756,14 +5773,14 @@ class TabBar:
                     hint = CLOSE_CUT
                 for i, line in enumerate(lines if hint_row > y else [f"{hint} · {p.title}"]):
                     s.fill(y + i, 0)
-                    s.put(y + i, x0, clip(line, room), curses.A_BOLD)
+                    s.put(y + i, x0, clip(line, room), curses.A_BOLD if hint_row > y else ask_attr())
             else:
                 typed = f"{p.title} {p.text}_"
-                s.put(y, x0, typed if text_width(typed) <= room else "…" + typed[-max(1, room - 1):], curses.A_BOLD)
+                s.put(y, x0, typed if text_width(typed) <= room else "…" + typed[-max(1, room - 1):], ask_attr())
         else:
             return
         if 0 <= hint_row != y:
-            s.put(hint_row, x0, clip(hint, room), curses.A_DIM)
+            s.put(hint_row, x0, clip(hint, room), curses.A_DIM if self.menu is not None else ask_attr())
 
     def open_tab_menu(self, snap: dict, address: str) -> None:
         """A right click on a tab, or in the right pane: its menu (tab_menu_entries), on the row below the tabs."""
