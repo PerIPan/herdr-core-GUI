@@ -39,14 +39,15 @@ rights asked. Machines and agents in the images are made up.
 - **Keychain warning.** One red line while the home machine's login keychain is locked: Claude Code there cannot
   read its login and bills the API instead. Read-only: the keychain is never unlocked, no password is asked for.
 - **Dev servers.** Pages served by `node` on the home machine, one row per port. A click opens the page.
-- **Menus.** A right click on a sidebar row opens its menu. A right click on a tab, or in the shown terminal, opens
-  its menu at the pointer and on the line below the tabs: New terminal, Split right, Rename, Move to space, Close.
+- **Menus.** A right click on a sidebar row opens its menu; a right click on another row opens that row's menu at
+  once. A right click on a tab, or in the shown terminal, opens its menu at the pointer: New terminal, Split right,
+  Rename, Move to space, Close.
   `shift+F10` opens the menu of whatever has the keyboard, as a right click there. A row's menu hides only its own
   section (Hide agents on an agent); a hidden section's Show is in every menu.
 - **Split right.** A shell in a pane right of the shown terminal, started as that terminal's child: the agent
   there finds it in `hc ls` (its `parent`), reads it (`hc read`), types into it (`hc send`, `hc keys`) and gets
   no notes from it. One per terminal. Shown only beside its terminal, never as a
-  tab; it ends with that terminal. A darker background and a header on top: its name, its folder and `×`. `×`, or
+  tab; it ends with that terminal. A header on top: its name, its folder and `×`. `×`, or
   a right click in it, asks to close it in that header; `y` closes. A width dragged by hand is kept. Old lines are
   not rewrapped to a new width: herdr-core keeps them as they were printed; new lines use the full width. An agent
   opens one itself:
@@ -214,9 +215,9 @@ shown, and again after a click on the bar anywhere but a tab.
 Shown terminal: no tmux keys, so ctrl+b and every other key reach it. A drag selects and copies; shift+drag is
 Ghostty's own selection; the wheel scrolls back (`q` or esc ends it). ctrl+\ detaches.
 
-A menu opened with a right click takes clicks only. While its popup is open, keys go to the popup (esc or `q` closes
-it; the line below the tabs stays); after that, keys typed go on to the terminal. A menu opened with `a` or
-`shift+F10` is picked on the line below the tabs: left/right moves, enter runs, an entry's letter runs it, esc closes.
+A menu opened with a right click takes clicks only: in the sidebar, keys typed then go on to the terminal; a tab's
+popup takes the keys while it is open (esc or `q` closes it). A menu opened with `a` or `shift+F10` is picked on the
+line below the tabs: left/right moves, enter runs, an entry's letter runs it, esc closes.
 
 ## Status dots
 
