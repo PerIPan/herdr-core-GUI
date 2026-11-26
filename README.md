@@ -40,11 +40,16 @@ rights asked. Machines and agents in the images are made up.
   read its login and bills the API instead. Read-only: the keychain is never unlocked, no password is asked for.
 - **Dev servers.** Pages served by `node` on the home machine, one row per port. A click opens the page.
 - **Menus.** A right click on a sidebar row opens its menu. A right click on a tab, or in the shown terminal, opens
-  its menu: New terminal, Split right, Rename, Move to space, Close.
+  its menu at the pointer and on the line below the tabs: New terminal, Split right, Rename, Move to space, Close.
+  `shift+F10` opens the menu of whatever has the keyboard, as a right click there. A row's menu hides only its own
+  section (Hide agents on an agent); a hidden section's Show is in every menu.
 - **Split right.** A shell in a pane right of the shown terminal, started as that terminal's child: the agent
   there finds it in `hc ls` (its `parent`), reads it (`hc read`), types into it (`hc send`, `hc keys`) and gets
   no notes from it. One per terminal. Shown only beside its terminal, never as a
-  tab; it ends with that terminal. A right click in it: Close, on `y`. An agent opens one itself:
+  tab; it ends with that terminal. A darker background and a header on top: its name, its folder and `×`. `×`, or
+  a right click in it, asks to close it in that header; `y` closes. A width dragged by hand is kept. Old lines are
+  not rewrapped to a new width: herdr-core keeps them as they were printed; new lines use the full width. An agent
+  opens one itself:
   `hc run --bg --label pane=right zsh`, or `hc label <child> pane=right` for a child it started already.
 - **Questions in orange.** What a key does (`y closes`, `enter saves`) and the answer being typed; a new space's
   or server's name also on its `+` row.
@@ -188,6 +193,7 @@ Sidebar (`?` shows the full list, then what the status dots mean):
 | up/down, j/k | Move |
 | enter | Show the terminal; the keyboard goes to it |
 | a, right click | Menu of the row |
+| shift+F10 | Menu of whatever has the keyboard: a row, the shown terminal, the right pane (Close) |
 | n / s | New shell / new space (a name, or a folder starting with `/` or `~/`) |
 | e / d | Rename / delete, end or forget |
 | m | Move an agent to another space |
@@ -198,7 +204,8 @@ Sidebar (`?` shows the full list, then what the status dots mean):
 | z | The shown terminal gets the whole window; `‹ back` on top brings the panes back |
 | r | Refresh now |
 
-Tab bar: left/right or h/l between tabs, enter or down to the terminal, `?` for its keys. A tab dragged left or
+Tab bar: left/right or h/l between tabs, enter or down to the terminal, `a` the shown terminal's menu, `?` for its
+keys. A tab dragged left or
 right keeps its new place, in every window, per space or server; the agents list follows. "Sort by name" in a tab's
 menu goes back to the names' order. The line below the tabs
 shows the space, the herdr-core id, the subscription and the key hints for a few seconds each time a terminal is
@@ -207,7 +214,9 @@ shown, and again after a click on the bar anywhere but a tab.
 Shown terminal: no tmux keys, so ctrl+b and every other key reach it. A drag selects and copies; shift+drag is
 Ghostty's own selection; the wheel scrolls back (`q` or esc ends it). ctrl+\ detaches.
 
-A menu opened with a right click takes clicks only: keys typed then go on to the terminal.
+A menu opened with a right click takes clicks only. While its popup is open, keys go to the popup (esc or `q` closes
+it; the line below the tabs stays); after that, keys typed go on to the terminal. A menu opened with `a` or
+`shift+F10` is picked on the line below the tabs: left/right moves, enter runs, an entry's letter runs it, esc closes.
 
 ## Status dots
 

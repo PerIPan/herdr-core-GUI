@@ -62,8 +62,9 @@ nothing); forgetting a server is `hc machine rm`, only after its name was typed.
 menu gives the keyboard back to the view once a key answered or cancelled it.
 
 Keys. Sidebar: up/down (j/k), enter, a the menu of the row (also a right click: Open, New terminal here, Rename,
-Move to space, Delete space / Forget server / End terminal, as the row allows, and Show / Hide servers, agents, dev
-servers; Show usage while the usage lines are hidden), n new shell, e rename, d delete, s new space, m move an agent,
+Move to space, Delete space / Forget server / End terminal, as the row allows; Hide servers, agents or dev servers
+on a row of that section; Show servers, agents, dev servers or usage in every menu while that one is hidden), n new
+shell, e rename, d delete, s new space, m move an agent,
 v show or hide the servers, g the agents, w the dev servers, u the usage lines (also a right click on one: its
 menu, Rename, Refresh, Hide usage), c one step smaller (open, strip, hidden; also a click on "‹" on its last line), o open
 the strip again (also a click on "›" on the line above), q hide (the same as hidden: the program ends), z zoom,
@@ -176,6 +177,22 @@ RIGHT_DIR = "right"
 RIGHT_SHARE = "40%"
 RIGHT_LOOK = 5.0  # seconds: the tab bar looks at the right pane again with nothing changed (TabBar.sync_right)
 RIGHT_WAIT = 10.0  # seconds a shell just started on the right may take to be listed and still get the keyboard
+RIGHT_ROOM = 20  # columns the view keeps beside a right pane made again at its dragged width (TabBar.right_width)
+# Above the right pane, its header (owner, 26 Nov: "a box with text, looks awkward"; "a bit of space from the top";
+# "the command line in a different color"): a pane of its own (@hcgui_role HEAD_ROLE) of HEAD_ROWS rows, a blank
+# row, then the shell's name · folder and HEAD_CLOSE at the right, read from the file HEAD_FILE in RIGHT_DIR (the
+# tab bar writes it). Both panes have the background RIGHT_TINT: tmux's panel grey, which follows the dark or light
+# background Ghostty reports; RIGHT_TINT_LIGHT on a light one; RIGHT_TINT_OLD for a tmux without theme colours.
+HEAD_ROLE = "rhead"
+HEAD_ROWS = 2
+HEAD_FILE = "head"
+HEAD_CLOSE = "×"
+HEAD_LOOK_MS = 150  # how often the header looks at HEAD_FILE and its "ask" again
+HEAD_MAX_ROWS = 8  # the header's rows at most while it asks Close's question
+HEAD_ASK_LINE = "close"  # a right click in the right pane (hcgui.tmux.conf): the header asks Close's question
+RIGHT_TINT = "themedarkgrey"
+RIGHT_TINT_LIGHT = "gray92"
+RIGHT_TINT_OLD = "colour235"
 HC_CLAUDE = "claude"  # hc's word for a Claude Code it started (`hc run claude`) before its first status report
 STATUS_ORDER = ("blocked", "error", "working", "done", "idle")
 # status -> colour pair (1 red, 2 green, 3 yellow, 4 blue); anything else is dim.
@@ -1413,7 +1430,7 @@ DEVS_KEY = "w"  # shows or hides the dev servers (web pages)
 USAGE_KEY = "u"  # shows or hides the 5-hour usage lines (free in the sidebar and the tab bar)
 # The usage lines are no rows (no cursor, a left click does nothing), but a right click on one opens that
 # subscription's menu (usage_item: the item names it by its usage file's name), titled with its shown name:
-# "Rename" first, then "Hide usage", then the section switches every menu ends with.
+# "Rename", "Refresh", "Hide usage" (menu_entries).
 USAGE_KIND = "usage"
 # No direct key: the cursor never sits on a usage line, so `e` cannot name one (and a right-click menu shows none).
 USAGE_RENAME = Entry("rename", "Rename", "")
@@ -1427,17 +1444,18 @@ def usage_item(name: str) -> Item:
 
 
 def servers_entry(shown: bool) -> Entry:
-    """The servers section's switch (in every menu), named for what it does now."""
+    """The servers section's switch, named for what it does now (menu_entries: Hide on its own rows, Show in every
+    menu)."""
     return Entry("servers", "Hide servers" if shown else "Show servers", SERVERS_KEY)
 
 
 def agents_entry(shown: bool) -> Entry:
-    """The agents section's switch (in every menu), named for what it does now."""
+    """The agents section's switch (as servers_entry), named for what it does now."""
     return Entry("agents", "Hide agents" if shown else "Show agents", AGENTS_KEY)
 
 
 def devs_entry(shown: bool) -> Entry:
-    """The dev servers section's switch (in every menu), named for what it does now."""
+    """The dev servers section's switch (as servers_entry), named for what it does now."""
     return Entry("devs", "Hide dev servers" if shown else "Show dev servers", DEVS_KEY)
 
 
@@ -1448,19 +1466,33 @@ def usage_switch(shown: bool) -> Entry:
 
 def menu_entries(item: Item, group: Optional[Group], first: str = FIRST, servers: bool = False,
                  agents: bool = True, devs: bool = True, usage: bool = True) -> List[Entry]:
-    """The menu of a row, ending with the three section switches: "Show servers" / "Hide servers", "Show agents" /
-    "Hide agents", "Show dev servers" / "Hide dev servers" (`servers`, `agents`, `devs`: the section is shown now). A
-    space can be deleted; a server (another machine) forgotten; this Mac and the home machine (`first`, its server
-    row) never. An agent can be moved only when it is in a space. A "+" row has only its own action.
+    """The menu of a row: its own entries (menu_actions), then the switch of its own section while that section is
+    shown ("Hide servers" on a server row or "+ add server", "Hide agents" on an agent, "Hide dev servers" on a dev
+    server), then "Show …" for every section hidden now (`servers`, `agents`, `devs`, `usage`: shown now): a hidden
+    section has no row left to right-click. Owner, 26 Nov: "be more specific": no "Hide servers" on an agent.
 
-    The usage lines: a line's own menu (usage_item, a right click on one) has "Rename" (that subscription's display
-    name), "Refresh" (the same as r) and "Hide usage" first. Once hidden (`usage` False) there is no line left to right-click, so every row
-    menu ends with "Show usage" instead; while they are shown (or off: HCGUI_USAGE=0, the caller passes True) a
-    row's menu has no usage entry, so the menus are the same as before the switch existed."""
-    switches = [servers_entry(servers), agents_entry(agents), devs_entry(devs)]
+    A usage line's own menu (usage_item, a right click on one) has only "Rename" (that subscription's display name),
+    "Refresh" (the same as r) and "Hide usage". HCGUI_USAGE=0: the caller passes `usage` True (no entry)."""
     if item.kind == USAGE_KIND:
-        return [USAGE_RENAME, USAGE_REFRESH, usage_switch(True)] + switches
-    return menu_actions(item, group, first) + switches + ([] if usage else [usage_switch(False)])
+        return [USAGE_RENAME, USAGE_REFRESH, usage_switch(True)]
+    section = menu_section(item, group)
+    own = [e for name, e, shown in (("servers", servers_entry(True), servers), ("agents", agents_entry(True), agents),
+                                    ("devs", devs_entry(True), devs)) if name == section and shown]
+    hidden = [e for e, shown in ((servers_entry(False), servers), (agents_entry(False), agents),
+                                 (devs_entry(False), devs), (usage_switch(False), usage)) if not shown]
+    return menu_actions(item, group, first) + own + hidden
+
+
+def menu_section(item: Item, group: Optional[Group]) -> str:
+    """The sidebar section a row is in, as its switch's action: "servers" (a server row, "+ add server"), "agents"
+    (an agent), "devs" (a dev server); "" for a section without a switch (spaces, "+ new space", needs you)."""
+    if item.kind == "agent":
+        return "agents"
+    if item.kind == "dev":
+        return "devs"
+    if item.kind == "add_rig" or (item.kind == "group" and group is not None and group.kind != "space"):
+        return "servers"
+    return ""
 
 
 def menu_actions(item: Item, group: Optional[Group], first: str = FIRST) -> List[Entry]:
@@ -1698,10 +1730,17 @@ class Row:
 
 
 MENU_KEY = "a"  # opens the action menu of the row under the cursor (a right click does the same)
+# Shift+F10 (hcgui.tmux.conf), the menu key wherever the keyboard is: as a right click there (owner, 26 Nov: "a
+# right-click in the focused tab or pane or... whatever has a right click")
+MENU_ANYWHERE = "⇧F10"
+# Shift+F10 reaches the sidebar and the tab bar as F12 (hcgui.tmux.conf): their menu key, which a name being typed
+# never takes as a letter (python-pro review, 26 Nov: "a" went into it)
+MENU_FKEY = curses.KEY_F12
 HELP_KEY = "?"  # the list of keys (KEY_HELP), drawn over the sidebar until the next key or click
 # The sidebar's keys, for "?": (key, what it does). Every line fits 29 columns (a 30-column sidebar keeps its last
 # column empty). The way back from a zoom has a line of its own: while zoomed nothing of hcGUI can be seen.
-KEY_HELP = (("↑↓ j k", "move"), ("enter", "show it"), (MENU_KEY, "menu (right click)"), ("e", "rename"),
+KEY_HELP = (("↑↓ j k", "move"), ("enter", "show it"), (MENU_KEY, "menu (right click)"),
+            (MENU_ANYWHERE, "menu anywhere"), ("e", "rename"),
             ("d", "delete, forget, end"), ("n", "new terminal here"), ("s", "new space"), ("m", "move to a space"),
             (SERVERS_KEY, "show/hide servers"), (AGENTS_KEY, "show/hide agents"), (DEVS_KEY, "dev servers on/off"),
             (USAGE_KEY, "show/hide usage"), ("", "(or right click it)"),
@@ -2246,11 +2285,9 @@ def hit_test(layout: TabLayout, x: int, y: int = 0) -> Optional[Tuple[str, int]]
     return None
 
 
-TAB_HINTS = ("←→ switch  enter focus  right click menu  z zoom", "←→ switch  right click menu  z zoom",
-             "←→ switch  z zoom", "z zoom")
-TAB_HINTS_ALONE = ("c sidebar  ←→ switch  enter focus  right click menu  z zoom",
-                   "c sidebar  ←→ switch  right click menu  z zoom", "c sidebar  ←→ switch  z zoom", "c sidebar  z zoom",
-                   "z zoom")  # without a sidebar
+TAB_HINTS = ("←→ switch  enter focus  a menu  z zoom", "←→ switch  a menu  z zoom", "←→ switch  z zoom", "z zoom")
+TAB_HINTS_ALONE = ("c sidebar  ←→ switch  enter focus  a menu  z zoom", "c sidebar  ←→ switch  a menu  z zoom",
+                   "c sidebar  ←→ switch  z zoom", "c sidebar  z zoom", "z zoom")  # without a sidebar
 
 
 def tab_hint(room: int, alone: bool = False) -> str:
@@ -2262,7 +2299,8 @@ def tab_hint(room: int, alone: bool = False) -> str:
 
 def tab_keys(alone: bool = False) -> str:
     """The tab bar's "?": all of its keys in one notice line (its hint line drops some when the pane is narrow)."""
-    keys = "←→ h l switch · enter ↓ focus · right click: menu · z zoom (a click on the top line ends it)"
+    keys = ("←→ h l switch · enter ↓ focus · a, ⇧F10 or right click: menu (←→ enter) · z zoom (a click on the top "
+            "line ends it)")
     return "keys: " + ("c o sidebar · " if alone else "") + keys
 
 
@@ -2346,6 +2384,13 @@ def info_row(space: str, tab: Optional[Mapping[str, object]], room: int, hints: 
 # any other key or a click cancels
 CLOSE_YES = "y"
 TAB_MENU_HINT = "a click picks · a key closes"
+TAB_MENU_KEYS_HINT = "←→ pick · enter runs · esc closes"  # a menu opened by a key (TabMenu.selected)
+# The popup at the pointer (owner, 26 Nov: "the right-click, on a menu, on the mouse pointer (the standard)"; "Popup
+# and the row"): tmux's own menu (display-menu) with the tab menu's entries, the row below the tabs as well. A choice
+# appends ASK_PICK "<action> <address>" to the window's ask file; the tab bar runs that entry (check_ask). Only an
+# address of MENU_ADDRESS characters goes into that command (else: the row only).
+ASK_PICK = "pick "
+MENU_ADDRESS = re.compile(r"[A-Za-z0-9._@/-]+")
 CLOSE_ROWS = 10  # the most rows the tab bar takes while Close's question shows what ends
 CLOSE_AGAIN = 1.0  # seconds a y is not taken after Close or d asked again (what ends had changed: changed_question)
 TAB_ASK = {"rename": "enter saves · empty: own name · esc cancels", "move": "enter moves · esc cancels",
@@ -2368,14 +2413,12 @@ DELETE_HOLD = 0.5
 DELETE_NO = "cancelled: nothing ended"  # d's question went unanswered (any other key, a click, a paste)
 
 
-def tab_menu_entries(kind: str, ordered: bool = False, right: bool = False, pane: bool = False) -> List[Entry]:
+def tab_menu_entries(kind: str, ordered: bool = False, right: bool = False) -> List[Entry]:
     """The menu of a tab (and of the shown terminal, a right click in the view): New terminal (in the tab bar's space
     or server), "Split right" (`right`: the tab has no right pane yet, RIGHT_PANE), Rename, Move to space
     (only in a space), Close, and "Sort by name" while the tabs were dragged into an order of their own
-    (`ordered`). The right pane's own shell (`pane`, a right click in that pane): Close only. Clicks pick; the keys
-    are the sidebar's for the same actions, kept only to match its entries (the tab menu takes no keys)."""
-    if pane:
-        return [Entry("close", "Close", "d")]
+    (`ordered`). Clicks pick; the keys are the sidebar's for the same actions, kept only to match its entries (the
+    tab menu takes no keys). The right pane's shell has no menu: its header asks Close (RightHead)."""
     entries = [Entry("new", "New terminal", "n")] + ([Entry("right", "Split right", "")] if right else [])
     entries.append(Entry("rename", "Rename", "e"))
     if kind == "space":
@@ -2412,6 +2455,69 @@ def menu_entry_at(segs: Sequence[Seg], x: int) -> Optional[int]:
     return next((s.index for s in segs if s.kind == "entry" and s.x <= x < s.end), None)
 
 
+def tab_entries(snap: Mapping[str, object], address: str) -> List[Entry]:
+    """The menu entries of the tab at `address` as the snapshot has it now (tab_menu_entries)."""
+    return tab_menu_entries(str(snap.get("kind") or ""), bool(snap.get("ordered")), right=not right_of(snap, address))
+
+
+def tmux_text(text: str) -> str:
+    """`text` for a place where tmux expands formats (a menu's title): every "#" doubled, nothing unprintable."""
+    return printable(text).replace("#", "##")
+
+
+def menu_popup_args(menu: TabMenu, x: int, top: int, styled: bool) -> Optional[List[str]]:
+    """tmux's display-menu for the tab menu `menu`, its top-left corner at column x, line `top` of the window (tmux
+    moves it in when it would not fit). -O: the right button's release does not close it; -M: it takes the mouse,
+    though no mouse binding opened it. `styled`: the right pane's grey (RIGHT_TINT) and the terminal's own text
+    colour, which suit a light background too (tmux's own menu style has white text). None when the address cannot
+    go into the command (MENU_ADDRESS)."""
+    if not MENU_ADDRESS.fullmatch(menu.address) or not menu.entries:
+        return None
+    rows = len(menu.entries) + 2  # the borders; -y is the line below the menu
+    args = ["display-menu", "-O", "-M", "-x", str(max(0, x)), "-y", str(max(0, top) + rows),
+            "-T", " " + tmux_text(menu.label) + " "]
+    if styled:
+        args += ["-s", f"bg={RIGHT_TINT},fg=default", "-S", f"bg={RIGHT_TINT},fg=colour244"]
+    for e in menu.entries:
+        line = f"{ASK_PICK}{e.action} {menu.address}"
+        args += [e.label, "", f"run-shell -b 'printf \"{line}\\n\" >> \"$HCGUI_WINDOW/ask\"'"]
+    return args
+
+
+def parse_menu_ask(lines: Sequence[str]) -> Optional[Tuple[str, Optional[Tuple[int, int]]]]:
+    """The last menu request among the ask file's lines (hcgui.tmux.conf): "menu key" (Shift+F10 in the view) ->
+    ("key", None); "menu <x> <y>" (a right click there, the window's column and line) -> ("mouse", (x, y)); a bare
+    "menu" -> ("mouse", None). None when there is none."""
+    for line in reversed(lines):
+        words = line.split()
+        if not words or words[0] != "menu":
+            continue
+        if words[1:] == ["key"]:
+            return ("key", None)
+        if len(words) == 3 and words[1].isdigit() and words[2].isdigit():
+            return ("mouse", (int(words[1]), int(words[2])))
+        return ("mouse", None)
+    return None
+
+
+def parse_pick(lines: Sequence[str]) -> Optional[Tuple[str, str]]:
+    """The last popup choice among the ask file's lines: (action, address), None when there is none."""
+    for line in reversed(lines):
+        if line.startswith(ASK_PICK):
+            words = line[len(ASK_PICK):].split()
+            if len(words) == 2:
+                return (words[0], words[1])
+    return None
+
+
+def pane_box(pane: str) -> Optional[Tuple[int, int, int]]:
+    """A pane's left column, top line and height in the window, None when tmux cannot tell."""
+    parts = (tmux("display", "-p", "-t", pane, "#{pane_left} #{pane_top} #{pane_height}") or "").split()
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+
 def tab_of(snap: Optional[Mapping[str, object]], address: str) -> Optional[Mapping[str, object]]:
     """The tab of `address` in the snapshot, also a right pane's shell ("panes"), None when it is not there (any
     more)."""
@@ -2431,6 +2537,30 @@ def right_of(snap: Optional[Mapping[str, object]], address: str) -> str:
     child = str(tab.get("right") or "") if tab is not None else ""
     panes = snap.get("panes") if snap else None
     return child if child and isinstance(panes, list) and any(p.get("address") == child for p in panes) else ""
+
+
+def right_head_text(snap: Optional[Mapping[str, object]], address: str, home: str = "") -> str:
+    """The right pane's header for its shell at `address`: its name, its folder (`home`, this Mac's home folder, as
+    "~") and, on another machine, its server: "zsh · ~/dev/hcgui". "" when it is not in the snapshot."""
+    tab = tab_of(snap, address) if address else None
+    if tab is None:
+        return ""
+    cwd = str(tab.get("cwd") or "")
+    remote = machine_of(address) != LOCAL
+    if not remote and home and (cwd == home or cwd.startswith(home.rstrip("/") + "/")):
+        cwd = "~" + cwd[len(home.rstrip("/")):]
+    server = str(tab.get("server") or (snap or {}).get("server") or machine_of(address)) if remote else ""
+    name = tab_label(tab) or address.rsplit("/", 1)[-1]
+    return printable(" · ".join(p for p in (name, cwd, server) if p))
+
+
+def head_line(text: str, width: int) -> Tuple[str, int]:
+    """The header's text row in `width` columns: " text", cut to leave room for HEAD_CLOSE, and the column of
+    HEAD_CLOSE (two from the right: the last column stays empty), -1 when the pane is too narrow for it."""
+    if width < 5:
+        return "", -1
+    close_x = width - 3
+    return " " + clip(text, close_x - 2), close_x
 
 
 def tab_ends(tab: Mapping[str, object]) -> List[Tuple[str, str, str]]:
@@ -3324,7 +3454,7 @@ def drain_keys(scr: "curses.window", limit: int = 4096) -> List[int]:
 
 
 def send_keys_to_view(keys: Sequence[int], win: Path = WINDOW, pane: str = "") -> None:
-    """Type `keys` into the view (or `pane`: the right pane, whose right click opened the menu) and give it the
+    """Type `keys` into the view (or `pane`: the right pane, from its header, RightHead) and give it the
     keyboard: keys typed in a pane of hcGUI that were meant for the terminal (after a right click) are not lost. A
     lone esc (no bytes after it) only closed the menu."""
     view = pane or pane_id("view", win)
@@ -3489,39 +3619,81 @@ def split_sidebar(win: Path, base: Path, env: Sequence[Tuple[str, str]], width: 
     return new
 
 
+def right_panes(win: Path = WINDOW) -> Tuple[str, str]:
+    """The tmux ids of the right pane (@hcgui_role RIGHT_PANE) and of its header (HEAD_ROLE), "" for one that is not
+    there (or when tmux cannot tell)."""
+    target = pane_id("view", win) or own_pane()
+    found: Dict[str, str] = {}
+    for line in (tmux("list-panes", "-t", target, "-F", "#{pane_id} #{@hcgui_role}") or "").splitlines() \
+            if target else []:
+        pane, _, role = line.partition(" ")
+        if role.strip() in (RIGHT_PANE, HEAD_ROLE) and PANE_ID.fullmatch(pane):
+            found.setdefault(role.strip(), pane)
+    return found.get(RIGHT_PANE, ""), found.get(HEAD_ROLE, "")
+
+
 def right_pane(win: Path = WINDOW) -> str:
     """The tmux id of the right pane (@hcgui_role RIGHT_PANE), "" when there is none (or tmux cannot tell)."""
-    target = pane_id("view", win) or own_pane()
-    if not target:
-        return ""
-    for line in (tmux("list-panes", "-t", target, "-F", "#{pane_id} #{@hcgui_role}") or "").splitlines():
-        pane, _, role = line.partition(" ")
-        if role.strip() == RIGHT_PANE and PANE_ID.fullmatch(pane):
-            return pane
-    return ""
+    return right_panes(win)[0]
 
 
-def view_pane_command(view: Path, win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
-    """The command of the right pane: `hcgui.py view` (the relay and view.sh) with HCGUI_VIEW_DIR, its own folder.
-    tmux's terminal type, as the view (no TERM of hcGUI's own: what it shows is hc attach's output)."""
+def pane_width(pane: str) -> int:
+    """A pane's width in columns, 0 when tmux cannot tell."""
+    out = (tmux("display", "-p", "-t", pane, "#{pane_width}") or "").strip()
+    return int(out) if out.isdigit() else 0
+
+
+def view_pane_command(view: Path, win: Path, base: Path, env: Sequence[Tuple[str, str]], mode: str = "view") -> str:
+    """The command of the right pane: `hcgui.py view` (the relay and view.sh) with HCGUI_VIEW_DIR, its own folder;
+    `mode` "head": its header (RightHead), with the same folder. tmux's terminal type, as the view (no TERM of
+    hcGUI's own: what it shows is hc attach's output)."""
     pairs = [("HCGUI_WINDOW", str(win)), ("HCGUI_VIEW_DIR", str(view))]
     pairs += [(k, v) for k, v in env if k not in ("HCGUI_WINDOW", "HCGUI_VIEW_DIR") and ENV_NAME.fullmatch(k)]
     assigns = " ".join(f"{k}={shlex.quote(v)}" for k, v in pairs)
-    return f"exec env {assigns} python3 {shlex.quote(str(base / 'hcgui.py'))} view"
+    return f"exec env {assigns} python3 {shlex.quote(str(base / 'hcgui.py'))} {mode}"
 
 
-def open_right_pane(win: Path, base: Path, env: Sequence[Tuple[str, str]]) -> str:
-    """The right pane: split off the view on its right (RIGHT_SHARE of its width, below the tab bar), showing what
-    the folder RIGHT_DIR's target names (show it there first). Returns its id, "" when nothing was made."""
+def right_tint() -> str:
+    """The background of the right pane and its header: RIGHT_TINT, with RIGHT_TINT_LIGHT as its light-background
+    value (set in this window's own tmux; tmux uses that grey only for menus and popups, which hcGUI has none of);
+    RIGHT_TINT_OLD when this tmux has no theme colours (the setting is unknown there)."""
+    return RIGHT_TINT if tmux("set", "-g", "light-theme-dark-grey", RIGHT_TINT_LIGHT) is not None else RIGHT_TINT_OLD
+
+
+def mark_pane(pane: str, role: str, tint: str) -> None:
+    """A pane of the right side: its @hcgui_role (a right click there: hcgui.tmux.conf) and its background."""
+    style = "bg=" + tint
+    tmux("set", "-p", "-t", pane, "@hcgui_role", role, ";", "set", "-p", "-t", pane, "window-style", style, ";",
+         "set", "-p", "-t", pane, "window-active-style", style)
+
+
+def open_right_pane(win: Path, base: Path, env: Sequence[Tuple[str, str]], tint: str, width: int = 0,
+                    room: int = 0) -> str:
+    """The right pane: split off the view on its right (below the tab bar), showing what the folder RIGHT_DIR's
+    target names (show it there first). `width` columns (a width dragged before) while the view, `room` columns
+    wide now, keeps RIGHT_ROOM of them, else RIGHT_SHARE of it. Returns its id, "" when nothing was made."""
     view = pane_id("view", win)
     if not view:
         return ""
-    out = tmux("split-window", "-h", "-d", "-l", RIGHT_SHARE, "-t", view, "-P", "-F", "#{pane_id}",
+    size = str(width) if 0 < width <= room - RIGHT_ROOM else RIGHT_SHARE
+    out = tmux("split-window", "-h", "-d", "-l", size, "-t", view, "-P", "-F", "#{pane_id}",
                view_pane_command(win / RIGHT_DIR, win, base, env))
     new = (out or "").strip()
     if not PANE_ID.fullmatch(new):
         return ""
-    tmux("set", "-p", "-t", new, "@hcgui_role", RIGHT_PANE)  # a right click there: its menu (hcgui.tmux.conf)
+    mark_pane(new, RIGHT_PANE, tint)
+    return new
+
+
+def open_head_pane(right: str, win: Path, base: Path, env: Sequence[Tuple[str, str]], tint: str) -> str:
+    """The right pane's header: HEAD_ROWS rows split off the top of the pane `right`. Returns its id, "" when
+    nothing was made."""
+    out = tmux("split-window", "-v", "-b", "-d", "-l", str(HEAD_ROWS), "-t", right, "-P", "-F", "#{pane_id}",
+               view_pane_command(win / RIGHT_DIR, win, base, env, "head"))
+    new = (out or "").strip()
+    if not PANE_ID.fullmatch(new):
+        return ""
+    mark_pane(new, HEAD_ROLE, tint)
     return new
 
 
@@ -3800,12 +3972,14 @@ class Menu:
 
 @dataclass
 class TabMenu:
-    """A tab's open menu (a right click): the tab's address, its drawn name (with the account mark), the entries. It
-    takes clicks only: a key closes it."""
+    """A tab's open menu: the tab's address, its drawn name (with the account mark), the entries. Opened by a right
+    click it takes clicks only (a key closes it, and goes on to the terminal); opened by a key (a, Shift+F10) it has
+    `selected` (the entry ←→ moves to), enter runs it, an entry's letter runs that one, esc closes. -1: clicks only."""
 
     address: str
     label: str
     entries: List[Entry]
+    selected: int = -1
 
 
 def autoopen_enabled() -> bool:
@@ -4927,7 +5101,7 @@ class Sidebar(Engine):
             menu.selected = min(len(menu.entries) - 1, menu.selected + 1)
         elif key in (curses.KEY_ENTER, 10, 13):
             self.run_entry(menu.entries[menu.selected], menu.item)
-        elif key in (27, ord(MENU_KEY), ord("q")):
+        elif key in (27, ord(MENU_KEY), ord("q"), MENU_FKEY):
             self.menu = None
         elif key == curses.KEY_MOUSE:
             click = click if click is not None else read_mouse()
@@ -5439,7 +5613,7 @@ class Sidebar(Engine):
             self.new_in_cursor_group()
         elif key in (ord("s"), ord("S")):
             self.ask_new_space()
-        elif key in (ord(MENU_KEY), ord(MENU_KEY.upper())):
+        elif key in (ord(MENU_KEY), ord(MENU_KEY.upper()), MENU_FKEY):
             self.open_menu(self.cursor_item())
         elif key in (ord("e"), ord("E")):
             self.ask_rename(self.cursor_item())
@@ -5683,8 +5857,9 @@ class TabBar:
         self.right_look = 0.0  # when sync_right asks tmux again with nothing changed
         self.right_focus = ""  # a shell just started on the right: its pane takes the keyboard when it comes
         self.right_since = 0.0  # when right_focus was set (it is given up after RIGHT_WAIT)
-        self.menu_pane = ""  # the right pane's id while its right click's menu or question is open, else ""
-        self.forward_pane = ""  # where keys go until forward_until: the right pane's id, "" for the view
+        self.right_width = 0  # the right pane's width when it last closed (a drag is kept), 0: RIGHT_SHARE
+        self.right_tint = ""  # the right side's background (right_tint), asked once
+        self.right_head: Optional[str] = None  # the text last written to HEAD_FILE
 
     def draw(self, snap: Optional[dict], shown: str) -> None:
         s = self.s
@@ -5758,8 +5933,10 @@ class TabBar:
             self.menu_segs = [Seg(y, g.x + x0, g.text, g.kind, g.index)
                               for g in tab_menu_segs(self.menu.label, self.menu.entries, room)]
             for g in self.menu_segs:
-                s.put(g.y, g.x, g.text, curses.A_BOLD if g.kind == "entry" else curses.A_DIM)
-            hint = TAB_MENU_HINT
+                attr = curses.A_BOLD if g.kind == "entry" else curses.A_DIM
+                s.put(g.y, g.x, g.text, attr | (curses.A_REVERSE if g.kind == "entry" and
+                                                g.index == self.menu.selected else 0))
+            hint = TAB_MENU_KEYS_HINT if self.menu.selected >= 0 else TAB_MENU_HINT
         elif self.prompt is not None:
             p = self.prompt
             hint = TAB_ASK.get(p.kind, "")
@@ -5782,38 +5959,81 @@ class TabBar:
         if 0 <= hint_row != y:
             s.put(hint_row, x0, clip(hint, room), curses.A_DIM if self.menu is not None else ask_attr())
 
-    def open_tab_menu(self, snap: dict, address: str) -> None:
-        """A right click on a tab, or in the right pane: its menu (tab_menu_entries), on the row below the tabs."""
+    def open_tab_menu(self, snap: dict, address: str, keys: bool = False,
+                      at: Optional[Tuple[int, int]] = None) -> None:
+        """A tab's menu (tab_menu_entries) on the row below the tabs: from a right click on a tab or in the view, and
+        then also as a popup with its top-left corner at `at` (the window's column and line); from a key (`keys`:
+        a, Shift+F10) picked with ←→."""
         tab = tab_of(snap, address)
         if tab is None:
             return
-        pane = any(p.get("address") == address for p in snap.get("panes") or [])
         self.prompt = None
-        self.menu_pane = ""  # check_ask sets it again for a right click in the right pane
-        self.menu = TabMenu(address, tab_label(tab), tab_menu_entries(
-            str(snap.get("kind") or ""), bool(snap.get("ordered")), right=not pane and not right_of(snap, address),
-            pane=pane))
+        self.menu = TabMenu(address, tab_label(tab), tab_entries(snap, address), 0 if keys else -1)
+        if at is not None:
+            if not self.right_tint:
+                self.right_tint = right_tint()
+            args = menu_popup_args(self.menu, at[0], at[1], self.right_tint == RIGHT_TINT)
+            if args:
+                tmux(*args)
+
+    def menu_key(self, key: int, snap: Optional[dict]) -> None:
+        """A key in a menu opened by a key: ←→ (h l) move, enter runs, an entry's letter runs it, esc (q) closes;
+        any other key does nothing."""
+        menu = self.menu
+        if menu is None:
+            return
+        count = len(menu.entries)
+        if key in (curses.KEY_LEFT, ord("h")):
+            menu.selected = (menu.selected - 1) % count
+        elif key in (curses.KEY_RIGHT, ord("l")):
+            menu.selected = (menu.selected + 1) % count
+        elif key in (27, ord("q"), MENU_FKEY):
+            self.close_menu()
+        elif snap is not None:
+            letter = chr(key).lower() if 32 < key < 127 else ""
+            pick = menu.selected if key in (curses.KEY_ENTER, 10, 13) else next(
+                (i for i, e in enumerate(menu.entries) if letter and e.key == letter), -1)
+            if 0 <= pick < count:
+                self.run_tab_entry(menu.entries[pick], snap)
+
+    def run_pick(self, action: str, address: str, snap: Optional[dict]) -> None:
+        """A choice in the popup: that entry of `address`'s menu as it is now, as a click on it in the row."""
+        tab = tab_of(snap, address) if snap is not None else None
+        if tab is None:
+            self.notice.say("that terminal has ended")
+            return
+        entries = tab_entries(snap, address)
+        entry = next((e for e in entries if e.action == action), None)
+        if entry is None:
+            self.menu = None
+            return
+        self.menu = TabMenu(address, tab_label(tab), entries)
+        self.run_tab_entry(entry, snap)
+
+    def menu_below(self, x: int) -> Optional[Tuple[int, int]]:
+        """Where a tab's popup goes for a right click at column x of this pane: that column of the window, just below
+        the tab bar (the row below the tabs stays in sight). None when tmux cannot tell."""
+        pane = own_pane()
+        box = pane_box(pane) if pane else None
+        return (box[0] + x, box[1] + box[2]) if box else None
 
     def close_menu(self) -> None:
-        """The menu or its question went without an action: the keyboard back to the shown terminal (the right
-        pane's, when its right click opened the menu)."""
+        """The menu or its question went without an action: the keyboard back to the shown terminal."""
         self.menu = self.prompt = None
-        pane, self.menu_pane = self.menu_pane, ""
-        if pane:
-            tmux("select-pane", "-t", pane)
-        else:
-            focus_view(self.win)
+        focus_view(self.win)
 
     def handle_menu(self, key: int, snap: Optional[dict], click: Optional[Tuple[int, int, int]]) -> None:
         """While a tab's menu is open: a press on an entry runs it; a right press on a tab opens that tab's menu;
         any other press closes the menu. A key closes it too, and goes on to the terminal with the keys typed after
         it (they were meant for the terminal; none of them may pick an entry); esc only closes."""
         menu = self.menu
+        if key != curses.KEY_MOUSE and menu is not None and menu.selected >= 0:  # opened by a key
+            self.menu_key(key, snap)
+            return
         if key != curses.KEY_MOUSE:  # typed after a right click: meant for the terminal
             self.menu = self.prompt = None
-            send_keys_to_view([key] + drain_keys(self.s.scr), self.win, self.menu_pane)
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
             self.forward_until = time.monotonic() + FORWARD_GRACE
-            self.forward_pane, self.menu_pane = self.menu_pane, ""
             return
         if menu is None or snap is None or click is None:
             self.close_menu()
@@ -5821,7 +6041,7 @@ class TabBar:
         hit = hit_test(self.layout, click[0], click[1]) if self.layout else None
         index = menu_entry_at([g for g in self.menu_segs if g.y == click[1]], click[0])
         if click[2] == 3 and hit and hit[0] == "tab" and hit[1] < len(snap["tabs"]):
-            self.open_tab_menu(snap, str(snap["tabs"][hit[1]]["address"]))
+            self.open_tab_menu(snap, str(snap["tabs"][hit[1]]["address"]), at=self.menu_below(click[0]))
         elif click[2] == 1 and index is not None and index < len(menu.entries):
             self.run_tab_entry(menu.entries[index], snap)
         else:
@@ -5836,7 +6056,6 @@ class TabBar:
             if self.prompt is not None and self.prompt.kind == "close":
                 self.notice.say("not closed", bad=False)
             self.menu = self.prompt = None
-            self.menu_pane = ""
 
     def run_tab_entry(self, entry: Entry, snap: dict) -> None:
         """What a tab menu entry does. Rename, move and close ask first, on the menu's row; this pane takes the
@@ -5954,7 +6173,6 @@ class TabBar:
         their display names, then show the next tab when the shown one closed (the one shown after the ends: a
         pick meanwhile wins)."""
         addresses = prompt.data
-        self.menu_pane = ""  # the right pane's shell closes: its pane goes (sync_right), the keyboard to the view
         self.notice.say(f"closing {len(addresses)} terminal{'s' if len(addresses) != 1 else ''}…", bad=False)
         self.draw(snap, current_target(self.win))
         failed: List[str] = []
@@ -5979,23 +6197,27 @@ class TabBar:
         focus_view(self.win)
 
     def check_ask(self, snap: Optional[dict], shown: str) -> None:
-        """The window's request file "ask", read once (take_ask). A line "menu", a right click in the view
+        """The window's request file "ask", read once (take_ask). A line "menu <x> <y>", a right click in the view
         (hcgui.tmux.conf writes it): the shown terminal's tab menu, here, with the keyboard, as a right click on its
-        tab. A line "notice <text>" (the view relay, ask_notice: a drop that was not sent) or "info <text>" (a drop
-        being sent, or sent after the tab bar said so): the last of them as a notice, an error or not, after the
+        tab, and at the pointer (parse_menu_ask); "menu key" (Shift+F10 there): that menu picked with ←→. A line
+        "pick <action> <address>": a choice in the popup (run_pick). A line "notice <text>" (the view relay,
+        ask_notice: a drop that was not sent) or "info <text>" (a drop being sent, or sent after the tab bar said so): the last of them as a notice, an error or not, after the
         menu, so the menu does not clear it."""
         if not (self.win / "ask").exists():
             return
         lines = take_ask(self.win)
-        if "menu" in lines or ASK_RIGHT in lines:
-            address = right_of(snap, shown) if ASK_RIGHT in lines else shown  # the click's pane, else the view
-            if snap is None or tab_of(snap, address) is None:
+        asked = parse_menu_ask(lines)
+        if asked is not None:
+            if snap is None or tab_of(snap, shown) is None:
                 self.notice.say("nothing shown", bad=False)
             else:
                 self.notice.clear()
-                self.open_tab_menu(snap, address)
-                self.menu_pane = right_pane(self.win) if ASK_RIGHT in lines else ""
+                at = (asked[1][0], asked[1][1] + 1) if asked[1] else None  # just below the pointer
+                self.open_tab_menu(snap, shown, keys=asked[0] == "key", at=at)
                 focus_pane("tabs", self.win)
+        pick = parse_pick(lines)
+        if pick is not None:
+            self.run_pick(pick[0], pick[1], snap)
         notices = [(line.startswith(ASK_NOTICE), line.split(" ", 1)[1].strip()) for line in lines
                    if line.startswith((ASK_NOTICE, ASK_INFO))]
         if notices and notices[-1][1]:
@@ -6028,6 +6250,10 @@ class TabBar:
     def open_right(self, snap: dict, address: str, tab: Mapping[str, object]) -> None:
         """"Split right": a shell beside the terminal at `address` (new_right_shell), shown in the right
         pane once the engine lists it (sync_right), with the keyboard. The tab is shown first when it is not."""
+        if right_of(snap, address) or (self.right_focus and time.monotonic() - self.right_since < RIGHT_WAIT):
+            self.notice.say("a right pane is there or starting", bad=False)  # a second pick before it is listed
+            focus_view(self.win)
+            return
         if address != current_target(self.win):
             show(address, self.win, tab_title(snap, address))
         try:
@@ -6048,6 +6274,7 @@ class TabBar:
         if snap is None or not tmux_enabled():
             return
         want = right_of(snap, shown)
+        self.write_head(snap, want)
         if want == self.right_want and now < self.right_look:
             return
         self.right_want, self.right_look = want, now + RIGHT_LOOK
@@ -6056,9 +6283,14 @@ class TabBar:
         if look is None or look.zoomed:  # looked at again after ZOOM_LOOK, or when the shown tab changes
             self.right_look = now + ZOOM_LOOK
             return
-        pane = right_pane(self.win)
+        pane, head = right_panes(self.win)
+        if not want or not pane:  # a header without its pane goes too
+            if head:
+                tmux("kill-pane", "-t", head)
+                head = ""
         if not want:
             if pane:
+                self.right_width = pane_width(pane) or self.right_width  # made again at that width
                 tmux("kill-pane", "-t", pane)
             return
         folder = self.win / RIGHT_DIR
@@ -6068,12 +6300,30 @@ class TabBar:
             except OSError:
                 return
             show(want, folder, tab_title(snap, want))
-        if not pane:
-            pane = open_right_pane(self.win, BASE, hcgui_env(os.environ))
+        if not pane or not head:
+            if not self.right_tint:
+                self.right_tint = right_tint()
+            env = hcgui_env(os.environ)
+            if not pane:
+                pane = open_right_pane(self.win, BASE, env, self.right_tint, self.right_width, look.pane_width)
+            if pane:
+                open_head_pane(pane, self.win, BASE, env, self.right_tint)
         if self.right_focus and (pane and self.right_focus == want or now - self.right_since > RIGHT_WAIT):
             if pane and self.right_focus == want:
                 tmux("select-pane", "-t", pane)
             self.right_focus = ""
+
+    def write_head(self, snap: dict, want: str) -> None:
+        """The header's text (right_head_text of the shell shown on the right) to HEAD_FILE when it changed: a new
+        shell, a new name or folder."""
+        text = right_head_text(snap, want, str(Path.home())) if want else ""
+        if text == self.right_head:
+            return
+        try:
+            write_atomic(self.win / RIGHT_DIR / HEAD_FILE, text + "\n")
+            self.right_head = text
+        except OSError:
+            pass
 
     def plus(self, snap: dict) -> None:
         """A new shell in the current group (the same helper as the sidebar's n), then show it."""
@@ -6123,12 +6373,17 @@ class TabBar:
                 self.open_sidebar(time.monotonic())
         elif key == ord(HELP_KEY):
             self.notice.say(tab_keys(self.alone), bad=False)
+        elif key in (ord(MENU_KEY), ord(MENU_KEY.upper()), MENU_FKEY):  # the shown tab's menu, picked with ←→
+            if snap is not None and tab_of(snap, shown) is not None:
+                self.open_tab_menu(snap, shown, keys=True)
+            else:
+                self.notice.say("nothing shown", bad=False)
         elif key == curses.KEY_MOUSE and click is not None:
             hit = hit_test(self.layout, click[0], click[1]) if self.layout else None
             tabs = self.drawn if self.drawn is not None else (snap["tabs"] if snap is not None else [])
-            if click[2] == 3:  # the right button: a tab's menu
+            if click[2] == 3:  # the right button: a tab's menu, also at the pointer
                 if snap is not None and hit and hit[0] == "tab" and hit[1] < len(tabs):
-                    self.open_tab_menu(snap, str(tabs[hit[1]]["address"]))
+                    self.open_tab_menu(snap, str(tabs[hit[1]]["address"]), at=self.menu_below(click[0]))
             elif hit and hit[0] == "open":
                 self.open_sidebar(time.monotonic())
             elif snap is not None and hit and hit[0] == "tab" and hit[1] < len(tabs):
@@ -6310,7 +6565,7 @@ class TabBar:
         if key not in (curses.KEY_MOUSE, curses.KEY_RESIZE) and self.menu is None and self.prompt is None \
                 and time.monotonic() < self.forward_until:
             self.forward_until = time.monotonic() + FORWARD_GRACE  # typed on after a key closed the menu
-            send_keys_to_view([key] + drain_keys(self.s.scr), self.win, self.forward_pane)
+            send_keys_to_view([key] + drain_keys(self.s.scr), self.win)
             return
         click = None
         if key == curses.KEY_MOUSE and self.tab_drag is not None:  # a tab held: its moves and its release
@@ -6451,7 +6706,6 @@ RELAY_CHUNK = 65536  # bytes per read, either way
 RELAY_QUEUE = 1 << 20  # typed bytes waiting for the inner terminal (or for a drop) beyond which stdin is not read
 ASK_NOTICE = "notice "  # a line of the request file "ask": the tab bar shows the rest of the line as a notice
 ASK_INFO = "info "  # the same, as a notice that is no error ("drop: sending shot.png to mini")
-ASK_RIGHT = "menu right"  # a right click in the right pane (hcgui.tmux.conf): the menu of its shell
 ASK_LINES = 8  # lines of "ask" taken at once (the latest)
 
 
@@ -6738,7 +6992,12 @@ def ask_notice(text: str, win: Path = WINDOW, bad: bool = True) -> None:
     in the window's request file "ask", which the tab bar watches (pick_stamp) and reads once (take_ask). Lines
     already waiting there stay, a "menu" (a right click in the view) too: one short appended write, as tmux's own
     (hcgui.tmux.conf), so neither writer replaces the other's line."""
-    line = (ASK_NOTICE if bad else ASK_INFO) + notice_line(text) + "\n"
+    append_ask((ASK_NOTICE if bad else ASK_INFO) + notice_line(text), win)
+
+
+def append_ask(line: str, win: Path = WINDOW) -> None:
+    """One line at the end of the window's request file "ask" (ask_notice)."""
+    line += "\n"
     fd = os.open(win / "ask", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         os.write(fd, line.encode("utf-8", "replace"))
@@ -7220,6 +7479,166 @@ def view_dir(win: Path = WINDOW) -> Path:
     return Path(value) if value else win
 
 
+class RightHead:
+    """The right pane's header (HEAD_ROLE, above it): a blank row, then its shell's name · folder (HEAD_FILE, which
+    the tab bar writes) and HEAD_CLOSE at the right. HEAD_CLOSE, a right press here or a right click in the shell
+    (hcgui.tmux.conf writes HEAD_ASK_LINE to the file "ask" of the right pane's folder): Close's question, here, in
+    the header made as high as the question needs. CLOSE_YES ends the shell and those that end with it (after
+    DELETE_HOLD, as the sidebar's End terminal); any other key or press cancels and gives the shell the keyboard.
+    Without a question a press gives the shell the keyboard, and a key typed here goes on to it."""
+
+    def __init__(self, scr: "curses.window", folder: Path, win: Path) -> None:
+        self.s = Screen(scr)
+        self.folder, self.win = folder, win
+        self.text: Optional[str] = None
+        self.close_x = -1
+        self.prompt: Optional[Prompt] = None
+        self.asked_at = 0.0
+        self.cut = False  # the question did not fit: y waits (yes_waits)
+
+    def question_lines(self, width: int) -> List[str]:
+        """The question's rows: what ends, wrapped, then the key."""
+        title = self.prompt.title if self.prompt else ""
+        return [" " + line for line in wrap_words(title, max(1, width - 3))] + [f" {CLOSE_YES} closes · any other "
+                                                                                 "key cancels"]
+
+    def draw(self) -> None:
+        s = self.s
+        s.scr.erase()
+        height, width = s.size()
+        if self.prompt is not None:
+            lines = self.question_lines(width)
+            self.cut = len(lines) > height
+            for y, line in enumerate(lines[:height]):
+                s.put(y, 0, line, ask_attr() if y == len(lines) - 1 else curses.A_BOLD)
+        else:
+            line, self.close_x = head_line(self.text or "", width)
+            y = min(HEAD_ROWS, height) - 1
+            s.put(y, 0, line, curses.A_BOLD)
+            if self.close_x >= 0:
+                s.put(y, self.close_x, HEAD_CLOSE, curses.A_DIM)
+        s.scr.refresh()
+
+    def size(self, rows: int) -> None:
+        """This pane `rows` rows high (the question's, at most HEAD_MAX_ROWS; HEAD_ROWS again after it)."""
+        pane = own_pane()
+        if pane:
+            size_pane(pane, rows=max(HEAD_ROWS, min(HEAD_MAX_ROWS, rows)))
+
+    def ask_close(self) -> None:
+        """Close's question for the shell shown below, with the keyboard; nothing when it is not in the tabs."""
+        address = current_target(self.folder)
+        snap = read_snapshot(self.win)
+        tab = tab_of(snap, address) if snap is not None and address else None
+        if tab is None:
+            return
+        self.prompt, self.asked_at = close_question(tab), time.monotonic()
+        self.size(len(self.question_lines(self.s.size()[1])))
+        pane = own_pane()
+        if pane:
+            tmux("select-pane", "-t", pane)
+        self.draw()
+
+    def end_question(self) -> None:
+        self.prompt = None
+        self.size(HEAD_ROWS)
+        self.draw()
+
+    def answer(self, key: int) -> None:
+        """A key or press while the question is open."""
+        prompt = self.prompt
+        if prompt is None:
+            return
+        if not is_yes(key):
+            self.end_question()
+            send_keys_to_view([], self.win, right_pane(self.win))
+            return
+        if yes_waits(self.cut, self.asked_at, time.monotonic(), DELETE_HOLD):
+            return
+        snap = read_snapshot(self.win)
+        tab = tab_of(snap, prompt.address) if snap is not None else None
+        if tab is None:
+            self.end_question()
+            return
+        again = changed_question(prompt, close_question(tab))
+        if again is not None:  # what ends changed since the question: ask again
+            self.prompt, self.asked_at = again, time.monotonic()
+            self.draw()
+            return
+        self.close(prompt.data)
+
+    def close(self, addresses: Sequence[str]) -> None:
+        """End the shell and those that end with it (end_terminal, as the tab bar's Close), drop their display names;
+        the tab bar then closes this pane and the shell's (sync_right). The keyboard goes to the view."""
+        self.prompt = None
+        self.s.scr.erase()
+        self.s.put(min(HEAD_ROWS, self.s.size()[0]) - 1, 0, " closing…", curses.A_DIM)
+        self.s.scr.refresh()
+        failed = []
+        for address in addresses:
+            try:
+                end_terminal(address)
+            except Exception as exc:  # noqa: BLE001 - the others still end
+                failed.append(f"{address}: {describe_error(exc)}")
+        try:
+            change_names({"term:" + a: "" for a in addresses})
+        except OSError:
+            pass
+        poke_engine(self.win)
+        if failed:
+            ask_notice(f"close: {len(failed)} of {len(addresses)} failed, " + failed[0], self.win)
+        focus_view(self.win)
+        self.end_question()
+
+    def press(self, x: int, y: int, button: int) -> None:
+        if self.prompt is not None:
+            self.answer(curses.KEY_MOUSE)
+        elif button == 3 or (self.close_x >= 0 and abs(x - self.close_x) <= 1
+                             and y == min(HEAD_ROWS, self.s.size()[0]) - 1):
+            self.ask_close()
+        else:
+            send_keys_to_view([], self.win, right_pane(self.win))
+
+    def run(self) -> None:
+        setup_curses(self.s.scr, right=True)
+        self.s.scr.timeout(HEAD_LOOK_MS)
+        while True:
+            if HEAD_ASK_LINE in take_ask(self.folder) and self.prompt is None:  # a right click in the shell
+                self.ask_close()
+            text = read_text(self.folder / HEAD_FILE)
+            if text != self.text:
+                self.text = text
+                if self.prompt is None:
+                    self.draw()
+            key = self.s.scr.getch()
+            if key == -1:
+                continue
+            if key == curses.KEY_RESIZE:
+                self.draw()
+            elif key == curses.KEY_MOUSE:
+                click = read_mouse()
+                if click is not None:
+                    self.press(*click)
+            elif self.prompt is not None:
+                self.answer(key)
+            else:  # meant for the shell
+                send_keys_to_view([key] + drain_keys(self.s.scr), self.win, right_pane(self.win))
+
+
+def run_head() -> int:
+    """`hcgui.py head`: the right pane's header (RightHead), with the right pane's folder (HCGUI_VIEW_DIR)."""
+    setup_locale()
+    os.environ.setdefault("ESCDELAY", "25")
+    try:
+        curses.wrapper(lambda scr: RightHead(scr, view_dir(), WINDOW).run())
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        log_error("head")
+        raise
+    return 0
+
+
 ERROR_LOG_MAX = 256 * 1024  # bytes of error.log kept: past that it starts again
 _last_error = [""]
 
@@ -7244,8 +7663,10 @@ def log_error(where: str, win: Optional[Path] = None) -> None:
 def main(argv: Sequence[str]) -> int:
     if len(argv) == 2 and argv[1] == "view":
         return relay_view()
+    if len(argv) == 2 and argv[1] == "head":
+        return run_head()
     if len(argv) != 2 or argv[1] not in ("sidebar", "tabs"):
-        print("usage: hcgui.py sidebar|tabs|view", file=sys.stderr)
+        print("usage: hcgui.py sidebar|tabs|view|head", file=sys.stderr)
         return 2
     if argv[1] == "sidebar" and read_sidebar_state() == "hidden":
         return start_hidden()

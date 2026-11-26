@@ -1070,7 +1070,7 @@ class TabLayoutTests(unittest.TestCase):
         left, hint = row("atlas", tab, 45, True)  # no hint beside the whole line: the folder gives way for one
         self.assertEqual((left, hint), ("atlas · Claude Code · idle · mini/t5", "z zoom"))
         self.assertLessEqual(len(left) + 2 + len(hint), 45)
-        self.assertEqual(row("atlas", None, 40, True), ("atlas", hcgui.TAB_HINTS[2]))  # nothing shown: name, hint
+        self.assertEqual(row("atlas", None, 40, True), ("atlas", hcgui.TAB_HINTS[1]))  # nothing shown: name, hint
         left, hint = row("atlas", tab, 20, True)  # too narrow for anything else: cut, no hint
         self.assertEqual(hint, "")
         self.assertLessEqual(hcgui.text_width(left), 20)
@@ -2548,7 +2548,7 @@ class TabBarLogicTests(unittest.TestCase):
         self.bar.draw(self.snap, "t1")
         line = self.scr.line(4)
         self.assertTrue(line.startswith(hcgui.glyph(" app · Claude Code · ~/dev/app · idle · t1")), line)  # whole
-        self.assertTrue(line.endswith(hcgui.glyph("←→ switch  z zoom")), line)  # the longest beside the whole line
+        self.assertTrue(line.endswith(hcgui.glyph("←→ switch  a menu  z zoom")), line)  # the longest beside it
         self.bar.hints_until = time.monotonic() - 0.1  # NOTICE_SECONDS later: the name, the id and the hints go
         self.bar.draw(self.snap, "t1")
         self.assertEqual(self.scr.line(4), hcgui.glyph(" Claude Code · ~/dev/app · idle"))
@@ -3893,6 +3893,151 @@ class TabMenuTests(unittest.TestCase):
         self.assertEqual(self.bar.notice.current(), "that terminal has ended")
 
 
+class PointerMenuTests(unittest.TestCase):
+    """Owner, 26 Nov: the menu at the pointer ("Popup and the row", tabs and the view only); a key for it ("an extra
+    button for right-click ... select the options on the top with <->"): a in the tab bar, Shift+F10 anywhere."""
+
+    setUp = TabMenuTests.setUp
+    snapshot = TabMenuTests.snapshot
+    press = TabMenuTests.press
+    key = TabMenuTests.key
+    tab_x = TabMenuTests.tab_x
+
+    def menus(self):
+        return [c for c in self.tm.calls if c and c[0] == "display-menu"]
+
+    def test_popup_args(self):
+        menu = hcgui.TabMenu("rig/t2", "we#b", hcgui.tab_menu_entries("space", right=True))
+        args = hcgui.menu_popup_args(menu, 40, 3, True)
+        self.assertEqual(args[:9], ["display-menu", "-O", "-M", "-x", "40", "-y", "10", "-T", " we##b "])
+        self.assertEqual(args[9:13], ["-s", "bg=themedarkgrey,fg=default", "-S", "bg=themedarkgrey,fg=colour244"])
+        items = args[13:]
+        self.assertEqual(items[0::3], ["New terminal", "Split right", "Rename", "Move to space", "Close"])
+        self.assertEqual(set(items[1::3]), {""})  # no keys: typing never picks an entry
+        self.assertEqual(items[2], "run-shell -b 'printf \"pick new rig/t2\\n\" >> \"$HCGUI_WINDOW/ask\"'")
+        self.assertNotIn("-s", hcgui.menu_popup_args(menu, 40, 3, False))  # tmux without theme colours: its own look
+        for bad in ("t1;rm", "t1'", 'a"b', "t 1", "$x"):  # an address that cannot go into the command: no popup
+            self.assertIsNone(hcgui.menu_popup_args(hcgui.TabMenu(bad, "x", menu.entries), 0, 0, True))
+
+    def test_parse_ask_lines(self):
+        self.assertEqual(hcgui.parse_menu_ask(["menu 20 11"]), ("mouse", (20, 11)))
+        self.assertEqual(hcgui.parse_menu_ask(["menu"]), ("mouse", None))
+        self.assertEqual(hcgui.parse_menu_ask(["menu 3 4", "info x", "menu key"]), ("key", None))  # the last one
+        self.assertIsNone(hcgui.parse_menu_ask(["info menu", "notice x"]))
+        self.assertEqual(hcgui.parse_pick(["pick close mini/t2"]), ("close", "mini/t2"))
+        self.assertIsNone(hcgui.parse_pick(["pick close", "menu"]))
+
+    def test_a_right_click_on_a_tab_also_opens_the_popup_below_the_bar(self):
+        self.bar.draw(self.snap, "mini/t1")
+        with mock.patch.object(hcgui, "pane_box", return_value=(31, 0, 3)):
+            self.press(self.tab_x("beta"), 0, button=3)
+        self.assertEqual(self.bar.menu.address, "mini/t2")
+        self.assertEqual(self.scr.lines()[1], " beta: New terminal · Split right · Rename · Move to space · Close")
+        (menu,) = self.menus()
+        self.assertEqual(menu[3:7], ("-x", str(31 + self.tab_x("beta")), "-y", str(3 + 7)))  # top: below the bar
+        with mock.patch.object(hcgui, "pane_box", return_value=None):  # tmux cannot tell: the row only
+            self.press(self.tab_x("gamma"), 0, button=3)
+        self.assertEqual((self.bar.menu.address, len(self.menus())), ("mini/t3", 1))
+
+    def test_a_right_click_in_the_view_opens_both_at_the_pointer(self):
+        hcgui.write_atomic(self.win / "ask", "menu 50 20\n")
+        self.bar.check_ask(self.snap, "mini/t1")
+        self.assertEqual((self.bar.menu.address, self.bar.menu.selected), ("mini/t1", -1))  # clicks only
+        (menu,) = self.menus()
+        self.assertEqual(menu[3:7], ("-x", "50", "-y", str(21 + 7)))  # just below the pointer (alpha: 5 entries)
+        self.assertIn(("select-pane", "-t", "%2"), self.tm.calls)  # the tab bar takes the keyboard
+
+    def test_a_pick_in_the_popup_runs_that_entry(self):
+        hcgui.write_atomic(self.win / "ask", "pick close mini/t2\n")
+        self.bar.check_ask(self.snap, "mini/t1")
+        self.assertEqual((self.bar.prompt.kind, self.bar.prompt.address), ("close", "mini/t2"))  # Close asks first
+        self.bar.prompt = None
+        hcgui.write_atomic(self.win / "ask", "pick rename mini/t2\n")
+        self.bar.check_ask(self.snap, "mini/t1")
+        self.assertEqual(self.bar.prompt.kind, "rename")
+        self.bar.prompt = None
+        hcgui.write_atomic(self.win / "ask", "pick close mini/t77\n")  # ended meanwhile
+        self.bar.check_ask(self.snap, "mini/t1")
+        self.assertIsNone(self.bar.prompt)
+        self.assertEqual(self.bar.notice.current(), "that terminal has ended")
+        hcgui.write_atomic(self.win / "ask", "pick right mini/t1\n")  # an entry it no longer has: nothing
+        self.bar.check_ask(self.snap, "mini/t1")
+        self.assertIsNone(self.bar.prompt)
+        self.assertIsNone(self.bar.menu)
+
+    def test_a_opens_the_shown_tabs_menu_picked_with_the_arrows(self):
+        self.bar.draw(self.snap, "mini/t1")
+        self.key("a")
+        menu = self.bar.menu
+        self.assertEqual((menu.address, menu.selected), ("mini/t1", 0))
+        self.assertEqual(self.menus(), [])  # no pointer: no popup
+        self.assertEqual(self.scr.lines()[4], " " + hcgui.TAB_MENU_KEYS_HINT)
+        selected = [s for s in self.bar.menu_segs if s.kind == "entry" and s.index == 0][0]
+        self.assertTrue(self.scr.cells[(selected.y, selected.x)][1] & hcgui.curses.A_REVERSE)
+        self.key(hcgui.curses.KEY_LEFT)  # wraps round
+        self.assertEqual(menu.entries[menu.selected].action, "close")
+        self.key("l")
+        self.key(hcgui.curses.KEY_RIGHT)
+        self.assertEqual(menu.entries[menu.selected].action, "right")
+        self.key(hcgui.curses.KEY_RIGHT)
+        self.assertEqual(menu.entries[menu.selected].action, "rename")
+        self.key(10)
+        self.assertEqual(self.bar.prompt.kind, "rename")
+        self.bar.prompt = None
+        self.key("a")
+        self.key("x")  # any other key: nothing, the menu stays (opened by a key, keys drive it)
+        self.assertIsNotNone(self.bar.menu)
+        self.key("d")  # an entry's letter, as in the sidebar
+        self.assertEqual(self.bar.prompt.kind, "close")
+        self.bar.prompt = None
+        self.key("a")
+        with mock.patch.object(hcgui, "focus_view") as view:
+            self.key(27)
+        self.assertIsNone(self.bar.menu)
+        view.assert_called_once_with(self.win)
+        self.key("a", shown="")  # nothing shown
+        self.assertIsNone(self.bar.menu)
+
+    def test_f12_is_the_tab_bars_menu_key_too(self):
+        """Shift+F10 reaches the tab bar as F12 (hcgui.tmux.conf): it opens the shown tab's menu and closes it."""
+        self.bar.draw(self.snap, "mini/t1")
+        self.key(hcgui.MENU_FKEY)
+        self.assertEqual(self.bar.menu.selected, 0)
+        with mock.patch.object(hcgui, "focus_view"):
+            self.key(hcgui.MENU_FKEY)
+        self.assertIsNone(self.bar.menu)
+
+    def test_split_right_twice_starts_one_shell(self):
+        """python-pro review, 26 Nov: a second "Split right" before the engine lists the first shell made two."""
+        tab = hcgui.tab_of(self.snap, "mini/t2")
+        with mock.patch.object(hcgui, "new_right_shell", return_value="mini/t8") as new, \
+                mock.patch.object(hcgui, "focus_view"), mock.patch.object(hcgui, "show"):
+            self.bar.open_right(self.snap, "mini/t2", tab)
+            self.bar.open_right(self.snap, "mini/t2", tab)  # the first not listed yet
+            self.assertEqual(new.call_count, 1)
+            self.assertEqual(self.bar.notice.current(), "a right pane is there or starting")
+            self.bar.right_since -= hcgui.RIGHT_WAIT  # given up on: a new one may start
+            self.bar.open_right(self.snap, "mini/t2", tab)
+            self.assertEqual(new.call_count, 2)
+
+    def test_shift_f10_in_the_view_asks_for_the_keyboard_menu(self):
+        hcgui.write_atomic(self.win / "ask", "menu key\n")
+        self.bar.check_ask(self.snap, "mini/t1")
+        self.assertEqual(self.bar.menu.selected, 0)
+        self.assertEqual(self.menus(), [])
+
+    def test_the_tmux_bindings_and_the_lists_name_the_key(self):
+        conf = (ROOT / "hcgui.tmux.conf").read_text()
+        line = next(x for x in conf.splitlines() if x.startswith("bind -n S-F10 "))
+        for part in ('printf "menu key\\n" >> "$HCGUI_WINDOW/ask"', 'printf "close\\n" >> "$HCGUI_WINDOW/right/ask"',
+                     "send-keys F12", "send-keys S-F10", "#{window_zoomed_flag}"):
+            self.assertIn(part, line)
+        self.assertIn('printf "menu #{e|+:#{mouse_x},#{pane_left}} #{e|+:#{mouse_y},#{pane_top}}\\n"', conf)
+        self.assertIn((hcgui.MENU_ANYWHERE, "menu anywhere"), hcgui.KEY_HELP)
+        self.assertIn("⇧F10", hcgui.tab_keys())
+        self.assertIn("a menu", hcgui.TAB_HINTS[0])
+
+
 class PokeTests(unittest.TestCase):
     def test_a_full_poke_asks_for_every_label(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4058,10 +4203,8 @@ class MenuTests(unittest.TestCase):
         self.home = hcgui.Group("rig:mini", "mini", "rig", "mini", "")  # the home machine without terminals
 
     def actions(self, item, group):
-        """The row's own entries: every menu ends with the three switches (test_every_menu_ends_with_...)."""
-        entries = hcgui.menu_entries(item, group, "mini")
-        self.assertEqual([e.action for e in entries[-3:]], ["servers", "agents", "devs"])
-        return [e.action for e in entries[:-3]]
+        """The row's own entries (menu_actions), without the section switches (test_switches_...)."""
+        return [e.action for e in hcgui.menu_actions(item, group, "mini")]
 
     def test_entries_per_row(self):
         g = hcgui.Item("group", "", "")
@@ -4080,29 +4223,28 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(self.actions(hcgui.Item("needs", "", "t3"), None), ["open"])
         self.assertEqual(self.actions(hcgui.Item("dev", "", "3917"), None), ["browse"])
 
-    def test_every_menu_ends_with_the_servers_switch(self):
-        for item, group in ((hcgui.Item("group", "", ""), self.space), (hcgui.Item("group", "", ""), self.rig),
-                            (hcgui.Item("agent", "space:dev", "t1"), self.space), (hcgui.NEW_SPACE, None),
-                            (hcgui.ADD_RIG, None), (hcgui.Item("needs", "", "t3"), None),
-                            (hcgui.Item("dev", "", "3917"), None)):
-            self.assertEqual(hcgui.menu_entries(item, group, "mini")[-3], hcgui.Entry("servers", "Show servers", "v"))
-            self.assertEqual(hcgui.menu_entries(item, group, "mini", servers=True)[-3],
-                             hcgui.Entry("servers", "Hide servers", "v"))
-        labels = [e.label for e in hcgui.menu_entries(hcgui.Item("group", "", ""), self.rig, "mini")]
-        self.assertEqual(labels, ["Open", "New terminal here", "Rename", "Forget server", "Show servers",
-                                  "Hide agents", "Hide dev servers"])
-        self.assertEqual([e.label for e in hcgui.menu_entries(hcgui.ADD_RIG, None)],
-                         ["Add server", "Show servers", "Hide agents", "Hide dev servers"])
-
-    def test_every_menu_has_the_agents_and_dev_servers_switches(self):
-        for item, group in ((hcgui.Item("group", "", ""), self.space), (hcgui.Item("group", "", ""), self.rig),
-                            (hcgui.Item("agent", "space:dev", "t1"), self.space), (hcgui.NEW_SPACE, None),
-                            (hcgui.ADD_RIG, None), (hcgui.Item("needs", "", "t3"), None),
-                            (hcgui.Item("dev", "", "3917"), None)):
-            for agents, devs in itertools.product((True, False), repeat=2):
-                tail = hcgui.menu_entries(item, group, "mini", True, agents, devs)[-2:]
-                self.assertEqual(tail, [hcgui.Entry("agents", "Hide agents" if agents else "Show agents", "g"),
-                                        hcgui.Entry("devs", "Hide dev servers" if devs else "Show dev servers", "w")])
+    def test_switches_hide_only_their_own_section_and_show_every_hidden_one(self):
+        """Owner, 26 Nov: "be more specific": a row's menu hides only its own section; a hidden section's "Show"
+        is in every menu (no row of it is left to right-click)."""
+        g = hcgui.Item("group", "", "")
+        rows = {"servers": ((g, self.rig), (g, self.local), (hcgui.ADD_RIG, None)),
+                "agents": ((hcgui.Item("agent", "space:dev", "t1"), self.space),),
+                "devs": ((hcgui.Item("dev", "", "3917"), None),),
+                "": ((g, self.space), (hcgui.NEW_SPACE, None), (hcgui.Item("needs", "", "t3"), None))}
+        hide = {"servers": "Hide servers", "agents": "Hide agents", "devs": "Hide dev servers"}
+        for section, pairs in rows.items():
+            for item, group in pairs:
+                self.assertEqual(hcgui.menu_section(item, group), section)
+                own = hcgui.menu_actions(item, group, "mini")
+                labels = [e.label for e in hcgui.menu_entries(item, group, "mini", True, True, True)[len(own):]]
+                self.assertEqual(labels, [hide[section]] if section else [])  # everything shown
+                hidden = hcgui.menu_entries(item, group, "mini", False, False, False, False)
+                labels = [e.label for e in hidden[len(own):]]
+                self.assertEqual(labels, ["Show servers", "Show agents", "Show dev servers", "Show usage"])
+        self.assertEqual([e.label for e in hcgui.menu_entries(g, self.rig, "mini", servers=True, devs=False)],
+                         ["Open", "New terminal here", "Rename", "Forget server", "Hide servers", "Show dev servers"])
+        self.assertEqual(hcgui.menu_entries(hcgui.ADD_RIG, None, "mini", servers=True)[-1],
+                         hcgui.Entry("servers", "Hide servers", "v"))
 
     def test_the_usage_lines_menu_and_show_usage_once_hidden(self):
         rows = ((hcgui.Item("group", "", ""), self.space), (hcgui.Item("group", "", ""), self.rig),
@@ -4114,32 +4256,26 @@ class MenuTests(unittest.TestCase):
             self.assertNotIn("usage", [e.action for e in shown])  # no usage entry while they are shown
             hidden = hcgui.menu_entries(item, group, "mini", usage=False)
             self.assertEqual(hidden, shown + [hcgui.Entry("usage", "Show usage", "u")])  # last, like a switch
-        # a line's own menu (a right click on a usage line): Rename and Hide usage first, then the three switches;
-        # Rename has no direct key (the cursor never sits on a usage line)
+        # a line's own menu (a right click on a usage line): Rename, Refresh, Hide usage only (owner, 26 Nov:
+        # "subscriptions do not need 'hide servers' and all that"); Rename has no direct key (no cursor there)
         for name, usage in itertools.product(("work", "solo"), (True, False)):
             entries = hcgui.menu_entries(hcgui.usage_item(name), None, "mini", True, False, True, usage)
             self.assertEqual(entries, [hcgui.Entry("rename", "Rename", ""), hcgui.Entry("refresh", "Refresh", "r"),
-                                       hcgui.Entry("usage", "Hide usage", "u"),
-                                       hcgui.Entry("servers", "Hide servers", "v"),
-                                       hcgui.Entry("agents", "Show agents", "g"),
-                                       hcgui.Entry("devs", "Hide dev servers", "w")])
-        self.assertEqual(hcgui.usage_item("work"), hcgui.Item("usage", "", "work"))
-        self.assertLessEqual(hcgui.menu_width(hcgui.menu_entries(hcgui.usage_item("work"), None)), 29)
+                                       hcgui.Entry("usage", "Hide usage", "u")])
 
     def test_every_entry_names_its_direct_key(self):
         keys = {}
         for item, group in ((hcgui.Item("group", "", ""), self.space), (hcgui.Item("group", "", ""), self.rig),
-                            (hcgui.Item("agent", "space:dev", "t1"), self.space)):
+                            (hcgui.Item("agent", "space:dev", "t1"), self.space), (hcgui.Item("dev", "", "1"), None)):
             for e in hcgui.menu_entries(item, group, "mini"):
                 keys[e.action] = e.key
         self.assertEqual(keys, {"open": "↵", "new": "n", "rename": "e", "delete": "d", "forget": "d", "move": "m",
-                                "end": "d", "servers": "v", "agents": "g", "devs": "w"})
+                                "end": "d", "servers": "v", "agents": "g", "devs": "w", "browse": "↵"})
         labels = [e.label for e in hcgui.menu_entries(hcgui.Item("group", "", ""), self.space, "mini")]
-        self.assertEqual(labels, ["Open", "New terminal here", "Rename", "Delete space", "Show servers",
-                                  "Hide agents", "Hide dev servers"])
+        self.assertEqual(labels, ["Open", "New terminal here", "Rename", "Delete space", "Show servers"])
 
     def test_box_at_30_columns_fits_and_reads(self):
-        entries = hcgui.menu_entries(hcgui.Item("group", "", ""), self.space, "mini")
+        entries = hcgui.menu_entries(hcgui.Item("group", "", ""), self.space, "mini", False, False, False)
         for ascii_only in (False, True):
             with mock.patch.object(hcgui, "utf8_screen", return_value=not ascii_only):
                 want = hcgui.menu_width(entries)
@@ -4158,8 +4294,8 @@ class MenuTests(unittest.TestCase):
                 self.assertTrue(texts[1].rstrip(hcgui.glyph("│")).rstrip().endswith(hcgui.glyph("↵")))
                 self.assertRegex(texts[2], r"New terminal here +n ")
                 self.assertRegex(texts[5], r"Show servers +v ")
-                self.assertRegex(texts[6], r"Hide agents +g ")
-                self.assertRegex(texts[7], r"Hide dev servers +w ")
+                self.assertRegex(texts[6], r"Show agents +g ")
+                self.assertRegex(texts[7], r"Show dev servers +w ")
 
     def test_box_goes_above_the_row_when_below_has_no_room(self):
         box = hcgui.menu_box(20, 4, 0, 24, 30, 24)
@@ -4504,8 +4640,7 @@ class ActionTests(unittest.TestCase):
         self.key("a")
         menu = self.side.menu
         self.assertEqual([e.label for e in menu.entries],
-                         ["Open", "New terminal here", "Rename", "Delete space", "Hide servers", "Hide agents",
-                          "Hide dev servers"])
+                         ["Open", "New terminal here", "Rename", "Delete space"])  # spaces: no switch
         box = self.side.menu_at
         lines = self.scr.lines()
         self.assertTrue(all(len(line) <= 29 for line in lines), lines)
@@ -4525,13 +4660,23 @@ class ActionTests(unittest.TestCase):
         self.key("a", 10)  # Open
         self.assertEqual((self.side.cur, hcgui.current_target(self.win)), ("space:dev", "t2"))
 
+    def test_f12_opens_the_rows_menu_and_never_goes_into_a_typed_name(self):
+        """Shift+F10 reaches the sidebar as F12 (hcgui.tmux.conf): the row's menu, as a; F12 again closes it; while a
+        name is typed it adds nothing (python-pro review, 26 Nov: an "a" went into the name)."""
+        self.go(hcgui.Item("group", "space:dev", ""))
+        self.key(hcgui.MENU_FKEY)
+        self.assertEqual(self.side.menu.item, hcgui.Item("group", "space:dev", ""))
+        self.key(hcgui.MENU_FKEY)
+        self.assertIsNone(self.side.menu)
+        self.key("s", *"web", hcgui.MENU_FKEY)
+        self.assertEqual(self.side.prompt.text, "web")
+
     def test_menu_in_the_strip_opens_the_sidebar_first(self):
         self.key("c")
         self.go(hcgui.Item("agent", "space:dev", "t1"))
         self.key("a")
         self.assertEqual(self.side.mode, "open")
-        self.assertEqual([e.action for e in self.side.menu.entries], ["open", "rename", "move", "end", "servers", "agents",
-                                                                      "devs"])
+        self.assertEqual([e.action for e in self.side.menu.entries], ["open", "rename", "move", "end", "agents"])
 
     def test_right_click_opens_the_rows_menu_and_clicks_inside_and_outside(self):
         row = self.line_of(hcgui.Item("group", "rig:vps", ""))
@@ -4539,8 +4684,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(self.side.menu.item, hcgui.Item("group", "rig:vps", ""))
         self.assertEqual(self.side.cursor, hcgui.Item("group", "rig:vps", ""))
         self.assertEqual([e.label for e in self.side.menu.entries],
-                         ["Open", "New terminal here", "Rename", "Forget server", "Hide servers", "Hide agents",
-                          "Hide dev servers"])
+                         ["Open", "New terminal here", "Rename", "Forget server", "Hide servers"])
         with pressed(5, row, 3):  # a double click's second press
             self.key(hcgui.curses.KEY_MOUSE)
         self.assertIsNotNone(self.side.menu)  # dropped: it came within MOUSE_QUIET
@@ -5131,8 +5275,7 @@ class ActionTests(unittest.TestCase):
         for key in ("rig:this Mac", "rig:mini"):
             self.go(hcgui.Item("group", key, ""))
             self.key("a")
-            self.assertEqual([e.action for e in self.side.menu.entries], ["open", "new", "rename", "servers", "agents",
-                                                                          "devs"])
+            self.assertEqual([e.action for e in self.side.menu.entries], ["open", "new", "rename", "servers"])
             self.key(27, "d")
             self.assertEqual(self.side.notice.current(), f"d: {key[4:]} cannot be removed")
             self.assertIsNone(self.side.prompt)
@@ -5312,6 +5455,12 @@ class TmuxWindowCase(unittest.TestCase):
                 return
 
     def close(self):
+        """The window closes as a terminal app closes one: a hangup to its processes, then the pty goes. A bare close
+        of the pty can block on macOS while tmux's client lives (seen after a popup menu)."""
+        try:
+            os.killpg(self.pid, signal.SIGHUP)
+        except OSError:
+            pass
         try:
             os.close(self.fd)
         except OSError:
@@ -5412,6 +5561,11 @@ class StartScriptTests(TmuxWindowCase):
         self.assertTrue(wait_for(lambda: "New terminal" in self.t("capture-pane", "-p", "-t", tabs), 10),
                         self.t("capture-pane", "-p", "-t", tabs))
         self.assertTrue(wait_for(lambda: self.panes()[1] == tabs, 10))
+        # the popup at the pointer (tmux's menu) takes the keys while it is open, as a context menu does: esc
+        # closes it, the row stays; a key then closes the row and goes on to the terminal
+        time.sleep(0.5)  # the popup opens before the row is drawn (open_tab_menu)
+        os.write(self.fd, b"q")  # closes the popup, as esc does (a lone esc from this pty may wait)
+        time.sleep(0.5)
         os.write(self.fd, b"x")
         self.assertTrue(wait_for(lambda: self.panes()[1] == view, 10))
         self.assertTrue(wait_for(lambda: "New terminal" not in self.t("capture-pane", "-p", "-t", tabs), 10))
@@ -5430,6 +5584,9 @@ class StartScriptTests(TmuxWindowCase):
         time.sleep(0.05)
         os.write(self.fd, b"\x1b[<2;120;30m")
         self.assertTrue(wait_for(lambda: self.panes()[1] == tabs, 10))
+        time.sleep(0.5)
+        os.write(self.fd, b"q")  # the popup first (q closes it as esc does; a lone esc may wait here)
+        time.sleep(0.5)
         os.write(self.fd, b"\x03")
         self.assertTrue(wait_for(lambda: self.panes()[1] == view, 10))
         time.sleep(0.5)
@@ -5582,7 +5739,7 @@ class ServerTests(unittest.TestCase):
                      hcgui.NEW_SPACE):
             self.go(item)
             self.key("a")
-            self.assertEqual(self.side.menu.entries[-3].label, "Show servers", item)
+            self.assertEqual(self.side.menu.entries[-1].label, "Show servers", item)  # hidden: in every menu
             self.key(27)
         self.key("a", "v")  # its letter in the menu
         self.assertTrue(self.side.servers_shown())
@@ -5592,7 +5749,7 @@ class ServerTests(unittest.TestCase):
         self.go(hcgui.ADD_RIG)
         self.key("a")
         self.assertEqual([e.label for e in self.side.menu.entries],
-                         ["Add server", "Hide servers", "Hide agents", "Hide dev servers"])
+                         ["Add server", "Hide servers"])
         self.key("j", 10)
         self.assertFalse(self.side.servers_shown())
         self.assertEqual(other.groups()[1], [])  # the other window follows the shared file
@@ -5639,8 +5796,7 @@ class ServerTests(unittest.TestCase):
         self.go(home)
         self.key("a")
         self.assertEqual([e.label for e in self.side.menu.entries],
-                         ["Open", "New terminal here", "Rename", "Hide servers", "Hide agents",
-                          "Hide dev servers"])  # never Forget
+                         ["Open", "New terminal here", "Rename", "Hide servers"])  # never Forget
         self.key(27, "d")
         self.assertEqual(self.side.notice.current(), "d: me@mini cannot be removed")
         self.assertIsNone(self.side.prompt)
@@ -5858,12 +6014,13 @@ class HelpTests(unittest.TestCase):
     def test_tab_bar_question_mark_says_its_keys(self):
         bar = hcgui.TabBar(FakeScr(5, 120), self.win, self.state)
         bar.handle_key(ord("?"), None, "")
-        keys = "←→ h l switch · enter ↓ focus · right click: menu · z zoom (a click on the top line ends it)"
+        keys = ("←→ h l switch · enter ↓ focus · a, ⇧F10 or right click: menu (←→ enter) · z zoom (a click on the top "
+                "line ends it)")
         self.assertEqual(bar.notice.current(), "keys: " + keys)
         bar.alone = True
         bar.handle_key(ord("?"), None, "")
         self.assertEqual(bar.notice.current(), "keys: c o sidebar · " + keys)
-        self.assertEqual(hcgui.TAB_HINTS_ALONE[0], "c sidebar  ←→ switch  enter focus  right click menu  z zoom")
+        self.assertEqual(hcgui.TAB_HINTS_ALONE[0], "c sidebar  ←→ switch  enter focus  a menu  z zoom")
 
 
 class DragTests(unittest.TestCase):
@@ -8215,6 +8372,10 @@ class ExtrasSidebarTests(unittest.TestCase):
         self.assertTrue(any(line.startswith(" agents") for line in self.lines()))
 
     def test_agents_hidden_from_the_menu_keeps_needs_you(self):
+        for _ in range(20):  # an agent's menu: the agents' switch is in its own section's menus only
+            if self.side.cursor_item().kind == "agent":
+                break
+            self.key("j")
         self.key("a")
         entry = next(e for e in self.side.menu.entries if e.action == "agents")
         self.assertEqual(entry.label, "Hide agents")
@@ -9237,7 +9398,7 @@ class UsageSidebarTests(unittest.TestCase):
             menu = self.side.menu
             self.assertEqual((menu.item, menu.title, menu.by_mouse), (hcgui.usage_item(name), name, True))
             self.assertEqual([e.label for e in menu.entries],
-                             ["Rename", "Refresh", "Hide usage", "Show servers", "Hide agents", "Hide dev servers"])
+                             ["Rename", "Refresh", "Hide usage"])
             self.assertEqual(self.side.cursor, cursor)  # a usage line is no row: the cursor stays
             box = self.side.menu_at
             self.assertEqual(box.top + box.height, 35, y)  # just above the first of them, whichever was clicked
@@ -10679,7 +10840,6 @@ class RightPaneTests(unittest.TestCase):
     def test_menu_entries(self):
         labels = [e.label for e in hcgui.tab_menu_entries("space", right=True)]
         self.assertEqual(labels, ["New terminal", "Split right", "Rename", "Move to space", "Close"])
-        self.assertEqual([e.action for e in hcgui.tab_menu_entries("space", pane=True)], ["close"])
         segs = hcgui.tab_menu_segs("x", hcgui.tab_menu_entries("space", right=True), 40)  # short: first words
         self.assertEqual([g.text for g in segs if g.kind == "entry"][:2], ["new", "split"])
 
@@ -10689,17 +10849,9 @@ class RightPaneTests(unittest.TestCase):
         self.assertIn("right", [e.action for e in self.bar.menu.entries])
         self.bar.open_tab_menu(snap, "mini/t1")  # it has one already
         self.assertNotIn("right", [e.action for e in self.bar.menu.entries])
-        self.bar.menu = None
-        hcgui.write_atomic(self.win / "ask", hcgui.ASK_RIGHT + "\n")
-        with mock.patch.object(hcgui, "focus_pane"), mock.patch.object(hcgui, "right_pane", return_value="%9"):
-            self.bar.check_ask(snap, "mini/t1")
-        self.assertEqual(self.bar.menu.address, "mini/t2")
-        self.assertEqual([e.action for e in self.bar.menu.entries], ["close"])
-        self.assertEqual(self.bar.menu_pane, "%9")
-        with mock.patch.object(hcgui, "send_keys_to_view") as keys:  # a key typed after it goes to that pane
-            self.bar.handle_menu(ord("l"), snap, None)
-        self.assertEqual(keys.call_args[0][2], "%9")
-        self.assertEqual(self.bar.menu_pane, "")
+        conf = (Path(hcgui.__file__).parent / "hcgui.tmux.conf").read_text()
+        # a right click in the right pane: its header asks Close (the file "ask" of the right pane's folder)
+        self.assertIn(f"printf \"{hcgui.HEAD_ASK_LINE}\\n\" >> \"$HCGUI_WINDOW/{hcgui.RIGHT_DIR}/ask\"", conf)
 
     def test_new_right_shell_asks_hc_for_a_child(self):
         calls = []
@@ -10720,22 +10872,27 @@ class RightPaneTests(unittest.TestCase):
         cmd = hcgui.view_pane_command(Path("/w/right"), Path("/w"), Path("/app"),
                                       [("HCGUI_HC", "/b/hc"), ("TERM", "xterm-hcgui"), ("HCGUI_WINDOW", "/x")])
         self.assertEqual(cmd, "exec env HCGUI_WINDOW=/w HCGUI_VIEW_DIR=/w/right HCGUI_HC=/b/hc python3 /app/hcgui.py view")
+        self.assertTrue(hcgui.view_pane_command(Path("/w/right"), Path("/w"), Path("/app"), [], "head").endswith(
+            "HCGUI_VIEW_DIR=/w/right python3 /app/hcgui.py head"))
 
-    def sync(self, snap, shown, pane="", zoomed=False):
+    def sync(self, snap, shown, pane="", zoomed=False, head="", width=""):
         calls = []
 
         def tmux(*args, input=None):
             calls.append(args)
-            return None
+            return width if args[:2] == ("display", "-p") else None
 
         look = hcgui.WindowLook(zoomed, 100, 40, 70, 38)
         with mock.patch.object(hcgui, "tmux_enabled", return_value=True), \
                 mock.patch.object(hcgui, "pane_id", return_value="%1"), \
                 mock.patch.object(hcgui, "window_look", return_value=look), \
-                mock.patch.object(hcgui, "right_pane", return_value=pane), \
+                mock.patch.object(hcgui, "right_panes", return_value=(pane, head)), \
+                mock.patch.object(hcgui, "right_tint", return_value="themedarkgrey"), \
                 mock.patch.object(hcgui, "open_right_pane", return_value="%7") as opened, \
+                mock.patch.object(hcgui, "open_head_pane", return_value="%8") as headed, \
                 mock.patch.object(hcgui, "tmux", tmux), mock.patch.object(hcgui, "end_current_attach"):
             self.bar.sync_right(snap, shown, 1000.0)
+        self.opened_args, self.headed = opened.call_args, headed.called
         return calls, opened.called
 
     def test_sync_opens_switches_and_closes_the_pane(self):
@@ -10743,19 +10900,192 @@ class RightPaneTests(unittest.TestCase):
         self.bar.right_focus, self.bar.right_since = "mini/t2", time.monotonic()
         calls, opened = self.sync(snap, "mini/t1")
         self.assertTrue(opened)
+        self.assertTrue(self.headed)  # its header with it
+        self.assertEqual(self.opened_args[0][3:], ("themedarkgrey", 0, 70))  # no width dragged yet: RIGHT_SHARE
         self.assertEqual(hcgui.current_target(self.win / hcgui.RIGHT_DIR), "mini/t2")
         self.assertIn(("select-pane", "-t", "%7"), calls)  # just started: it takes the keyboard
         self.assertEqual(self.bar.right_focus, "")
-        calls, opened = self.sync(snap, "mini/t1", pane="%7")  # nothing changed: no tmux call before RIGHT_LOOK
+        calls, opened = self.sync(snap, "mini/t1", pane="%7", head="%8")  # nothing changed: no tmux call
         self.assertEqual((calls, opened), ([], False))
-        calls, opened = self.sync(snap, "mini/t3", pane="%7")  # a tab without one: the pane goes
-        self.assertEqual(calls, [("kill-pane", "-t", "%7")])
+        # a tab without one: the pane and its header go; the pane's width is kept for the next one
+        calls, opened = self.sync(snap, "mini/t3", pane="%7", head="%8", width="52\n")
+        self.assertEqual(calls, [("kill-pane", "-t", "%8"), ("display", "-p", "-t", "%7", "#{pane_width}"),
+                                 ("kill-pane", "-t", "%7")])
+        self.assertEqual(self.bar.right_width, 52)
+        calls, opened = self.sync(snap, "mini/t1")  # back: made again at that width
+        self.assertEqual(self.opened_args[0][3:], ("themedarkgrey", 52, 70))
+        self.bar.right_look = 0.0
+        calls, opened = self.sync(snap, "mini/t1", pane="%7", head="")  # the header gone: made again alone
+        self.assertEqual((opened, self.headed), (False, True))
         self.bar.right_look = 0.0
         calls, opened = self.sync(snap, "mini/t1", pane="", zoomed=True)  # zoomed: nothing until it is not
         self.assertEqual((calls, opened), ([], False))
         calls, opened = self.sync(None, "mini/t3", pane="%7")  # no snapshot: the pane stays
         self.assertEqual(calls, [])
 
+    def test_a_header_without_its_pane_goes(self):
+        snap = self.snapshot()
+        calls, opened = self.sync(snap, "mini/t3", pane="", head="%8")
+        self.assertEqual(calls, [("kill-pane", "-t", "%8")])
+        self.assertFalse(opened)
+
+    def test_open_right_pane_width(self):
+        """A dragged width is kept while the view keeps RIGHT_ROOM columns, else RIGHT_SHARE; both panes get their
+        role and the background."""
+        for width, room, size in ((52, 100, "52"), (90, 100, hcgui.RIGHT_SHARE), (0, 100, hcgui.RIGHT_SHARE)):
+            calls = []
+
+            def tmux(*args, input=None):
+                calls.append(args)
+                return "%7\n" if args[0] == "split-window" else ""
+
+            with mock.patch.object(hcgui, "tmux", tmux), mock.patch.object(hcgui, "pane_id", return_value="%1"):
+                self.assertEqual(hcgui.open_right_pane(self.win, Path("/app"), [], "colour235", width, room), "%7")
+            self.assertEqual(calls[0][:6], ("split-window", "-h", "-d", "-l", size, "-t"))
+            self.assertEqual(calls[1], ("set", "-p", "-t", "%7", "@hcgui_role", "right", ";", "set", "-p", "-t", "%7",
+                                        "window-style", "bg=colour235", ";", "set", "-p", "-t", "%7",
+                                        "window-active-style", "bg=colour235"))
+        calls = []
+
+        def tmux(*args, input=None):
+            calls.append(args)
+            return "%8\n" if args[0] == "split-window" else ""
+
+        with mock.patch.object(hcgui, "tmux", tmux):
+            self.assertEqual(hcgui.open_head_pane("%7", self.win, Path("/app"), [], "themedarkgrey"), "%8")
+        self.assertEqual(calls[0][:8], ("split-window", "-v", "-b", "-d", "-l", str(hcgui.HEAD_ROWS), "-t", "%7"))
+        self.assertTrue(calls[0][-1].endswith("/app/hcgui.py head"))
+        self.assertEqual(calls[1][4:6], ("@hcgui_role", hcgui.HEAD_ROLE))
+
+    def test_right_tint_follows_what_tmux_knows(self):
+        with mock.patch.object(hcgui, "tmux", return_value="") as tm:
+            self.assertEqual(hcgui.right_tint(), hcgui.RIGHT_TINT)
+        tm.assert_called_once_with("set", "-g", "light-theme-dark-grey", hcgui.RIGHT_TINT_LIGHT)
+        with mock.patch.object(hcgui, "tmux", return_value=None):  # a tmux without theme colours
+            self.assertEqual(hcgui.right_tint(), hcgui.RIGHT_TINT_OLD)
+
+    def test_right_panes_reads_both_roles(self):
+        out = "%1 view\n%7 right\n%8 rhead\n%2 tabs\n"
+        with mock.patch.object(hcgui, "tmux", return_value=out), mock.patch.object(hcgui, "pane_id", return_value="%1"):
+            self.assertEqual(hcgui.right_panes(self.win), ("%7", "%8"))
+            self.assertEqual(hcgui.right_pane(self.win), "%7")
+        with mock.patch.object(hcgui, "tmux", return_value=None), \
+                mock.patch.object(hcgui, "pane_id", return_value="%1"):
+            self.assertEqual(hcgui.right_panes(self.win), ("", ""))
+
+    def test_header_text(self):
+        snap = self.snapshot()
+        self.assertEqual(hcgui.right_head_text(snap, "mini/t2", "/Users/me"), "t2 · /x · mini")  # another machine
+        tab = hcgui.tab_of(snap, "mini/t2")
+        local = {"tabs": [], "panes": [dict(tab, address="t2", cwd="/Users/me/dev/hcgui", label="zsh")]}
+        self.assertEqual(hcgui.right_head_text(local, "t2", "/Users/me"), "zsh · ~/dev/hcgui")
+        local["panes"][0]["cwd"] = "/Users/me"
+        self.assertEqual(hcgui.right_head_text(local, "t2", "/Users/me"), "zsh · ~")
+        local["panes"][0]["cwd"] = "/Users/meow"  # only the home folder itself becomes ~
+        self.assertEqual(hcgui.right_head_text(local, "t2", "/Users/me"), "zsh · /Users/meow")
+        local["panes"][0]["label"] = "a\x1b[31mb"  # nothing unprintable reaches the screen
+        self.assertNotIn("\x1b", hcgui.right_head_text(local, "t2", "/Users/me"))
+        self.assertEqual(hcgui.right_head_text(local, "t9", "/Users/me"), "")
+        self.assertEqual(hcgui.right_head_text(None, "", "/Users/me"), "")
+
+    def test_head_line(self):
+        self.assertEqual(hcgui.head_line("zsh · ~/dev", 30), (" zsh · ~/dev", 27))
+        line, x = hcgui.head_line("zsh · ~/dev/a-very-long-folder-name", 20)
+        self.assertEqual((line, x), (" zsh · ~/dev/a-…", 17))
+        self.assertLess(hcgui.text_width(line), x)  # never under the ×
+        self.assertEqual(hcgui.head_line("zsh", 4), ("", -1))
+
+    def test_write_head_only_on_a_change(self):
+        snap = self.snapshot()
+        path = self.win / hcgui.RIGHT_DIR / hcgui.HEAD_FILE
+        self.bar.write_head(snap, "mini/t2")
+        self.assertEqual(path.read_text(), "t2 · /x · mini\n")
+        path.write_text("other\n")
+        self.bar.write_head(snap, "mini/t2")  # the same text: not written again
+        self.assertEqual(path.read_text(), "other\n")
+        self.bar.write_head(snap, "")
+        self.assertEqual(path.read_text(), "\n")
+
+    def head(self, snap, height=2, width=40):
+        """A RightHead on a fake screen, its shell mini/t2 shown below."""
+        head = hcgui.RightHead.__new__(hcgui.RightHead)
+        head.s = mock.Mock()
+        head.s.size.return_value = (height, width)
+        head.folder, head.win = self.win / hcgui.RIGHT_DIR, self.win
+        head.text, head.close_x, head.prompt, head.asked_at, head.cut = "t2", width - 3, None, 0.0, False
+        hcgui.show("mini/t2", head.folder)
+        hcgui.write_snapshot(self.group()[0], self.win, everything=self.group()[1], infos=self.group()[2])
+        return head
+
+    def test_header_presses(self):
+        snap = self.snapshot()
+        head = self.head(snap)
+        with mock.patch.object(hcgui, "send_keys_to_view") as keys, \
+                mock.patch.object(hcgui, "right_pane", return_value="%7"), \
+                mock.patch.object(hcgui, "own_pane", return_value="%8"), \
+                mock.patch.object(hcgui, "tmux") as tm, mock.patch.object(hcgui, "size_pane") as size:
+            head.press(5, 1, 1)  # beside the ×: the shell takes the keyboard
+            keys.assert_called_once_with([], self.win, "%7")
+            head.press(38, 1, 1)  # one column beside the × counts too: Close's question, here
+            self.assertEqual((head.prompt.kind, head.prompt.data), ("close", ("mini/t2",)))
+            tm.assert_called_with("select-pane", "-t", "%8")  # the header takes the keyboard for the answer
+            size.assert_called_with("%8", rows=2)  # it fits in two rows: no taller
+            head.press(5, 1, 1)  # a press cancels; the shell gets the keyboard back
+            self.assertIsNone(head.prompt)
+            self.assertEqual(keys.call_args[0], ([], self.win, "%7"))
+            head.press(5, 0, 3)  # a right press asks too
+            self.assertIsNotNone(head.prompt)
+
+    def test_header_question_grows_and_waits(self):
+        snap = self.snapshot()
+        head = self.head(snap, width=20)
+        with mock.patch.object(hcgui, "own_pane", return_value="%8"), mock.patch.object(hcgui, "tmux"), \
+                mock.patch.object(hcgui, "size_pane") as size:
+            head.ask_close()
+        rows = len(head.question_lines(20))
+        self.assertGreater(rows, 2)
+        size.assert_called_with("%8", rows=min(rows, hcgui.HEAD_MAX_ROWS))
+        self.assertEqual(head.question_lines(20)[-1], " y closes · any other key cancels")
+        head.draw()  # still 2 rows high (tmux not resized here): cut, so y waits
+        self.assertTrue(head.cut)
+        with mock.patch.object(hcgui, "end_terminal") as end:
+            head.asked_at = 0.0
+            head.answer(ord("y"))
+        end.assert_not_called()
+
+    def test_header_y_closes_after_the_hold(self):
+        snap = self.snapshot()
+        head = self.head(snap, height=8, width=60)
+        with mock.patch.object(hcgui, "own_pane", return_value=""), mock.patch.object(hcgui, "tmux"):
+            head.ask_close()
+            head.draw()
+            with mock.patch.object(hcgui, "end_terminal") as end, mock.patch.object(hcgui, "poke_engine"), \
+                    mock.patch.object(hcgui, "change_names") as names, \
+                    mock.patch.object(hcgui, "focus_view") as focus:
+                head.answer(ord("y"))  # at once: not taken (DELETE_HOLD)
+                end.assert_not_called()
+                head.asked_at -= hcgui.DELETE_HOLD
+                head.answer(ord("Y"))
+            end.assert_called_once_with("mini/t2")
+            names.assert_called_once_with({"term:mini/t2": ""})
+            focus.assert_called_once_with(self.win)
+            self.assertIsNone(head.prompt)
+
+    def test_a_right_click_in_the_shell_reaches_the_header(self):
+        snap = self.snapshot()
+        head = self.head(snap)
+        hcgui.write_atomic(head.folder / "ask", hcgui.HEAD_ASK_LINE + "\n")
+        head.s.scr.getch.side_effect = [-1, KeyboardInterrupt]
+        with mock.patch.object(hcgui, "setup_curses"), mock.patch.object(hcgui, "own_pane", return_value=""), \
+                mock.patch.object(hcgui, "tmux"), self.assertRaises(KeyboardInterrupt):
+            head.run()
+        self.assertEqual(head.prompt.kind, "close")
+        self.assertFalse((head.folder / "ask").exists())
+
+    def test_main_runs_the_header(self):
+        with mock.patch.object(hcgui, "run_head", return_value=0) as run:
+            self.assertEqual(hcgui.main(["hcgui.py", "head"]), 0)
+        run.assert_called_once_with()
 
 if __name__ == "__main__":
     unittest.main()
